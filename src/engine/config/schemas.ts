@@ -106,7 +106,25 @@ export type Menus = z.infer<typeof MenusSchema>;
 // ---------- 2. Rules and limits ----------
 
 const Tier = z.object({ maxBalance: z.number().positive(), daily: z.number().positive(), monthly: z.number().positive().nullable() }).strict();
-const Fee = z.object({ pct: z.number().min(0).max(20), min: z.number().min(0), max: z.number().min(0) }).strict();
+/**
+ * A fee schedule as amount bands (GHS). The first band whose upTo covers the amount applies;
+ * upTo null is the open-ended top band. Fee = flat + pct% of the amount, capped at max when set.
+ */
+const FeeBand = z
+  .object({ upTo: z.number().positive().nullable(), pct: z.number().min(0).max(20), flat: z.number().min(0), max: z.number().min(0).optional() })
+  .strict();
+const Fee = z
+  .object({ bands: z.array(FeeBand).min(1) })
+  .strict()
+  .superRefine((fee, ctx) => {
+    const ups = fee.bands.map((b) => b.upTo);
+    if (ups.slice(0, -1).some((u) => u === null)) ctx.addIssue({ code: "custom", message: "only the last band may have upTo: null" });
+    for (let i = 1; i < ups.length; i++) {
+      const prev = ups[i - 1];
+      const cur = ups[i];
+      if (prev !== null && cur !== null && cur <= prev) ctx.addIssue({ code: "custom", message: "bands must be in increasing order of upTo" });
+    }
+  });
 const TelcoFees = z.object({ p2p_onnet: Fee, p2p_offnet: Fee, cashout: Fee, merchant: Fee, to_bank: Fee }).strict();
 
 export const RulesSchema = z

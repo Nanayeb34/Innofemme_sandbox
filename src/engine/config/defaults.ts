@@ -134,23 +134,34 @@ export const defaultMenus: Menus = {
   }),
 };
 
-const fees = (p2pOffnetPct: number) => ({
-  p2p_onnet: { pct: 0, min: 0, max: 0 },
-  p2p_offnet: { pct: p2pOffnetPct, min: 0, max: 10 },
-  cashout: { pct: 1, min: 0.5, max: 10 },
-  merchant: { pct: 0, min: 0, max: 0 },
-  to_bank: { pct: 0.5, min: 0, max: 15 },
-});
+const FREE = { bands: [{ upTo: null, pct: 0, flat: 0 }] };
+
+// MTN MoMo tariff (confirmed). AT uses the same schedule.
+const mtnFees = {
+  p2p_onnet: { bands: [{ upTo: 1000, pct: 0.75, flat: 0 }, { upTo: null, pct: 0, flat: 7.5 }] },
+  p2p_offnet: { bands: [{ upTo: 1000, pct: 0.75, flat: 0 }, { upTo: null, pct: 0, flat: 7.5 }] },
+  cashout: { bands: [{ upTo: 49.99, pct: 0, flat: 0.5 }, { upTo: 1999.99, pct: 1, flat: 0 }, { upTo: null, pct: 0, flat: 20 }] },
+  merchant: FREE,
+  to_bank: { bands: [{ upTo: null, pct: 0.75, flat: 0, max: 5 }] },
+};
+
+// Telecel Cash tariff (confirmed). Wallet-to-bank is not in the published table, so it follows MTN.
+const telecelFees = {
+  p2p_onnet: FREE,
+  p2p_offnet: { bands: [{ upTo: 100, pct: 0, flat: 0 }, { upTo: 1000, pct: 0.5, flat: 0 }, { upTo: null, pct: 0, flat: 5 }] },
+  cashout: { bands: [{ upTo: 50, pct: 0, flat: 0.5 }, { upTo: 2000, pct: 1, flat: 0 }, { upTo: null, pct: 0, flat: 20 }] },
+  merchant: FREE,
+  to_bank: mtnFees.to_bank,
+};
 
 // KYC tiers confirmed by Bank of Ghana revision effective 1 March 2024.
-// Fee schedules are placeholders until the telcos share theirs (open question 3).
 export const defaultRules: Rules = {
   kycTiers: {
     minimum: { maxBalance: 5000, daily: 3000, monthly: 10000 },
     medium: { maxBalance: 40000, daily: 15000, monthly: null },
     enhanced: { maxBalance: 75000, daily: 25000, monthly: null },
   },
-  fees: { mtn: fees(0.75), telecel: fees(0.75), at: fees(0.5) },
+  fees: { mtn: mtnFees, telecel: telecelFees, at: mtnFees },
   secondFactor: { method: "sms_otp", friction_seconds: 25 },
   pinAttemptsBeforeLock: 3,
   victimCanReverseHeldFunds: true,

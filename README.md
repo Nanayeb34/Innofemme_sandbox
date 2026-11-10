@@ -35,7 +35,7 @@ pnpm typecheck && pnpm lint
 ```
 src/engine/            all simulation logic, no web code
   config/schemas.ts    the five control surfaces (zod) and the condition language
-  config/defaults.ts   starting menus, BoG KYC limits, fees, notifications, checks, scenarios
+  config/defaults.ts   starting menus, BoG KYC limits, telco fee schedules, notifications, checks, scenarios
   config/store.ts      validated config with history, undo and JSON Patch
   population.ts        deterministic synthetic population (Ghana Card IDs, SIMs, wallets, contacts)
   payments.ts          the payment pipeline: limits → fees → fraud checks → switch → ledger
@@ -68,10 +68,13 @@ docker run -d -p 80:3000 -v /mnt/disks/sandbox:/data --env-file .env momo-sandbo
 
 The same image runs the venue's offline back-up server. OpenAI is not reachable offline, so set `OPENAI_BASE_URL` to a local OpenAI-compatible server such as Ollama and `OPENAI_MODEL` to a local model. Copy `/data` from the cloud VM to move the teams' worlds across.
 
+## Fees
+
+`config/defaults.ts` holds the confirmed tariffs as amount bands. MTN: P2P 0.75% up to GH₵1,000 then GH₵7.50 flat; cash-out GH₵0.50 below GH₵50, 1% to GH₵1,999.99, GH₵20 from GH₵2,000; wallet-to-bank 0.75% capped at GH₵5. Telecel: on-net free; off-net free to GH₵100, 0.5% to GH₵1,000, then GH₵5; cash-out GH₵0.50 to GH₵50, 1% to GH₵2,000, then GH₵20. AT uses the MTN schedule. Merchant payments and receiving are free. Telecel wallet-to-bank isn't in its published table and follows MTN until confirmed.
+
 ## Still open (from the design doc)
 
 - Telecel and AT API specs: both telcos currently use the MTN API shape.
-- Telco fee schedules: the fees in `config/defaults.ts` are placeholders.
 - Menu trees: wording approximates the live menus. Replace it with the telcos' trees when they arrive.
 - Whether teams can attack each other: worlds are fully isolated for now.
 - Final judging weights: the score in `scoring.ts` is provisional.

@@ -10,6 +10,16 @@ export function seedConfig(db: DB) {
   for (const s of Object.keys(DEFAULTS) as Surface[]) ins.run(s, JSON.stringify(DEFAULTS[s]));
 }
 
+/** Brings configuration saved by older versions up to the current schemas. */
+export function migrateConfig(db: DB) {
+  const row = db.prepare("SELECT value FROM config WHERE surface = 'rules'").get() as { value: string } | undefined;
+  if (!row) return;
+  const rules = JSON.parse(row.value);
+  if (rules?.fees?.mtn?.p2p_onnet?.bands) return;
+  // Fees moved from a single percentage to amount bands when the telco tariffs were confirmed.
+  setConfig(db, "rules", { ...rules, fees: DEFAULTS.rules.fees }, "Applied the confirmed MTN, Telecel and AT fee schedules", "organiser");
+}
+
 export function getConfig<S extends Surface>(db: DB, surface: S): SurfaceTypes[S] {
   let m = cache.get(db);
   if (!m) cache.set(db, (m = new Map()));

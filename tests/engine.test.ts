@@ -118,3 +118,35 @@ describe("engine", () => {
     expect(m.detectionRate).toBeGreaterThan(0.8);
   });
 });
+
+describe("fees", async () => {
+  const { feeFor } = await import("../src/engine/payments");
+  const { DEFAULTS } = await import("../src/engine/config/defaults");
+  const r = DEFAULTS.rules;
+  const fee = (telco: "mtn" | "telecel" | "at", kind: Parameters<typeof feeFor>[2], cedis: number) => feeFor(r, telco, kind, Math.round(cedis * 100)) / 100;
+
+  it("applies the MTN tariff (AT uses the same)", () => {
+    expect(fee("mtn", "p2p_onnet", 200)).toBe(1.5);
+    expect(fee("mtn", "p2p_offnet", 1000)).toBe(7.5);
+    expect(fee("mtn", "p2p_onnet", 5000)).toBe(7.5);
+    expect(fee("mtn", "cashout", 20)).toBe(0.5);
+    expect(fee("mtn", "cashout", 49.99)).toBe(0.5);
+    expect(fee("mtn", "cashout", 50)).toBe(0.5);
+    expect(fee("mtn", "cashout", 500)).toBe(5);
+    expect(fee("mtn", "cashout", 2500)).toBe(20);
+    expect(fee("mtn", "to_bank", 400)).toBe(3);
+    expect(fee("mtn", "to_bank", 2000)).toBe(5);
+    expect(fee("at", "cashout", 500)).toBe(fee("mtn", "cashout", 500));
+  });
+
+  it("applies the Telecel tariff", () => {
+    expect(fee("telecel", "p2p_onnet", 5000)).toBe(0);
+    expect(fee("telecel", "p2p_offnet", 100)).toBe(0);
+    expect(fee("telecel", "p2p_offnet", 600)).toBe(3);
+    expect(fee("telecel", "p2p_offnet", 1500)).toBe(5);
+    expect(fee("telecel", "p2p_offnet", 9000)).toBe(5);
+    expect(fee("telecel", "cashout", 30)).toBe(0.5);
+    expect(fee("telecel", "cashout", 1000)).toBe(10);
+    expect(fee("telecel", "cashout", 2500)).toBe(20);
+  });
+});

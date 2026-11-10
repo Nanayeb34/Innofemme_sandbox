@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { BASE_WORLD, DATA_DIR, SNAPSHOTS_DIR, WORLDS_DIR, getMeta, openDb, setMeta } from "./db";
 import { generateWorld } from "./population";
+import { migrateConfig } from "./config/store";
 import { runUntil } from "./sim";
 import { makeWorld, withLock, type World } from "./world";
 
@@ -77,7 +78,9 @@ export function getWorld(id: string): World {
     fs.mkdirSync(WORLDS_DIR, { recursive: true });
     fs.copyFileSync(BASE_WORLD, file);
   }
-  const w = makeWorld(id, openDb(file));
+  const db = openDb(file);
+  migrateConfig(db);
+  const w = makeWorld(id, db);
   state.worlds.set(id, w);
   return w;
 }

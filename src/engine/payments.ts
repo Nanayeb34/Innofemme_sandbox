@@ -66,9 +66,11 @@ export const getWallet = (w: World, id: string) => w.db.prepare("SELECT * FROM w
 export const walletByMsisdn = (w: World, msisdn: string) => w.db.prepare("SELECT * FROM wallets WHERE msisdn = ?").get(msisdn) as WalletRow | undefined;
 
 export function feeFor(rules: Rules, telco: Telco, kind: FeeKind, amount: number): number {
-  const f = rules.fees[telco][kind];
-  const raw = (amount * f.pct) / 100;
-  return Math.round(Math.min(Math.max(raw, f.min * 100), f.max * 100 || raw));
+  const cedis = amount / 100;
+  const bands = rules.fees[telco][kind].bands;
+  const band = bands.find((b) => b.upTo === null || cedis <= b.upTo) ?? bands[bands.length - 1];
+  const fee = band.flat * 100 + (amount * band.pct) / 100;
+  return Math.round(band.max === undefined ? fee : Math.min(fee, band.max * 100));
 }
 
 function feeKind(type: TxnType, crossNetwork: boolean): FeeKind | undefined {
