@@ -145,7 +145,7 @@ const mtnFees = {
   to_bank: { bands: [{ upTo: null, pct: 0.75, flat: 0, max: 5 }] },
 };
 
-// Telecel Cash tariff (confirmed). Wallet-to-bank is not in the published table, so it follows MTN.
+// Telecel Cash tariff (confirmed). Wallet-to-bank uses MTN's rate, as agreed by the organisers.
 const telecelFees = {
   p2p_onnet: FREE,
   p2p_offnet: { bands: [{ upTo: 100, pct: 0, flat: 0 }, { upTo: 1000, pct: 0.5, flat: 0 }, { upTo: null, pct: 0, flat: 5 }] },

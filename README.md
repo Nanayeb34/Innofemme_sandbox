@@ -68,10 +68,6 @@ docker run -d -p 80:3000 -v /mnt/disks/sandbox:/data --env-file .env momo-sandbo
 
 The same image runs the venue's offline back-up server. OpenAI is not reachable offline, so set `OPENAI_BASE_URL` to a local OpenAI-compatible server such as Ollama and `OPENAI_MODEL` to a local model. Copy `/data` from the cloud VM to move the teams' worlds across.
 
-## Fees
-
-`config/defaults.ts` holds the confirmed tariffs as amount bands. MTN: P2P 0.75% up to GH₵1,000 then GH₵7.50 flat; cash-out GH₵0.50 below GH₵50, 1% to GH₵1,999.99, GH₵20 from GH₵2,000; wallet-to-bank 0.75% capped at GH₵5. Telecel: on-net free; off-net free to GH₵100, 0.5% to GH₵1,000, then GH₵5; cash-out GH₵0.50 to GH₵50, 1% to GH₵2,000, then GH₵20. AT uses the MTN schedule. Merchant payments and receiving are free. Telecel wallet-to-bank isn't in its published table and follows MTN until confirmed.
-
 ## Still open (from the design doc)
 
 - Telecel and AT API specs: both telcos currently use the MTN API shape.
