@@ -1,0 +1,12 @@
+# Files Cloud Build never uploads
+.git
+.gitignore
+node_modules
+.next
+.venv
+.env*
+!.env.example
+data
+tests
+deploy
+*.md

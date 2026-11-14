@@ -1,0 +1,5 @@
+# HTTPS for the sandbox. Caddy obtains and renews the Let's Encrypt certificate automatically.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}
