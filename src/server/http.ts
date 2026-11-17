@@ -69,3 +69,11 @@ export async function body<T = Record<string, unknown>>(req: Request): Promise<T
     throw new HttpError(400, "Body must be JSON");
   }
 }
+
+/** The address visitors use. Behind the HTTPS proxy, req.url is the container's internal address. */
+export function publicOrigin(req: Request): string {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, "");
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "");
+  return host ? `${proto}://${host}` : new URL(req.url).origin;
+}

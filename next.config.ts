@@ -5,6 +5,8 @@ const nextConfig: NextConfig = {
   // The MTN MoMo API uses trailing slashes (e.g. /collection/token/); keep them working.
   skipTrailingSlashRedirect: true,
   output: "standalone",
+  // Logos are small PNGs; serve them as-is rather than through the image optimiser.
+  images: { unoptimized: true },
   turbopack: {
     rules: {
       "*.css": {
