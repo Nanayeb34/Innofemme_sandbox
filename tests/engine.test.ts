@@ -251,6 +251,60 @@ describe("a country built from nothing", () => {
   });
 });
 
+describe("voice calls", () => {
+  it("plays the network: switched off, ringing, busy, answered, ended, and the call log", async () => {
+    const calls = await import("../src/engine/calls");
+    const w = await resetWorld("team-02");
+    const a = person(w, "Esi", "Arthur");
+    const b = person(w, "Kojo", "Annan", "1991-02-03");
+    const c = person(w, "Efua", "Eshun", "1992-04-05");
+    telco.generateSims(w, "mtn", 3);
+    telco.generateSims(w, "at", 1);
+    const mtn = telco.onboardSimAgent(w, "mtn", { card: a.ghana_card, name: "Point", kind: "service_centre", town: "Accra" }).id;
+    const at = telco.onboardSimAgent(w, "at", { card: a.ghana_card, name: "Point", kind: "service_centre", town: "Accra" }).id;
+    const [na, nb] = [a, b].map((p) => telco.registerSim(w, "mtn", mtn, { card: p.ghana_card, fingerprint: p.fingerprint }).sim.msisdn);
+    const nc = telco.registerSim(w, "at", at, { card: c.ghana_card, fingerprint: c.fingerprint }).sim.msisdn;
+    const on = (msisdn: string, device: string, extra = {}) => calls.pollCall(w, { msisdn, device, ...extra });
+
+    expect(() => calls.startCall(w, { from: na, to: "0240000000", device: "A", offer: "o" })).toThrow(/not in service/);
+    expect(() => calls.startCall(w, { from: na, to: na, device: "A", offer: "o" })).toThrow(/your own number/);
+    // Nobody has Kojo's phone open: it is off, and the network texts him about the missed call.
+    expect(() => calls.startCall(w, { from: na, to: nb, device: "A", offer: "o" })).toThrow(/switched off/);
+    expect(lastSms(w, nb)).toMatch(/You missed a call from/);
+
+    on(nb, "B");
+    on(nc, "C");
+    const { id } = calls.startCall(w, { from: na, to: nb, device: "A", offer: "offer-sdp" });
+    expect(on(nb, "B").call).toMatchObject({ role: "callee", status: "ringing", peer: na, offer: "offer-sdp" });
+    // A third phone, on another network, gets the busy tone.
+    expect(() => calls.startCall(w, { from: nc, to: nb, device: "C", offer: "o" })).toThrow(/busy/);
+    // The caller's network paths reach the other phone; each side only gets what it has not seen.
+    on(na, "A", { callId: id, candidates: [{ candidate: "c1" }, { candidate: "c2" }] });
+    expect(on(nb, "B", { have: 1 }).call!.candidates).toEqual([{ candidate: "c2" }]);
+
+    calls.answerCall(w, { callId: id, msisdn: nb, device: "B", answer: "answer-sdp" });
+    expect(on(na, "A", { callId: id }).call).toMatchObject({ status: "active", answer: "answer-sdp" });
+    // The same number open on another screen does not take over the call.
+    expect(on(nb, "B2")).toEqual({ call: null, elsewhere: true });
+    expect(() => calls.answerCall(w, { callId: id, msisdn: nb, device: "B2", answer: "x" })).toThrow(/no longer ringing/);
+
+    calls.endCall(w, { callId: id, msisdn: na });
+    expect(on(nb, "B", { callId: id }).call).toMatchObject({ status: "ended" });
+    expect(on(nb, "B").call).toBeNull();
+
+    // Declined, then a blocked SIM on each side.
+    const second = calls.startCall(w, { from: nb, to: na, device: "B", offer: "o" }).id;
+    calls.endCall(w, { callId: second, msisdn: na });
+    expect(on(nb, "B", { callId: second }).call).toMatchObject({ status: "declined", reason: "Call declined" });
+    telco.setSimStatus(w, "mtn", mtn, na, "blocked", "lost");
+    expect(() => calls.startCall(w, { from: na, to: nb, device: "A", offer: "o" })).toThrow(/No network service/);
+    expect(() => calls.startCall(w, { from: nb, to: na, device: "B", offer: "o" })).toThrow(/switched off/);
+
+    expect(calls.callLog(w, nb).map((x) => `${x.direction}:${x.status}`)).toEqual(["outgoing:failed", "outgoing:declined", "missed:busy", "incoming:ended", "missed:missed"]);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE from_telco = 'at' AND to_telco = 'mtn' AND status = 'busy'")).toBe(1);
+  });
+});
+
 describe("fees", () => {
   const fee = (t: "mtn" | "telecel" | "at", kind: "p2p_onnet" | "p2p_offnet" | "cashout" | "merchant" | "to_bank", amount: number) => feeFor(defaultTelco(t).fees[kind], amount * 100) / 100;
 

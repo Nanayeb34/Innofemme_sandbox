@@ -11,6 +11,16 @@ export interface UssdSession {
   pending?: { kind: string; data?: unknown };
 }
 
+/** What two phones exchange to set up the audio of a call. Kept in memory only: it is useless once the call ends. */
+export interface CallSignal {
+  offer: string;
+  answer?: string;
+  candidates: { caller: unknown[]; callee: unknown[] };
+  seen: { caller: number; callee: number };
+  callerDevice: string;
+  calleeDevice?: string;
+}
+
 /** A team's isolated copy of the country's systems, open in this process. */
 export interface World {
   id: string;
@@ -20,6 +30,10 @@ export interface World {
   ussd: Map<string, UssdSession>;
   /** One-time codes waiting to be entered, by purpose. */
   otps: Map<string, string>;
+  /** Live calls being set up or in progress, by call id. */
+  calls: Map<string, CallSignal>;
+  /** When each number's phone screen was last open, to tell "switched off" from "not answering". */
+  presence: Map<string, number>;
   lock: Promise<unknown>;
 }
 
@@ -32,6 +46,8 @@ export function makeWorld(id: string, db: DB): World {
     },
     ussd: new Map(),
     otps: new Map(),
+    calls: new Map(),
+    presence: new Map(),
     lock: Promise.resolve(),
   };
 }

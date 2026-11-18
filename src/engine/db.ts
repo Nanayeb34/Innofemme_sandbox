@@ -195,6 +195,22 @@ CREATE TABLE IF NOT EXISTS sms (
 );
 CREATE INDEX IF NOT EXISTS sms_msisdn ON sms(msisdn, id);
 
+-- Voice calls between phones (the telcos' call records). The audio itself goes phone to phone.
+CREATE TABLE IF NOT EXISTS calls (
+  id TEXT PRIMARY KEY,
+  from_msisdn TEXT NOT NULL,
+  to_msisdn TEXT NOT NULL,
+  from_telco TEXT NOT NULL,
+  to_telco TEXT,
+  status TEXT NOT NULL,              -- ringing | active | ended | missed | declined | busy | failed
+  reason TEXT,
+  started_at INTEGER NOT NULL,
+  answered_at INTEGER,
+  ended_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS calls_from ON calls(from_msisdn, started_at);
+CREATE INDEX IF NOT EXISTS calls_to ON calls(to_msisdn, started_at);
+
 -- Payment requests waiting for the payer's approval: agent cash-outs and merchant Request to Pay.
 CREATE TABLE IF NOT EXISTS approvals (
   ref TEXT PRIMARY KEY,

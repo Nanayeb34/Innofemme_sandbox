@@ -17,6 +17,7 @@ interface TelcoView {
   momoAgents: { code: string; name: string; town: string; msisdn: string; float: number; cash: number; commission: number; status: string }[];
   merchants: { till: string; name: string; category: string; town: string; msisdn: string; balance: number }[];
   txns: TxnRow[];
+  calls: { id: string; at: string; from: string; to: string; fromNetwork: string; toNetwork: string; status: string; reason: string | null; seconds: number }[];
   simEvents: { id: number; msisdn: string; at: string; kind: string; by: string; detail: string }[];
   activity: ActivityRow[];
   config: {
@@ -34,7 +35,7 @@ interface TelcoView {
 }
 
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
-const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["settings", "Settings"]] as const;
+const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["settings", "Settings"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 export default function TelcoConsole({ team, telco }: { team: string; telco: string }) {
@@ -325,6 +326,22 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
                 </ActionButton>
               ) : null
             }
+          />
+        </Section>
+      )}
+
+      {tab === "calls" && (
+        <Section title="Call records" hint="Every voice call made from or to a number on this network, including calls that did not connect. The network records who called whom and for how long, not what was said.">
+          <Table
+            rows={data.calls}
+            empty="No calls yet. Open two phones and dial one from the other."
+            cols={[
+              { label: "Time", cell: (c) => <span className="whitespace-nowrap text-gray-500">{when(c.at)}</span> },
+              { label: "From", cell: (c) => (<><span className="font-mono text-xs">{c.from}</span><div className="text-[11px] text-gray-500">{c.fromNetwork}</div></>) },
+              { label: "To", cell: (c) => (<><span className="font-mono text-xs">{c.to}</span><div className="text-[11px] text-gray-500">{c.toNetwork || "unknown"}</div></>) },
+              { label: "Duration", right: true, cell: (c) => (c.seconds ? `${Math.floor(c.seconds / 60)}m ${c.seconds % 60}s` : "–") },
+              { label: "Outcome", cell: (c) => (<><Status value={c.status === "ended" ? "success" : c.status} />{c.reason && c.status !== "ended" && <div className="mt-0.5 max-w-[260px] text-[11px] text-gray-500">{c.reason}</div>}</>) },
+            ]}
           />
         </Section>
       )}

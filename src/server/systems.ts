@@ -1,4 +1,5 @@
 import { approvalView, pendingFor } from "@/engine/approvals";
+import { answerCall, callLog, callSeconds, endCall, pollCall, startCall, type CallRow } from "@/engine/calls";
 import { openAccount, setAccountStatus } from "@/engine/bank";
 import { getConfig } from "@/engine/config/store";
 import { TIERS, type KycTier } from "@/engine/config/schemas";
@@ -208,6 +209,9 @@ function telcoSystem(t: Telco): System {
         })),
         merchants: w.db.prepare("SELECT m.till, m.name, m.category, m.town, w.msisdn, w.balance / 100.0 AS balance FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE w.telco = ? ORDER BY m.created_at").all(t),
         txns: txnFeed(w, "t.from_party = ? OR t.to_party = ?", [t, t], 150),
+        calls: (w.db.prepare("SELECT * FROM calls WHERE from_telco = ? OR to_telco = ? ORDER BY started_at DESC, rowid DESC LIMIT 150").all(t, t) as unknown as CallRow[]).map((c) => ({
+          id: c.id, at: iso(c.started_at), from: c.from_msisdn, to: c.to_msisdn, fromNetwork: TELCO_INFO[c.from_telco].name, toNetwork: c.to_telco ? TELCO_INFO[c.to_telco].name : "", status: c.status, reason: c.reason, seconds: callSeconds(c),
+        })),
         simEvents: (w.db.prepare("SELECT e.* FROM sim_events e JOIN sims s ON s.msisdn = e.msisdn WHERE s.telco = ? ORDER BY e.id DESC LIMIT 80").all(t) as { id: number; msisdn: string; at: number; kind: string; by: string; detail: string }[]).map((e) => ({ ...e, at: iso(e.at) })),
         activity: auditFeed(w, t),
         config: getConfig(w.db, `telco.${t}`),
@@ -431,6 +435,7 @@ const phone: System = {
         wallet: wallet ? { name: wallet.display_name, type: wallet.owner_type, tier: wallet.kyc_tier, status: wallet.status, balance: money(wallet.balance) } : null,
         sms: (w.db.prepare("SELECT id, sender, body, at FROM sms WHERE msisdn = ? ORDER BY id DESC LIMIT 60").all(sim.msisdn) as { id: number; sender: string; body: string; at: number }[]).map((s) => ({ ...s, at: iso(s.at) })),
         approvals: wallet ? pendingFor(w, sim.msisdn).map((a) => ({ ref: a.ref, kind: a.kind, amount: money(a.amount), from: a.display_name })) : [],
+        calls: callLog(w, sim.msisdn),
         recent: wallet ? txnFeed(w, "(t.from_wallet = ? OR t.to_wallet = ?) AND t.status != 'failed'", [wallet.id, wallet.id], 15).map((x) => ({ ...x, out: x.from.includes(sim.msisdn) })) : [],
       },
     };
@@ -439,6 +444,17 @@ const phone: System = {
     ussd(w, b) {
       if (typeof b.input !== "string") throw new SimError("input is required");
       return ussd(w, { sessionId: str(b.sessionId), msisdn: normalizeMsisdn(String(need(str(b.msisdn), "msisdn"))), input: b.input.slice(0, 182) });
+    },
+    // Voice calls. The phone checks in about once a second with call_poll.
+    call_start: (w, b) => startCall(w, { from: String(need(str(b.msisdn), "msisdn")), to: String(need(str(b.to), "Number to call")), device: String(need(str(b.device), "device")), offer: String(b.offer ?? "") }),
+    call_poll: (w, b) => pollCall(w, { msisdn: String(need(str(b.msisdn), "msisdn")), device: String(need(str(b.device), "device")), callId: str(b.callId) || undefined, have: Number(b.have ?? 0), candidates: Array.isArray(b.candidates) ? b.candidates : undefined }),
+    call_answer(w, b) {
+      answerCall(w, { callId: String(need(str(b.callId), "callId")), msisdn: String(need(str(b.msisdn), "msisdn")), device: String(need(str(b.device), "device")), answer: String(b.answer ?? "") });
+      return { ok: true };
+    },
+    call_end(w, b) {
+      endCall(w, { callId: String(need(str(b.callId), "callId")), msisdn: String(need(str(b.msisdn), "msisdn")), reason: str(b.reason) });
+      return { ok: true };
     },
   },
 };

@@ -31,7 +31,7 @@ pnpm typecheck && pnpm lint
 | `/t/{team}/telco/{mtn,telecel,at}` | A telco's back office | SIM stock, SIM registration points, wallets and KYC tiers, mobile money agents, merchants, transactions and reversals, fees, agent commission, the USSD menu, SMS notifications. |
 | `/t/{team}/sim-agent/{telco}` | SIM registration point (service centre or registration agent) | Register a new SIM with Ghana Card and fingerprint, replace a SIM, block and unblock, reset a wallet PIN, enhanced KYC. No cash. |
 | `/t/{team}/momo-agent/{telco}` | Mobile money agent | Cash-in, cash-out (the customer approves on their phone), register customers on medium KYC, move float, count the till. |
-| `/t/{team}/phone` | Any registered SIM | Dial the wallet short code (`*170#` MTN, `*110#` Telecel and AT), `*400#`, `*402*1#`; SMS inbox; wallet. |
+| `/t/{team}/phone` | Any registered SIM | Dial the wallet short code (`*170#` MTN, `*110#` Telecel and AT), `*400#`, `*402*1#`; voice calls to other phones; SMS inbox; wallet. |
 | `/t/{team}/bank/{gcb,ecobank,fidelity,calbank,absa,stanbic}` | A bank | Open accounts against the Ghana Card, cash deposits and withdrawals, transfers to banks and wallets, agent float, the telcos' trust accounts. |
 | `/t/{team}/switch` | The national switch (GhIPSS in real life) | Connect and disconnect participants, watch the message log, see each participant's position, run net settlement. |
 | `/t/{team}/bog` | Bank of Ghana | KYC tier limits for all networks; check that every telco's e-money is backed by its trust account. |
@@ -67,11 +67,20 @@ These are the main design decisions:
 - **One SQLite file per world** (Node's built-in `node:sqlite`). Save points, rollback and reset are file operations, and the offline back-up needs no database server.
 - **Biometrics are a code.** NIA gives each person a fingerprint code that stands in for their fingerprints. It must be presented wherever a biometric check is done.
 
+## Voice calls
+
+Dial another registered number from the phone and that phone rings; the two people then talk with real audio. The server plays the network (ringing, busy, switched off, the telco's call records) and the audio goes directly between the two browsers over WebRTC.
+
+- **The other phone must be open.** A number rings only while someone has its phone screen open. Otherwise the caller hears that it is switched off, and the owner gets a missed-call SMS.
+- **HTTPS is required.** Browsers allow the microphone only on a secure address (or `localhost`).
+- **Relay.** On Wi-Fi that stops devices reaching each other, audio needs a relay. Set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` (Cloudflare dashboard → Realtime → TURN → create a key) and the sandbox issues short-lived Cloudflare relay credentials to each phone. Without them, calls try to connect directly.
+
 ## Where the simulation simplifies
 
 - Each telco keeps its float in one trust account at one bank (MTN at GCB, Telecel at Ecobank, AT at Fidelity). Real issuers use many partner banks, and these pairings are not the real ones.
 - Agent commission bands start from commonly reported MTN rates; the telcos publish no official rate card. The 24-hour pause on sending after a SIM replacement is a sandbox default, not a confirmed rule.
 - The world runs on the real clock, so daily limits reset at midnight GMT.
+- Calls are free: there is no airtime yet. Calls to short numbers such as 100 are not connected yet.
 - Not modelled: airtime and bundles, number porting, master agents and sub-agents, merchant KYC tiers, interest on float, guardians for under-18s, self-service SIM replacement.
 
 ## Deploying (GCP)

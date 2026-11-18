@@ -98,7 +98,7 @@ export function Badge({ children, tone = "gray" }: { children: ReactNode; tone?:
 const STATUS_TONE: Record<string, keyof typeof TONES> = {
   active: "green", success: "green", SUCCESSFUL: "green", MATCH: "green", commit: "green", connected: "green",
   blocked: "red", failed: "red", FAILED: "red", frozen: "red", locked: "red", suspended: "red", deactivated: "red", reject: "red", disconnected: "red", NOT_FOUND: "red", BIOMETRIC_MISMATCH: "red", CARD_SUSPENDED: "red",
-  PENDING: "amber", reversed: "amber", in_stock: "blue", settlement: "blue",
+  PENDING: "amber", reversed: "amber", missed: "amber", declined: "amber", busy: "amber", ringing: "blue", in_stock: "blue", settlement: "blue",
 };
 export function Status({ value }: { value: string }) {
   return <Badge tone={STATUS_TONE[value] ?? "gray"}>{value.replace(/_/g, " ").toLowerCase()}</Badge>;

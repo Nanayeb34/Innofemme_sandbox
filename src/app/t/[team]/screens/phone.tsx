@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { TelcoMark } from "@/components/telco-mark";
 import { Loading, useView } from "@/components/ui";
 import { api, ghs, teamName, when } from "@/lib/client";
+import { CallLog, CallScreen, useCalls, type CallLogRow, type Calls } from "./calls";
 
 interface Line {
   msisdn: string;
@@ -26,6 +27,7 @@ interface PhoneState {
   wallet: { name: string; type: string; tier: string; status: string; balance: number } | null;
   sms: { id: number; sender: string; body: string; at: string }[];
   approvals: { ref: string; kind: string; amount: number; from: string }[];
+  calls: CallLogRow[];
   recent: { id: string; at: string; type: string; amount: number; status: string; from: string; to: string; out: boolean }[];
 }
 interface PhoneView {
@@ -33,7 +35,7 @@ interface PhoneView {
   phone: PhoneState | null;
 }
 
-type Tab = "dial" | "sms" | "wallet";
+type Tab = "dial" | "calls" | "sms" | "wallet";
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
 const NETWORK: Record<string, string> = { mtn: "MTN", telecel: "Telecel", at: "AT" };
 
@@ -75,6 +77,17 @@ export default function Phone({ team }: { team: string }) {
     if (state && (lastSeen === undefined || tab === "sms") && lastSeen !== newest) setSeen((s) => ({ ...s, [current]: newest }));
   }, [state, lastSeen, newest, tab, current]);
   const unread = state && lastSeen !== undefined ? state.sms.filter((s) => s.id > lastSeen).length : 0;
+  const [calls, voiceRef] = useCalls(team, state?.simStatus === "active" ? current : "");
+  // Missed calls show a badge until the call log has been opened.
+  const [seenCalls, setSeenCalls] = useState<Record<string, string>>({});
+  const newestCall = state?.calls[0]?.id ?? "";
+  const lastSeenCall = seenCalls[current];
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- marks calls seen when the call log is on screen
+    if (state && (lastSeenCall === undefined || tab === "calls") && lastSeenCall !== newestCall) setSeenCalls((s) => ({ ...s, [current]: newestCall }));
+  }, [state, lastSeenCall, newestCall, tab, current]);
+  const seenAt = state?.calls.findIndex((c) => c.id === lastSeenCall) ?? -1;
+  const missed = state && lastSeenCall !== undefined ? state.calls.slice(0, seenAt < 0 ? state.calls.length : seenAt).filter((c) => c.direction === "missed").length : 0;
   const brandColor = state?.brand.color ?? "#334155";
 
   return (
@@ -137,10 +150,14 @@ export default function Phone({ team }: { team: string }) {
             </div>
 
             <div className="relative flex-1 overflow-y-auto">
+              <audio ref={voiceRef} autoPlay playsInline className="hidden" />
+              <CallScreen calls={calls} />
               {!state ? (
                 <div className="p-6 text-center text-sm text-gray-500">Loading…</div>
               ) : tab === "dial" ? (
-                <Dialer key={state.msisdn} team={team} state={state} onDone={refresh} />
+                <Dialer key={state.msisdn} team={team} state={state} calls={calls} onDone={refresh} />
+              ) : tab === "calls" ? (
+                <CallLog rows={state.calls} calls={calls} onCall={(n) => void calls.start(n)} />
               ) : tab === "sms" ? (
                 <Messages state={state} />
               ) : (
@@ -148,10 +165,11 @@ export default function Phone({ team }: { team: string }) {
               )}
             </div>
 
-            <nav className="grid grid-cols-3 border-t border-gray-200 bg-gray-50 text-[11px]">
+            <nav className="grid grid-cols-4 border-t border-gray-200 bg-gray-50 text-[11px]">
               {(
                 [
                   ["dial", "Phone", "☎"],
+                  ["calls", "Calls", "↙"],
                   ["sms", "Messages", "✉"],
                   ["wallet", "Wallet", "₵"],
                 ] as [Tab, string, string][]
@@ -159,8 +177,9 @@ export default function Phone({ team }: { team: string }) {
                 <button key={key} onClick={() => setTab(key)} className={`relative flex flex-col items-center gap-0.5 py-2 ${tab === key ? "font-semibold text-gray-900" : "text-gray-500"}`}>
                   <span className="text-base leading-none">{icon}</span>
                   {label}
-                  {key === "sms" && unread > 0 && tab !== "sms" && <span className="absolute right-[28%] top-1 min-w-4 rounded-full bg-red-600 px-1 text-[10px] font-bold leading-4 text-white">{unread > 9 ? "9+" : unread}</span>}
-                  {key === "dial" && state && state.approvals.length > 0 && <span className="absolute right-[28%] top-1 min-w-4 rounded-full bg-amber-500 px-1 text-[10px] font-bold leading-4 text-white">{state.approvals.length}</span>}
+                  {key === "calls" && missed > 0 && tab !== "calls" && <span className="absolute right-[22%] top-1 min-w-4 rounded-full bg-red-600 px-1 text-[10px] font-bold leading-4 text-white">{missed > 9 ? "9+" : missed}</span>}
+                  {key === "sms" && unread > 0 && tab !== "sms" && <span className="absolute right-[22%] top-1 min-w-4 rounded-full bg-red-600 px-1 text-[10px] font-bold leading-4 text-white">{unread > 9 ? "9+" : unread}</span>}
+                  {key === "dial" && state && state.approvals.length > 0 && <span className="absolute right-[22%] top-1 min-w-4 rounded-full bg-amber-500 px-1 text-[10px] font-bold leading-4 text-white">{state.approvals.length}</span>}
                 </button>
               ))}
             </nav>
@@ -177,7 +196,7 @@ export default function Phone({ team }: { team: string }) {
   );
 }
 
-function Dialer({ team, state, onDone }: { team: string; state: PhoneState; onDone: () => void }) {
+function Dialer({ team, state, calls, onDone }: { team: string; state: PhoneState; calls: Calls; onDone: () => void }) {
   const [code, setCode] = useState("");
   const [session, setSession] = useState<{ id: string; text: string; end: boolean } | null>(null);
   const [input, setInput] = useState("");
@@ -240,6 +259,15 @@ function Dialer({ team, state, onDone }: { team: string; state: PhoneState; onDo
     );
   }
 
+  // A code ending in # is a USSD request; anything else is a number to call.
+  const isCode = code.endsWith("#") || code.startsWith("*");
+  const canDial = code.endsWith("#") || (!isCode && code.length >= 3);
+  const dial = () => {
+    if (code.endsWith("#")) return void send(code);
+    void calls.start(code);
+    setCode("");
+  };
+
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
   return (
     <div className="flex h-full flex-col px-6 pb-5 pt-4">
@@ -248,7 +276,7 @@ function Dialer({ team, state, onDone }: { team: string; state: PhoneState; onDo
           {state.approvals.length} payment request(s) waiting. Dial {state.shortcode} and choose option 4 to approve or reject.
         </div>
       )}
-      <div className="flex min-h-12 items-center justify-center text-3xl tracking-wider text-gray-900">{code || <span className="text-base text-gray-400">Dial a short code</span>}</div>
+      <div className="flex min-h-12 items-center justify-center text-3xl tracking-wider text-gray-900">{code || <span className="text-base text-gray-400">Dial a number or a short code</span>}</div>
       <div className="mb-3 flex flex-wrap justify-center gap-1.5">
         {state.codes.map((c) => (
           <button key={c.code} onClick={() => setCode(c.code)} className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] text-gray-700" title={c.label}>
@@ -265,7 +293,7 @@ function Dialer({ team, state, onDone }: { team: string; state: PhoneState; onDo
       </div>
       <div className="mt-4 flex items-center justify-center gap-6">
         <span className="w-12" />
-        <button onClick={() => code.endsWith("#") && send(code)} disabled={busy || !code.endsWith("#")} className="flex h-16 w-16 items-center justify-center rounded-full bg-green-600 text-2xl text-white shadow active:bg-green-700 disabled:opacity-40" aria-label="Call">
+        <button onClick={dial} disabled={busy || !canDial} className="flex h-16 w-16 items-center justify-center rounded-full bg-green-600 text-2xl text-white shadow active:bg-green-700 disabled:opacity-40" aria-label="Call">
           ✆
         </button>
         <button onClick={() => setCode((c) => c.slice(0, -1))} className="w-12 text-xl text-gray-500" aria-label="Delete">
