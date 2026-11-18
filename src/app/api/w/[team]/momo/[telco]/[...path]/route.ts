@@ -2,24 +2,24 @@ import { NextResponse } from "next/server";
 import { randomBytes, randomUUID } from "node:crypto";
 import { HttpError, authWorld, handle } from "@/server/http";
 import { teamById } from "@/engine/worlds";
-import { getWallet, transfer, walletByMsisdn } from "@/engine/payments";
-import { createRtp, getRtp, rtpView } from "@/engine/rtp";
+import { approvalView, createApproval, getApproval } from "@/engine/approvals";
+import { getWallet, walletByMsisdn, type WalletRow } from "@/engine/ledger";
+import { walletPay } from "@/engine/payments";
 import { withLock, type World } from "@/engine/world";
-import { TELCOS, normalizeMsisdn, type Telco } from "@/engine/util";
-import { cedis } from "@/engine/notify";
+import { SimError, TELCOS, cedis, normalizeMsisdn, toIntl, type Telco } from "@/engine/util";
 
 /**
  * Telco-style Open API modelled on MTN MoMo (collection + disbursement products).
  * Base URL: /api/w/{team}/momo/{mtn|telecel|at}
+ * The caller acts as a merchant the telco has onboarded: send its merchant ID in the X-Merchant-Id header.
  * Telecel and AT use the same shape until their own specifications are received.
  */
 
-const SHOP = { mtn: "w_0249900010", telecel: "w_0209900010", at: "w_0269900010" } as const;
 const tokens = ((globalThis as unknown as { __momoTokens?: Map<string, { team: string; exp: number }> }).__momoTokens ??= new Map());
 
 type Ctx = RouteContext<"/api/w/[team]/momo/[telco]/[...path]">;
 
-async function setup(req: Request, ctx: Ctx) {
+async function setup(ctx: Ctx) {
   const { team, telco, path } = await ctx.params;
   if (!(TELCOS as readonly string[]).includes(telco)) throw new HttpError(404, "Unknown telco. Use mtn, telecel or at.");
   return { team, telco: telco as Telco, path: path.join("/") };
@@ -38,6 +38,16 @@ async function authed(req: Request, team: string): Promise<World> {
 
 const momoError = (status: number, code: string, message: string) => NextResponse.json({ code, message }, { status });
 
+/** The merchant wallet the caller is acting for. */
+function merchant(w: World, req: Request, telco: Telco): WalletRow {
+  const till = req.headers.get("x-merchant-id");
+  const row = (till
+    ? w.db.prepare("SELECT m.wallet_id FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE m.till = ? AND w.telco = ?").get(till, telco)
+    : w.db.prepare("SELECT m.wallet_id FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE w.telco = ? ORDER BY m.created_at LIMIT 1").get(telco)) as { wallet_id: string } | undefined;
+  if (!row) throw new HttpError(404, till ? `No merchant ${till} on this network` : "This network has no merchants yet. Onboard one in the telco console, then send its merchant ID in X-Merchant-Id.");
+  return getWallet(w, row.wallet_id)!;
+}
+
 async function json(req: Request) {
   try {
     return (await req.json()) as Record<string, unknown>;
@@ -53,7 +63,7 @@ function amountOf(v: unknown) {
 }
 
 export const POST = handle(async (req: Request, ctx: Ctx) => {
-  const { team, telco, path } = await setup(req, ctx);
+  const { team, telco, path } = await setup(ctx);
 
   if (/^(collection|disbursement)\/token\/?$/.test(path)) {
     const basic = req.headers.get("authorization")?.match(/^Basic\s+(.+)$/i)?.[1];
@@ -70,22 +80,13 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
 
   if (path === "collection/v1_0/requesttopay") {
     const b = await json(req);
-    const payer = b.payer as { partyIdType?: string; partyId?: string } | undefined;
+    const payer = b.payer as { partyId?: string } | undefined;
     const amount = amountOf(b.amount);
     if (!amount || !payer?.partyId) return momoError(400, "INVALID_INPUT", "amount and payer.partyId are required");
     if (b.currency && b.currency !== "GHS") return momoError(400, "INVALID_CURRENCY", "Currency must be GHS");
-    if (getRtp(w, ref)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
+    if (getApproval(w, ref)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
     await withLock(w, () =>
-      createRtp(w, {
-        ref,
-        payeeWallet: SHOP[telco],
-        payerMsisdn: normalizeMsisdn(payer.partyId!),
-        amount,
-        externalId: b.externalId as string,
-        payerMessage: b.payerMessage as string,
-        payeeNote: b.payeeNote as string,
-        callbackUrl,
-      }),
+      createApproval(w, { ref, kind: "rtp", payeeWallet: merchant(w, req, telco).id, payerMsisdn: normalizeMsisdn(payer.partyId!), amount, externalId: b.externalId as string, payerMessage: b.payerMessage as string, payeeNote: b.payeeNote as string, callbackUrl }),
     );
     return new Response(null, { status: 202 });
   }
@@ -97,15 +98,22 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     if (!amount || !payee?.partyId) return momoError(400, "INVALID_INPUT", "amount and payee.partyId are required");
     if (w.db.prepare("SELECT 1 FROM api_transfers WHERE ref = ?").get(ref)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
     const msisdn = normalizeMsisdn(payee.partyId);
-    await withLock(w, async () => {
+    await withLock(w, () => {
+      const from = merchant(w, req, telco);
       const to = walletByMsisdn(w, msisdn);
-      const r = to
-        ? await transfer(w, { type: "p2p", channel: "api", initiatedBy: "api", from: SHOP[telco], to: to.id, amount, reference: (b.payerMessage as string) ?? undefined })
-        : { status: "failed", message: "PAYEE_NOT_FOUND", txnId: undefined };
-      const ok = r.status === "success" || r.status === "held";
+      let txnId: string | null = null;
+      let reason: string | null = to ? null : "PAYEE_NOT_FOUND";
+      if (to) {
+        try {
+          txnId = walletPay(w, { type: "p2p", channel: "api", from: from.id, to: to.id, amount, reference: (b.payerMessage as string) ?? undefined }).txnId;
+        } catch (e) {
+          if (!(e instanceof SimError)) throw e;
+          reason = e.message;
+        }
+      }
       w.db
         .prepare("INSERT INTO api_transfers(ref, telco, payee_msisdn, amount, external_id, payer_message, payee_note, status, reason, txn_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-        .run(ref, telco, msisdn, amount, (b.externalId as string) ?? null, (b.payerMessage as string) ?? null, (b.payeeNote as string) ?? null, ok ? "SUCCESSFUL" : "FAILED", ok ? null : r.message, r.txnId ?? null, w.now);
+        .run(ref, telco, msisdn, amount, (b.externalId as string) ?? null, (b.payerMessage as string) ?? null, (b.payeeNote as string) ?? null, txnId ? "SUCCESSFUL" : "FAILED", reason, txnId, w.now);
     });
     return new Response(null, { status: 202 });
   }
@@ -114,14 +122,14 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
 });
 
 export const GET = handle(async (req: Request, ctx: Ctx) => {
-  const { team, telco, path } = await setup(req, ctx);
+  const { team, telco, path } = await setup(ctx);
   const w = await authed(req, team);
   let m: RegExpMatchArray | null;
 
   if ((m = path.match(/^collection\/v1_0\/requesttopay\/([\w-]+)$/))) {
-    const r = getRtp(w, m[1]);
-    if (!r || r.telco !== telco) return momoError(404, "RESOURCE_NOT_FOUND", "Requested resource was not found");
-    return rtpView(r);
+    const r = getApproval(w, m[1]);
+    if (!r || r.telco !== telco || r.kind !== "rtp") return momoError(404, "RESOURCE_NOT_FOUND", "Requested resource was not found");
+    return approvalView(r);
   }
   if ((m = path.match(/^disbursement\/v1_0\/transfer\/([\w-]+)$/))) {
     const r = w.db.prepare("SELECT * FROM api_transfers WHERE ref = ? AND telco = ?").get(m[1], telco) as Record<string, string | number> | undefined;
@@ -131,7 +139,7 @@ export const GET = handle(async (req: Request, ctx: Ctx) => {
       currency: "GHS",
       financialTransactionId: r.txn_id ?? undefined,
       externalId: r.external_id ?? undefined,
-      payee: { partyIdType: "MSISDN", partyId: "233" + String(r.payee_msisdn).slice(1) },
+      payee: { partyIdType: "MSISDN", partyId: toIntl(String(r.payee_msisdn)) },
       payerMessage: r.payer_message ?? undefined,
       payeeNote: r.payee_note ?? undefined,
       status: r.status,
@@ -139,7 +147,7 @@ export const GET = handle(async (req: Request, ctx: Ctx) => {
     };
   }
   if (/^(collection|disbursement)\/v1_0\/account\/balance$/.test(path)) {
-    return { availableBalance: cedis(getWallet(w, SHOP[telco])!.balance), currency: "GHS" };
+    return { availableBalance: cedis(merchant(w, req, telco).balance), currency: "GHS" };
   }
   if ((m = path.match(/^(collection|disbursement)\/v1_0\/accountholder\/msisdn\/(\d+)\/(active|basicuserinfo)$/))) {
     const wallet = walletByMsisdn(w, normalizeMsisdn(m[2]));

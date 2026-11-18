@@ -1,6 +1,4 @@
 import type { DB } from "./db";
-import { getMeta, setMeta } from "./db";
-import { Rng } from "./util";
 
 export interface UssdSession {
   id: string;
@@ -8,64 +6,44 @@ export interface UssdSession {
   telco: string;
   node: string;
   vars: Record<string, string>;
-  startedAt: number; // real ms
-  lastAt: number; // real ms
-  pending?: { kind: "warning" | "otp" | "approvals"; data?: unknown };
+  startedAt: number;
+  lastAt: number;
+  pending?: { kind: string; data?: unknown };
 }
 
-/** A team's isolated copy of the money system, open in this process. */
+/** A team's isolated copy of the country's systems, open in this process. */
 export interface World {
   id: string;
   db: DB;
-  rng: Rng;
-  now: number; // simulated epoch ms
+  /** Current time. The world runs on the real clock. */
+  readonly now: number;
   ussd: Map<string, UssdSession>;
-  otps: Map<string, string>; // msisdn -> pending one-time code
+  /** One-time codes waiting to be entered, by purpose. */
+  otps: Map<string, string>;
   lock: Promise<unknown>;
-  cache?: PopulationCache;
-}
-
-export interface PopulationCache {
-  customers: string[]; // wallet ids of ordinary customers (bots may send from these)
-  personas: string[]; // wallet ids played by participants
-  agents: string[];
-  agentsByTelco: Record<string, string[]>;
-  colludingAgents: string[];
-  merchants: string[];
-  fakeMerchants: string[];
-  fraudsters: string[];
-  mules: string[];
-  minimumMules: string[];
-  bankAccounts: { id: string; wallet: string }[];
-  payroll: string[]; // bank accounts that pay salaries
 }
 
 export function makeWorld(id: string, db: DB): World {
   return {
     id,
     db,
-    rng: new Rng((Date.now() ^ hash(id)) >>> 0),
-    now: Number(getMeta(db, "sim_now")),
+    get now() {
+      return Date.now();
+    },
     ussd: new Map(),
     otps: new Map(),
     lock: Promise.resolve(),
   };
 }
 
-/** Serialises all work on one world so ticks, USSD and API calls never interleave. */
+/** Serialises all work on one world so requests never interleave. */
 export function withLock<T>(w: World, fn: () => Promise<T> | T): Promise<T> {
   const run = w.lock.then(fn, fn);
   w.lock = run.catch(() => undefined);
   return run;
 }
 
-export function advanceClock(w: World, to: number) {
-  w.now = to;
-  setMeta(w.db, "sim_now", to);
-}
-
-function hash(s: string) {
-  let h = 2166136261;
-  for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
-  return h;
+/** Records what an institution did, for the activity log. */
+export function audit(w: World, system: string, action: string, summary: string) {
+  w.db.prepare("INSERT INTO audit(at, system, action, summary) VALUES(?,?,?,?)").run(w.now, system, action, summary);
 }

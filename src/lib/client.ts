@@ -21,12 +21,14 @@ export class ApiError extends Error {
   }
 }
 
-export const ghs = (n: number) => `GH₵${n.toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-export const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
+export const ghs = (n: number) => `${n < 0 ? "−" : ""}GH₵${Math.abs(n).toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export function simClock(iso: string, withDay = true) {
+export function when(iso: string | null | undefined, withDay = true) {
+  if (!iso) return "";
   const d = new Date(iso);
-  const day = d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  const day = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
   const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
   return withDay ? `${day} ${time}` : time;
 }
+
+export const teamName = (team: string) => (team === "organiser" ? "Organiser world" : team.replace("team-", "Team "));

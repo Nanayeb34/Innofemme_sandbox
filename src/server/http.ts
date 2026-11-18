@@ -2,7 +2,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { ConfigError } from "@/engine/config/store";
-import { getWorld, registry, startTicker, teamById, ORGANISER_WORLD } from "@/engine/worlds";
+import { getWorld, registry, teamById, ORGANISER_WORLD } from "@/engine/worlds";
+import { SimError } from "@/engine/util";
 import type { World } from "@/engine/world";
 
 export const teamCookie = (team: string) => `momo_${team}`;
@@ -35,7 +36,6 @@ export async function isOrganiser(req?: Request): Promise<boolean> {
 
 /** Resolves the team world a request may act on: team key (header or cookie) or organiser access. */
 export async function authWorld(req: Request, team: string): Promise<World> {
-  startTicker();
   if (team === ORGANISER_WORLD) {
     if (!(await isOrganiser(req))) throw new HttpError(401, "Organiser access required");
     return getWorld(team);
@@ -54,6 +54,7 @@ export function handle<C>(fn: (req: Request, ctx: C) => Promise<unknown>) {
       const out = await fn(req, ctx);
       return out instanceof Response ? out : NextResponse.json(out);
     } catch (e) {
+      if (e instanceof SimError) return NextResponse.json({ error: e.message }, { status: e.status });
       if (e instanceof HttpError) return NextResponse.json({ error: e.message }, { status: e.status });
       if (e instanceof ConfigError) return NextResponse.json({ error: "Invalid configuration", details: e.errors }, { status: 422 });
       console.error(e);

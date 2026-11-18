@@ -13,8 +13,6 @@
     "sandbox:smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.111",
-    "ai": "^7.0.165",
     "next": "16.4.6",
     "qrcode": "^1.5.4",
     "react": "19.3.0",

@@ -1,387 +1,307 @@
-import { tx } from "./db";
 import { getConfig } from "./config/store";
-import type { CheckAction, FeeKind, Rules } from "./config/schemas";
-import { computeFacts, evaluate, type Facts } from "./facts";
-import { cedis, clock, notify, sendSms } from "./notify";
-import type { World } from "./world";
-import { DAY, newId, TELCO_INFO, type Telco } from "./util";
+import type { FeeKind } from "./config/schemas";
+import { tx } from "./db";
+import { accountByNumber, checkPin, feeFor, getAccount, getTxn, getWallet, insertTxn, post, walletByMsisdn, type AccountRow, type TxnRow, type WalletRow } from "./ledger";
+import { notify } from "./notify";
+import { commit, positionEntries, route } from "./switch";
+import { DAY, HOUR, SimError, TELCO_INFO, bankName, cedis, newId, type Telco } from "./util";
+import { audit, type World } from "./world";
 
-export type TxnType = "p2p" | "merchant" | "cashout" | "cashin" | "to_bank" | "from_bank" | "rtp";
+/** Every way money moves: wallet payments, agent cash-in and cash-out, bank transfers and teller cash. */
+
+export interface Receipt {
+  txnId: string;
+  fee: number;
+  commission: number;
+  message: string;
+}
+
+const shortId = (id: string) => id.slice(3, 13).toUpperCase();
+
+/** Records a refused payment so the institution can see it, then reports why. */
+function refuse(w: World, t: Partial<TxnRow> & Pick<TxnRow, "type" | "channel" | "rail" | "amount">, reason: string, id = newId("tx")): never {
+  insertTxn(w, { ...t, id, status: "failed", reason });
+  throw new SimError(reason);
+}
+
+function simOf(w: World, msisdn: string) {
+  return w.db.prepare("SELECT status, last_swap_at FROM sims WHERE msisdn = ?").get(msisdn) as { status: string; last_swap_at: number | null } | undefined;
+}
+
+/** Bank of Ghana KYC tier limits. Agent and merchant wallets are business wallets and are not capped here. */
+function checkSendLimits(w: World, from: WalletRow, amount: number): string | undefined {
+  if (from.owner_type !== "person") return;
+  const tier = getConfig(w.db, "bog").kycTiers[from.kyc_tier];
+  const d = new Date(w.now);
+  const dayStart = w.now - (w.now % DAY);
+  const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  const outSince = (since: number) =>
+    Number((w.db.prepare("SELECT COALESCE(SUM(amount),0) AS n FROM txns WHERE from_wallet = ? AND created_at >= ? AND status = 'success' AND type != 'reversal'").get(from.id, since) as { n: number }).n);
+  if (outSince(dayStart) + amount > tier.daily * 100) return `Exceeds your daily limit of GHS ${tier.daily} (${from.kyc_tier} KYC)`;
+  if (tier.monthly !== null && outSince(monthStart) + amount > tier.monthly * 100) return `Exceeds your monthly limit of GHS ${tier.monthly} (${from.kyc_tier} KYC)`;
+}
+
+function checkReceiveLimit(w: World, to: WalletRow, amount: number): string | undefined {
+  if (to.owner_type !== "person") return;
+  const tier = getConfig(w.db, "bog").kycTiers[to.kyc_tier];
+  if (to.balance + amount > tier.maxBalance * 100) return `Recipient wallet would exceed its balance limit of GHS ${tier.maxBalance} (${to.kyc_tier} KYC)`;
+}
+
+function senderProblem(w: World, from: WalletRow): string | undefined {
+  if (from.status === "frozen") return "Wallet is frozen. Contact customer care.";
+  if (from.status === "locked") return "Wallet is locked after too many wrong PINs. Visit a service centre to reset your PIN.";
+  const sim = simOf(w, from.msisdn);
+  if (!sim || sim.status !== "active") return "This SIM is not active";
+  const hold = getConfig(w.db, `telco.${from.telco}`).simSwapMomoHoldHours;
+  if (hold && sim.last_swap_at && w.now - sim.last_swap_at < hold * HOUR) return `This number had a SIM replacement recently. Sending money is paused for ${hold} hours after a SIM swap.`;
+}
+
+export function quoteWalletFee(w: World, from: WalletRow, kind: FeeKind, amount: number) {
+  return feeFor(getConfig(w.db, `telco.${from.telco}`).fees[kind], amount);
+}
+
+export interface WalletPayment {
+  type: "p2p" | "merchant" | "cashin" | "cashout" | "float";
+  channel: "ussd" | "agent" | "api" | "console";
+  from: string; // wallet id
+  to: string; // wallet id
+  amount: number; // pesewas
+  pin?: string; // checked when given
+  reference?: string;
+}
+
+/** A payment from one wallet to another: person to person, to a merchant, or between a customer and an agent. */
+export function walletPay(w: World, req: WalletPayment): Receipt {
+  const from = getWallet(w, req.from);
+  const to = getWallet(w, req.to);
+  if (!from) throw new SimError("Sender wallet not found");
+  if (!to) throw new SimError("Recipient is not registered for mobile money");
+  if (!Number.isInteger(req.amount) || req.amount <= 0) throw new SimError("Invalid amount");
+  const cfg = getConfig(w.db, `telco.${from.telco}`);
+  if (req.pin !== undefined) checkPin(w, from, req.pin, cfg.pinAttemptsBeforeLock);
+
+  const cross = from.telco !== to.telco;
+  const id = newId("tx");
+  const base = { type: req.type, channel: req.channel, from_wallet: from.id, to_wallet: to.id, from_party: from.telco, to_party: to.telco, rail: cross ? "switch" : "onnet", amount: req.amount, reference: req.reference ?? null };
+  const no = (why: string) => refuse(w, base, why, id);
+
+  if (from.id === to.id) no("You cannot send to yourself");
+  const problem = senderProblem(w, from);
+  if (problem) no(problem);
+  if (to.status === "frozen") no("Recipient wallet cannot receive payments");
+
+  let agent: { wallet_id: string; cash: number; status: string; name: string } | undefined;
+  if (req.type === "cashin" || req.type === "cashout") {
+    const agentWallet = req.type === "cashin" ? from : to;
+    agent = w.db.prepare("SELECT wallet_id, cash, status, name FROM momo_agents WHERE wallet_id = ?").get(agentWallet.id) as typeof agent;
+    if (!agent) no("Not a registered mobile money agent");
+    if (agent!.status !== "active") no("This agent is suspended");
+    if (cross) no(`This agent serves ${TELCO_INFO[agentWallet.telco].wallet} customers only`);
+    if (req.type === "cashout" && agent!.cash < req.amount) no("The agent does not have enough cash in the till");
+  }
+  if (req.type === "merchant" && to.owner_type !== "merchant") no("Not a registered merchant");
+  if (req.type === "float") {
+    // Agents rebalance by moving float between their agent lines.
+    if (from.owner_type !== "agent" || to.owner_type !== "agent") no("Float can only move between mobile money agents");
+    if (cross) no("Float can only move between agents on the same network");
+  }
+
+  const kind: FeeKind | undefined = req.type === "p2p" ? (cross ? "p2p_offnet" : "p2p_onnet") : req.type === "merchant" ? "merchant" : req.type === "cashout" ? "cashout" : undefined;
+  const fee = kind ? feeFor(cfg.fees[kind], req.amount) : 0;
+  const limit = checkSendLimits(w, from, req.amount) ?? checkReceiveLimit(w, to, req.amount);
+  if (limit) no(limit);
+  if (from.balance < req.amount + fee) no(req.type === "cashin" ? "Agent has insufficient float" : "Insufficient balance");
+
+  if (cross) {
+    try {
+      route(w, id, from.telco, to.telco, req.amount, to.msisdn);
+    } catch (e) {
+      no((e as Error).message);
+    }
+  }
+
+  const commission = req.type === "cashin" ? feeFor(cfg.agentCommission.cashin, req.amount) : req.type === "cashout" ? feeFor(cfg.agentCommission.cashout, req.amount) : 0;
+
+  tx(w.db, () => {
+    insertTxn(w, { ...base, id, fee, commission, status: "success" });
+    const entries: [string, number][] = [[`w:${from.id}`, -(req.amount + fee)], [`fee:${from.telco}`, fee], [`w:${to.id}`, req.amount]];
+    if (cross) entries.push(...positionEntries(from.telco, to.telco, req.amount));
+    if (commission) entries.push([`fee:${from.telco}`, -commission], [`w:${agent!.wallet_id}`, commission]);
+    post(w, id, entries);
+    if (cross) commit(w, id, from.telco, to.telco, req.amount);
+    if (req.type === "cashin") w.db.prepare("UPDATE momo_agents SET cash = cash + ?, commission = commission + ? WHERE wallet_id = ?").run(req.amount, commission, agent!.wallet_id);
+    if (req.type === "cashout") w.db.prepare("UPDATE momo_agents SET cash = cash - ?, commission = commission + ? WHERE wallet_id = ?").run(req.amount, commission, agent!.wallet_id);
+
+    const f = getWallet(w, from.id)!;
+    const t = getWallet(w, to.id)!;
+    const common = { amount: cedis(req.amount), fee: cedis(fee), commission: cedis(commission), reference: req.reference ?? "", txn_id: shortId(id) };
+    const toSender = { ...common, counterparty: t.msisdn, counterparty_name: t.display_name, balance: cedis(f.balance) };
+    const toRecipient = { ...common, counterparty: f.msisdn, counterparty_name: f.display_name, balance: cedis(t.balance) };
+    if (req.type === "cashin") {
+      notify(w, f.telco, "agent_cashin", f.msisdn, toSender);
+      notify(w, t.telco, "cashin", t.msisdn, toRecipient);
+    } else if (req.type === "cashout") {
+      notify(w, f.telco, "cashout", f.msisdn, toSender);
+      notify(w, t.telco, "agent_cashout", t.msisdn, toRecipient);
+    } else {
+      notify(w, f.telco, req.type === "merchant" ? "merchant_payment" : "transfer_sent", f.msisdn, toSender);
+      notify(w, t.telco, "transfer_received", t.msisdn, toRecipient);
+    }
+  });
+
+  const verb = req.type === "cashin" ? "deposited to" : req.type === "cashout" ? "cashed out at" : req.type === "merchant" ? "paid to" : req.type === "float" ? "float moved to" : "sent to";
+  return { txnId: id, fee, commission, message: `GHS ${cedis(req.amount)} ${verb} ${to.display_name}. Fee GHS ${cedis(fee)}. Trans ID ${shortId(id)}.` };
+}
+
+/** Wallet to bank account, through the national switch. */
+export function walletToBank(w: World, req: { from: string; accountNo: string; amount: number; pin?: string; reference?: string; channel: "ussd" | "api" | "console" }): Receipt {
+  const from = getWallet(w, req.from);
+  if (!from) throw new SimError("Sender wallet not found");
+  const acct = accountByNumber(w, req.accountNo);
+  if (!acct || acct.kind !== "personal") throw new SimError("Bank account not found");
+  if (!Number.isInteger(req.amount) || req.amount <= 0) throw new SimError("Invalid amount");
+  const cfg = getConfig(w.db, `telco.${from.telco}`);
+  if (req.pin !== undefined) checkPin(w, from, req.pin, cfg.pinAttemptsBeforeLock);
+
+  const id = newId("tx");
+  const base = { type: "wallet_to_bank", channel: req.channel, from_wallet: from.id, to_account: acct.id, from_party: from.telco, to_party: acct.bank, rail: "switch", amount: req.amount, reference: req.reference ?? null };
+  const no = (why: string) => refuse(w, base, why, id);
+  const problem = senderProblem(w, from);
+  if (problem) no(problem);
+  if (acct.status !== "active") no("The bank account cannot receive payments");
+  const fee = feeFor(cfg.fees.to_bank, req.amount);
+  const limit = checkSendLimits(w, from, req.amount);
+  if (limit) no(limit);
+  if (from.balance < req.amount + fee) no("Insufficient balance");
+  try {
+    route(w, id, from.telco, acct.bank, req.amount, `account ${acct.account_no}`);
+  } catch (e) {
+    no((e as Error).message);
+  }
+
+  tx(w.db, () => {
+    insertTxn(w, { ...base, id, fee, status: "success" });
+    post(w, id, [[`w:${from.id}`, -(req.amount + fee)], [`fee:${from.telco}`, fee], ...positionEntries(from.telco, acct.bank, req.amount), [`bank:${acct.id}`, req.amount]]);
+    commit(w, id, from.telco, acct.bank, req.amount);
+    notify(w, from.telco, "transfer_sent", from.msisdn, { amount: cedis(req.amount), fee: cedis(fee), counterparty: bankName(acct.bank), counterparty_name: acct.name, balance: cedis(getWallet(w, from.id)!.balance), reference: req.reference ?? "", txn_id: shortId(id) });
+  });
+  return { txnId: id, fee, commission: 0, message: `GHS ${cedis(req.amount)} sent to ${acct.name} (${bankName(acct.bank)}). Fee GHS ${cedis(fee)}. Trans ID ${shortId(id)}.` };
+}
+
+function bankSource(w: World, bank: string, accountId: string | undefined): AccountRow | undefined {
+  if (!accountId) return undefined; // cash over the counter
+  const a = getAccount(w, accountId);
+  if (!a || a.bank !== bank) throw new SimError("Source account not found at this bank");
+  if (a.kind !== "personal") throw new SimError("Trust accounts cannot be used at the counter");
+  if (a.status !== "active") throw new SimError("Source account is frozen");
+  return a;
+}
 
 /**
- * Who is actually pressing the buttons:
- * - owner: the wallet holder acting for themselves
- * - victim: the wallet holder, manipulated by a scammer
- * - impostor: someone else in control of the wallet (stolen PIN, SIM swap)
+ * Bank to wallet, through the national switch. Paid from an account, or in cash over the counter.
+ * This is also how an agent buys float: the bank pushes money to the agent's wallet.
  */
-export type Actor = "owner" | "victim" | "impostor";
-
-export interface TransferRequest {
-  type: TxnType;
-  channel: "ussd" | "app" | "api" | "system";
-  initiatedBy: "human" | "bot" | "api";
-  from?: string;
-  to?: string;
-  bankAccount?: string;
-  amount: number; // pesewas
-  reference?: string;
-  pin?: string;
-  actor?: Actor;
-  newDevice?: boolean;
-  scenario?: string;
-  isFraud?: boolean;
-  laundering?: boolean; // moving proceeds between mules, not a victim payment
-  warned?: boolean; // already shown a menu warning screen
-  acknowledgedWarning?: boolean;
-  otp?: string;
-  otpShareChance?: number; // impostor only: chance the victim reads out the code
-  skipChecks?: boolean;
-}
-
-export type TransferStatus = "success" | "failed" | "blocked" | "held" | "abandoned" | "needs_warning_ack" | "needs_otp";
-
-export interface TransferResult {
-  status: TransferStatus;
-  txnId?: string;
-  message: string;
-  fee: number;
-  warning?: string;
-}
-
-export interface WalletRow {
-  id: string;
-  msisdn: string;
-  telco: Telco;
-  person_id: string | null;
-  owner_type: string;
-  display_name: string;
-  kyc_tier: "minimum" | "medium" | "enhanced";
-  pin: string;
-  status: string;
-  balance: number;
-  created_at: number;
-}
-
-export const getWallet = (w: World, id: string) => w.db.prepare("SELECT * FROM wallets WHERE id = ?").get(id) as WalletRow | undefined;
-export const walletByMsisdn = (w: World, msisdn: string) => w.db.prepare("SELECT * FROM wallets WHERE msisdn = ?").get(msisdn) as WalletRow | undefined;
-
-export function feeFor(rules: Rules, telco: Telco, kind: FeeKind, amount: number): number {
-  const cedis = amount / 100;
-  const bands = rules.fees[telco][kind].bands;
-  const band = bands.find((b) => b.upTo === null || cedis <= b.upTo) ?? bands[bands.length - 1];
-  const fee = band.flat * 100 + (amount * band.pct) / 100;
-  return Math.round(band.max === undefined ? fee : Math.min(fee, band.max * 100));
-}
-
-function feeKind(type: TxnType, crossNetwork: boolean): FeeKind | undefined {
-  if (type === "p2p") return crossNetwork ? "p2p_offnet" : "p2p_onnet";
-  if (type === "merchant" || type === "rtp") return "merchant";
-  if (type === "cashout") return "cashout";
-  if (type === "to_bank") return "to_bank";
-  return undefined;
-}
-
-export function quoteFee(w: World, type: TxnType, from: WalletRow, to: WalletRow | undefined, amount: number) {
-  const kind = feeKind(type, !!to && to.telco !== from.telco);
-  return kind ? feeFor(getConfig(w.db, "rules"), from.telco, kind, amount) : 0;
-}
-
-const PRECEDENCE: CheckAction[] = ["block", "hold", "require_second_factor", "warn", "flag"];
-
-interface Hit {
-  id: string;
-  name: string;
-  action: CheckAction;
-  holdMinutes?: number;
-  message?: string;
-}
-
-async function runChecks(w: World, req: TransferRequest, facts: Facts): Promise<Hit[]> {
-  const cfg = getConfig(w.db, "fraudChecks");
-  const hits: Hit[] = cfg.checks
-    .filter((c) => c.enabled && (c.appliesTo as string[]).includes(req.type) && evaluate(c.when, facts))
-    .map((c) => ({ id: c.id, name: c.name, action: c.action, holdMinutes: c.holdMinutes, message: c.message }));
-
-  if (cfg.webhook.enabled && cfg.webhook.url) {
-    try {
-      const res = await fetch(cfg.webhook.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ world: w.id, at: new Date(w.now).toISOString(), transaction: { type: req.type, channel: req.channel, from: req.from, to: req.to, amount: req.amount / 100 }, facts }),
-        signal: AbortSignal.timeout(cfg.webhook.timeoutMs),
-      });
-      const body = (await res.json()) as { action?: string; reason?: string; holdMinutes?: number };
-      if (body.action && (PRECEDENCE as string[]).includes(body.action)) {
-        hits.push({ id: "webhook", name: body.reason ?? "Team model", action: body.action as CheckAction, holdMinutes: body.holdMinutes });
-      }
-    } catch {
-      if (!cfg.webhook.failOpen) hits.push({ id: "webhook", name: "Team model unavailable (fail closed)", action: "block" });
-    }
-  }
-  return hits;
-}
-
-/** Writes balanced ledger postings and applies them to wallet and bank balances. */
-function post(w: World, txnId: string, entries: [string, number][]) {
-  const sum = entries.reduce((s, [, a]) => s + a, 0);
-  if (sum !== 0) throw new Error(`unbalanced postings for ${txnId}: ${sum}`);
-  const ins = w.db.prepare("INSERT INTO postings(txn_id, account, amount, at) VALUES(?,?,?,?)");
-  const updW = w.db.prepare("UPDATE wallets SET balance = balance + ? WHERE id = ?");
-  const updB = w.db.prepare("UPDATE bank_accounts SET balance = balance + ? WHERE id = ?");
-  for (const [account, amount] of entries) {
-    if (amount === 0) continue;
-    ins.run(txnId, account, amount, w.now);
-    if (account.startsWith("w:")) updW.run(amount, account.slice(2));
-    else if (account.startsWith("bank:")) updB.run(amount, account.slice(5));
-  }
-}
-
-function switchLog(w: World, txnId: string, step: string, from: string | null, to: string | null, detail: string) {
-  w.db.prepare("INSERT INTO switch_log(txn_id, step, from_telco, to_telco, detail, at) VALUES(?,?,?,?,?,?)").run(txnId, step, from, to, detail, w.now);
-}
-
-interface TxnRow {
-  id: string;
-  type: string;
-  from_wallet: string | null;
-  to_wallet: string | null;
-  bank_account: string | null;
-  from_telco: string | null;
-  to_telco: string | null;
-  rail: string;
-  amount: number;
-  fee: number;
-  reference: string | null;
-}
-
-/** Moves money for a txn whose funds are either in the sender's wallet or in the telco hold account. */
-function settle(w: World, t: TxnRow, fromHold: boolean) {
-  const source = fromHold ? `hold:${t.from_telco}` : `w:${t.from_wallet}`;
-  const entries: [string, number][] = [];
-  if (t.type === "from_bank") {
-    entries.push([`bank:${t.bank_account}`, -t.amount], [`w:${t.to_wallet}`, t.amount]);
-  } else if (t.type === "cashin") {
-    entries.push([`w:${t.from_wallet}`, -t.amount], [`w:${t.to_wallet}`, t.amount]);
-  } else {
-    entries.push([source, -(t.amount + t.fee)]);
-    if (t.fee) entries.push([`fee:${t.from_telco}`, t.fee]);
-    if (t.rail === "bank") entries.push([`bank:${t.bank_account}`, t.amount]);
-    else if (t.rail === "switch") entries.push([`switch:${t.from_telco}`, t.amount], [`switch:${t.to_telco}`, -t.amount], [`w:${t.to_wallet}`, t.amount]);
-    else entries.push([`w:${t.to_wallet}`, t.amount]);
-  }
-  post(w, t.id, entries);
-  if (t.rail === "switch" || t.rail === "bank") switchLog(w, t.id, "commit", t.from_telco, t.to_telco, `settled ${cedis(t.amount)}`);
-  if (t.type === "cashout") w.db.prepare("UPDATE agents SET cash = cash - ? WHERE wallet_id = ?").run(t.amount, t.to_wallet);
-  if (t.type === "cashin") w.db.prepare("UPDATE agents SET cash = cash + ? WHERE wallet_id = ?").run(t.amount, t.from_wallet);
-}
-
-function sentNotifications(w: World, t: TxnRow) {
-  const from = t.from_wallet ? getWallet(w, t.from_wallet) : undefined;
-  const to = t.to_wallet ? getWallet(w, t.to_wallet) : undefined;
-  const bank = t.bank_account ? (w.db.prepare("SELECT name, bank FROM bank_accounts WHERE id = ?").get(t.bank_account) as { name: string; bank: string }) : undefined;
-  const base = { amount: cedis(t.amount), fee: cedis(t.fee), reference: t.reference ?? "", txn_id: t.id.slice(3, 13).toUpperCase(), time: clock(w.now) };
-  if (from && t.type !== "cashin") {
-    const event = t.type === "cashout" ? "cashout" : t.type === "merchant" || t.type === "rtp" ? "merchant_payment" : "transfer_sent";
-    notify(w, event, from.msisdn, { ...base, counterparty: to?.msisdn ?? bank?.bank ?? "", counterparty_name: to?.display_name ?? bank?.name ?? "", balance: cedis(from.balance) });
-  }
-  if (to && t.type !== "cashout") {
-    const vars = { ...base, counterparty: from?.msisdn ?? bank?.bank ?? "", counterparty_name: from?.display_name ?? bank?.name ?? "", balance: cedis(to.balance) };
-    notify(w, "transfer_received", to.msisdn, vars);
-    if (t.amount >= 100_000) notify(w, "large_inbound", to.msisdn, vars);
-  }
-}
-
-export async function transfer(w: World, req: TransferRequest): Promise<TransferResult> {
-  const db = w.db;
-  const rules = getConfig(db, "rules");
-  const from = req.from ? getWallet(w, req.from) : undefined;
-  const to = req.to ? getWallet(w, req.to) : undefined;
-  const bank = req.bankAccount ? (db.prepare("SELECT * FROM bank_accounts WHERE id = ?").get(req.bankAccount) as { id: string; name: string; bank: string } | undefined) : undefined;
-  const fail = (message: string): TransferResult => ({ status: "failed", message, fee: 0 });
-
-  if (!Number.isInteger(req.amount) || req.amount <= 0) return fail("Invalid amount");
-  if (req.type !== "from_bank" && !from) return fail("Sender wallet not found");
-  if (["p2p", "merchant", "cashout", "cashin", "rtp", "from_bank"].includes(req.type) && !to) return fail("Recipient is not registered for mobile money");
-  if ((req.type === "to_bank" || req.type === "from_bank") && !bank) return fail("Bank account not found");
-  if (from && from.status !== "active") return fail(`Wallet is ${from.status}. Contact customer care.`);
-  if (to && to.status === "blacklisted") return fail("Recipient wallet cannot receive payments");
-  if (from && to && from.id === to.id) return fail("You cannot send to yourself");
-  if (req.pin !== undefined && from && req.pin !== from.pin) return fail("Wrong PIN");
-
-  const crossNetwork = !!from && !!to && from.telco !== to.telco;
-  const rail = req.type === "to_bank" || req.type === "from_bank" ? "bank" : crossNetwork ? "switch" : "onnet";
-  const fee = from ? quoteFee(w, req.type, from, to, req.amount) : 0;
-
-  // Bank of Ghana KYC tier limits.
-  if (from && !req.skipChecks) {
-    const tier = rules.kycTiers[from.kyc_tier];
-    const dayStart = w.now - (w.now % DAY);
-    const monthStart = Date.UTC(new Date(w.now).getUTCFullYear(), new Date(w.now).getUTCMonth(), 1);
-    const outSince = (since: number) =>
-      Number((db.prepare("SELECT COALESCE(SUM(amount),0) AS n FROM txns WHERE from_wallet = ? AND created_at >= ? AND status IN ('success','held')").get(from.id, since) as { n: number }).n);
-    if (outSince(dayStart) + req.amount > tier.daily * 100) return fail(`Exceeds your daily limit of GHS ${tier.daily}`);
-    if (tier.monthly !== null && outSince(monthStart) + req.amount > tier.monthly * 100) return fail(`Exceeds your monthly limit of GHS ${tier.monthly}`);
-  }
-  if (to && req.type !== "cashin") {
-    const tier = rules.kycTiers[to.kyc_tier];
-    if (to.balance + req.amount > tier.maxBalance * 100) return fail("Recipient wallet limit reached");
-  }
-  if (from && req.type !== "cashin" && from.balance < req.amount + fee) return fail("Insufficient balance");
-  if (req.type === "cashin" && from && from.balance < req.amount) return fail("Agent has insufficient float");
-  if (req.type === "cashout" && to) {
-    const agent = db.prepare("SELECT cash FROM agents WHERE wallet_id = ?").get(to.id) as { cash: number } | undefined;
-    if (!agent) return fail("Not a registered agent");
-    if (agent.cash < req.amount) return fail("Agent does not have enough cash");
+export function bankToWallet(w: World, req: { bank: string; fromAccount?: string; msisdn: string; amount: number; reference?: string }): Receipt {
+  const src = bankSource(w, req.bank, req.fromAccount);
+  const to = walletByMsisdn(w, req.msisdn);
+  if (!to) throw new SimError("That number is not registered for mobile money");
+  const id = newId("tx");
+  const base = { type: "bank_to_wallet", channel: "branch", from_account: src?.id ?? null, to_wallet: to.id, from_party: req.bank, to_party: to.telco, rail: "switch", amount: req.amount, reference: req.reference ?? null };
+  const no = (why: string) => refuse(w, base, why, id);
+  if (to.status === "frozen") no("Recipient wallet cannot receive payments");
+  const fee = src ? feeFor(getConfig(w.db, `bank.${req.bank}`).fees.toWallet, req.amount) : 0;
+  if (src && src.balance < req.amount + fee) no("Insufficient funds in the account");
+  const limit = checkReceiveLimit(w, to, req.amount);
+  if (limit) no(limit);
+  try {
+    route(w, id, req.bank, to.telco, req.amount, to.msisdn);
+  } catch (e) {
+    no((e as Error).message);
   }
 
-  const txnId = newId("tx");
-  if (rail !== "onnet") {
-    switchLog(w, txnId, "lookup", from?.telco ?? null, to?.telco ?? (bank ? "bank" : null), to ? `${to.msisdn} → ${TELCO_INFO[to.telco].name}` : `${bank!.bank}`);
-    switchLog(w, txnId, "quote", from?.telco ?? null, to?.telco ?? "bank", `amount ${cedis(req.amount)} fee ${cedis(fee)}`);
-  }
-
-  // Fraud checks.
-  let hits: Hit[] = [];
-  let facts: Facts | undefined;
-  if (from && !req.skipChecks && req.type !== "cashin") {
-    facts = computeFacts(w, {
-      type: req.type,
-      channel: req.channel,
-      fromWallet: from.id,
-      toWallet: to?.id,
-      recipientType: to?.owner_type ?? "bank",
-      amount: req.amount,
-      crossNetwork,
-      newDevice: req.newDevice,
-    });
-    hits = await runChecks(w, req, facts);
-  }
-  const top = PRECEDENCE.find((a) => hits.some((h) => h.action === a));
-  const topHit = top ? hits.find((h) => h.action === top) : undefined;
-  const actor = req.actor ?? "owner";
-  let warned = req.warned || req.acknowledgedWarning ? 1 : 0;
-  let secondFactor = 0;
-  let status: "success" | "blocked" | "held" | "abandoned" | "failed" = "success";
-  let reason: string | undefined;
-  let releaseAt: number | null = null;
-
-  if (top === "block") {
-    status = "blocked";
-    reason = topHit!.name;
-  } else if (top === "require_second_factor") {
-    secondFactor = 1;
-    if (req.initiatedBy === "human") {
-      if (!req.otp) {
-        const code = String(w.rng.int(100000, 999999));
-        w.otps.set(from!.msisdn, code);
-        sendSms(w, from!.msisdn, "MoMoSecure", `Your verification code is ${code}. Never share this code with anyone, including staff.`);
-        return { status: "needs_otp", message: "Enter the code sent to you by SMS", fee };
-      }
-      if (w.otps.get(from!.msisdn) !== req.otp) return fail("Wrong verification code");
-      w.otps.delete(from!.msisdn);
-    } else if (actor === "impostor") {
-      if (!w.rng.chance(req.otpShareChance ?? 0)) {
-        status = "blocked";
-        reason = `Second factor failed (${topHit!.name})`;
-      }
-    } else if (actor === "owner" && w.rng.chance(0.03)) {
-      status = "abandoned";
-      reason = "Gave up at second factor";
-    }
-  } else if (top === "warn") {
-    const message = topHit!.message ?? "WARNING: Scammers pretend to be MoMo staff or say they sent money by mistake. Do you know this person?";
-    if (req.initiatedBy === "human") {
-      if (!req.acknowledgedWarning) return { status: "needs_warning_ack", message, fee, warning: message };
-    } else if (actor !== "impostor") {
-      warned = 1;
-      if (w.rng.chance(actor === "victim" ? 0.55 : 0.04)) {
-        status = "abandoned";
-        reason = `Cancelled after warning (${topHit!.name})`;
-      }
-    }
-  }
-  if (status === "success" && top === "hold") {
-    status = "held";
-    reason = topHit!.name;
-    releaseAt = w.now + (topHit!.holdMinutes ?? 30) * 60_000;
-  }
-
-  const row: TxnRow = {
-    id: txnId,
-    type: req.type,
-    from_wallet: from?.id ?? null,
-    to_wallet: to?.id ?? null,
-    bank_account: bank?.id ?? null,
-    from_telco: from?.telco ?? null,
-    to_telco: to?.telco ?? (bank ? "bank" : null),
-    rail,
-    amount: req.amount,
-    fee: status === "success" || status === "held" ? fee : 0,
-    reference: req.reference ?? null,
-  };
-
-  tx(db, () => {
-    db.prepare(
-      `INSERT INTO txns(id, type, channel, initiated_by, from_wallet, to_wallet, bank_account, from_telco, to_telco, rail, amount, fee, status, reason, reference,
-        created_at, settled_at, release_at, warned, second_factor, checks, scenario, is_fraud) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(
-      row.id, row.type, req.channel, req.initiatedBy, row.from_wallet, row.to_wallet, row.bank_account, row.from_telco, row.to_telco, row.rail,
-      row.amount, row.fee, status, reason ?? null, row.reference, w.now, status === "success" ? w.now : null, releaseAt, warned, secondFactor,
-      hits.length ? JSON.stringify(hits.map((h) => ({ id: h.id, name: h.name, action: h.action }))) : null, req.scenario ?? null, req.isFraud ? (req.laundering ? 2 : 1) : 0,
-    );
-    if (status === "success") {
-      settle(w, row, false);
-      sentNotifications(w, row);
-    } else if (status === "held") {
-      post(w, row.id, [[`w:${row.from_wallet}`, -(row.amount + row.fee)], [`hold:${row.from_telco}`, row.amount + row.fee]]);
-      notify(w, "held", from!.msisdn, { amount: cedis(row.amount), counterparty: to?.msisdn ?? bank?.bank, release_time: clock(releaseAt!) });
-    } else if (status === "blocked") {
-      if (rail !== "onnet") switchLog(w, txnId, "reject", row.from_telco, row.to_telco, reason ?? "");
-      notify(w, "blocked", from!.msisdn, { amount: cedis(row.amount), counterparty: to?.msisdn ?? bank?.bank });
-    }
-    if (warned && from && status !== "abandoned") notify(w, "warned", from.msisdn, { amount: cedis(row.amount), counterparty: to?.msisdn ?? bank?.bank });
-  });
-
-  const messages: Record<string, string> = {
-    success: `Payment of GHS ${cedis(req.amount)} sent${to ? ` to ${to.display_name}` : ""}. Fee GHS ${cedis(row.fee)}.`,
-    held: `Your transfer is on hold until ${clock(releaseAt ?? 0)} for your safety.`,
-    blocked: `Transaction blocked for your safety.`,
-    abandoned: `Transaction cancelled.`,
-  };
-  return { status, txnId, message: messages[status] ?? reason ?? "", fee: row.fee };
-}
-
-/** Releases held funds whose cooling-off period has ended. */
-export function releaseHolds(w: World) {
-  const due = w.db.prepare("SELECT * FROM txns WHERE status = 'held' AND release_at <= ?").all(w.now) as unknown as TxnRow[];
-  for (const t of due) {
-    tx(w.db, () => {
-      const to = t.to_wallet ? getWallet(w, t.to_wallet) : undefined;
-      if (to && to.status !== "active") {
-        reverseHeld(w, t.id, "Recipient wallet no longer active");
-        return;
-      }
-      settle(w, t, true);
-      w.db.prepare("UPDATE txns SET status = 'success', settled_at = ? WHERE id = ?").run(w.now, t.id);
-      sentNotifications(w, t);
-    });
-  }
-}
-
-/** Returns held funds to the sender, e.g. when the victim reports the transfer during the hold. */
-export function reverseHeld(w: World, txnId: string, reason: string): boolean {
-  const t = w.db.prepare("SELECT * FROM txns WHERE id = ? AND status = 'held'").get(txnId) as TxnRow | undefined;
-  if (!t) return false;
   tx(w.db, () => {
-    post(w, t.id, [[`hold:${t.from_telco}`, -(t.amount + t.fee)], [`w:${t.from_wallet}`, t.amount + t.fee]]);
-    w.db.prepare("UPDATE txns SET status = 'reversed', reason = ?, settled_at = ? WHERE id = ?").run(reason, w.now, t.id);
+    insertTxn(w, { ...base, id, fee, status: "success" });
+    post(w, id, [
+      src ? [`bank:${src.id}`, -(req.amount + fee)] : [`vault:${req.bank}`, -req.amount],
+      [`fee:${req.bank}`, fee],
+      ...positionEntries(req.bank, to.telco, req.amount),
+      [`w:${to.id}`, req.amount],
+    ]);
+    commit(w, id, req.bank, to.telco, req.amount);
+    notify(w, to.telco, "transfer_received", to.msisdn, { amount: cedis(req.amount), counterparty: bankName(req.bank), counterparty_name: src?.name ?? "Cash deposit", balance: cedis(getWallet(w, to.id)!.balance), reference: req.reference ?? "", txn_id: shortId(id) });
+    audit(w, req.bank, "bank_to_wallet", `GHS ${cedis(req.amount)} ${src ? `from ${src.name}` : "in cash"} to ${to.display_name} (${to.msisdn})`);
   });
-  return true;
+  return { txnId: id, fee, commission: 0, message: `GHS ${cedis(req.amount)} sent to ${to.display_name} on ${TELCO_INFO[to.telco].wallet}. Fee GHS ${cedis(fee)}.` };
 }
 
-export function reportFraud(w: World, txnId: string, reporterMsisdn: string, category: string) {
-  w.db.prepare("INSERT INTO fraud_reports(txn_id, reporter_msisdn, category, at) VALUES(?,?,?,?)").run(txnId, reporterMsisdn, category, w.now);
-  const rules = getConfig(w.db, "rules");
-  if (rules.victimCanReverseHeldFunds) return reverseHeld(w, txnId, "Reported by sender during hold");
-  return false;
+/** Account to account. Within one bank it is a book transfer; between banks it goes through the switch. */
+export function bankTransfer(w: World, req: { bank: string; fromAccount: string; toAccountNo: string; amount: number; reference?: string }): Receipt {
+  const src = bankSource(w, req.bank, req.fromAccount)!;
+  if (!src) throw new SimError("Choose the account to pay from");
+  const dest = accountByNumber(w, req.toAccountNo);
+  if (!dest || dest.kind !== "personal") throw new SimError("Destination account not found");
+  if (dest.id === src.id) throw new SimError("Source and destination are the same account");
+  const interbank = dest.bank !== req.bank;
+  const id = newId("tx");
+  const base = { type: "bank_transfer", channel: "branch", from_account: src.id, to_account: dest.id, from_party: req.bank, to_party: dest.bank, rail: interbank ? "switch" : "internal", amount: req.amount, reference: req.reference ?? null };
+  const no = (why: string) => refuse(w, base, why, id);
+  if (dest.status !== "active") no("Destination account is frozen");
+  const fee = interbank ? feeFor(getConfig(w.db, `bank.${req.bank}`).fees.interbank, req.amount) : 0;
+  if (src.balance < req.amount + fee) no("Insufficient funds in the account");
+  if (interbank) {
+    try {
+      route(w, id, req.bank, dest.bank, req.amount, `account ${dest.account_no}`);
+    } catch (e) {
+      no((e as Error).message);
+    }
+  }
+  tx(w.db, () => {
+    insertTxn(w, { ...base, id, fee, status: "success" });
+    post(w, id, [[`bank:${src.id}`, -(req.amount + fee)], [`fee:${req.bank}`, fee], ...(interbank ? positionEntries(req.bank, dest.bank, req.amount) : []), [`bank:${dest.id}`, req.amount]]);
+    if (interbank) commit(w, id, req.bank, dest.bank, req.amount);
+    audit(w, req.bank, "transfer", `GHS ${cedis(req.amount)} from ${src.name} to ${dest.name} (${bankName(dest.bank)})`);
+  });
+  return { txnId: id, fee, commission: 0, message: `GHS ${cedis(req.amount)} sent to ${dest.name} at ${bankName(dest.bank)}. Fee GHS ${cedis(fee)}.` };
+}
+
+/** Cash over the counter: a deposit into, or withdrawal from, an account. */
+export function bankCash(w: World, req: { bank: string; account: string; amount: number; kind: "deposit" | "withdrawal" }): Receipt {
+  const a = bankSource(w, req.bank, req.account)!;
+  if (!a) throw new SimError("Choose an account");
+  const id = newId("tx");
+  const out = req.kind === "withdrawal";
+  if (out && a.balance < req.amount) refuse(w, { type: "withdrawal", channel: "branch", from_account: a.id, from_party: req.bank, rail: "cash", amount: req.amount }, "Insufficient funds in the account", id);
+  tx(w.db, () => {
+    insertTxn(w, { id, type: req.kind, channel: "branch", [out ? "from_account" : "to_account"]: a.id, [out ? "from_party" : "to_party"]: req.bank, rail: "cash", amount: req.amount, status: "success" });
+    post(w, id, out ? [[`bank:${a.id}`, -req.amount], [`vault:${req.bank}`, req.amount]] : [[`vault:${req.bank}`, -req.amount], [`bank:${a.id}`, req.amount]]);
+    audit(w, req.bank, req.kind, `Cash ${req.kind} of GHS ${cedis(req.amount)} on ${a.name} (${a.account_no})`);
+  });
+  return { txnId: id, fee: 0, commission: 0, message: `Cash ${req.kind} of GHS ${cedis(req.amount)} done. New balance GHS ${cedis(getAccount(w, a.id)!.balance)}.` };
+}
+
+/** A telco reverses one of its own wallet payments: every posting of the original is undone. */
+export function reverse(w: World, telco: Telco, txnId: string): Receipt {
+  const t = getTxn(w, txnId);
+  if (!t) throw new SimError("Transaction not found");
+  if (t.from_party !== telco) throw new SimError("Only the sending network can reverse this transaction");
+  if (t.status !== "success") throw new SimError(`Transaction is ${t.status}; it cannot be reversed`);
+  if (!["p2p", "merchant", "cashin", "cashout", "float"].includes(t.type)) throw new SimError("Only wallet-to-wallet payments can be reversed here. Bank transfers are disputed through the bank.");
+  const original = w.db.prepare("SELECT account, amount FROM postings WHERE txn_id = ?").all(t.id) as { account: string; amount: number }[];
+  for (const p of original) {
+    if (p.amount > 0 && p.account.startsWith("w:") && getWallet(w, p.account.slice(2))!.balance < p.amount) throw new SimError(`${getWallet(w, p.account.slice(2))!.display_name} no longer has enough balance to return the money`);
+  }
+  const id = newId("tx");
+  tx(w.db, () => {
+    insertTxn(w, { id, type: "reversal", channel: "console", from_wallet: t.to_wallet, to_wallet: t.from_wallet, from_party: t.to_party, to_party: t.from_party, rail: t.rail, amount: t.amount, fee: -t.fee, commission: -t.commission, status: "success", related: t.id, reference: `Reversal of ${shortId(t.id)}` });
+    post(w, id, original.map((p) => [p.account, -p.amount] as [string, number]));
+    w.db.prepare("UPDATE txns SET status = 'reversed' WHERE id = ?").run(t.id);
+    if (t.type === "cashin") w.db.prepare("UPDATE momo_agents SET cash = cash - ?, commission = commission - ? WHERE wallet_id = ?").run(t.amount, t.commission, t.from_wallet);
+    if (t.type === "cashout") w.db.prepare("UPDATE momo_agents SET cash = cash + ?, commission = commission - ? WHERE wallet_id = ?").run(t.amount, t.commission, t.to_wallet);
+    for (const wid of [t.from_wallet, t.to_wallet]) {
+      const wal = wid ? getWallet(w, wid) : undefined;
+      if (wal) notify(w, wal.telco, "reversal", wal.msisdn, { amount: cedis(t.amount), txn_id: shortId(t.id), balance: cedis(wal.balance) });
+    }
+    audit(w, telco, "reversal", `Reversed ${t.type} ${shortId(t.id)} of GHS ${cedis(t.amount)}`);
+  });
+  return { txnId: id, fee: 0, commission: 0, message: `Transaction ${shortId(t.id)} reversed.` };
 }

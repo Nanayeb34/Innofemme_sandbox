@@ -3,7 +3,8 @@ import { ussd } from "@/engine/ussd";
 import { withLock } from "@/engine/world";
 import { normalizeMsisdn } from "@/engine/util";
 
-export const POST = handle(async (req, ctx: RouteContext<"/api/w/[team]/ussd">) => {
+/** Drive a phone's USSD session: { msisdn, input, sessionId? } */
+export const POST = handle(async (req: Request, ctx: RouteContext<"/api/w/[team]/ussd">) => {
   const { team } = await ctx.params;
   const w = await authWorld(req, team);
   const b = await body<{ sessionId?: string; msisdn?: string; input?: string }>(req);
