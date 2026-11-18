@@ -200,7 +200,15 @@ describe("a country built from nothing", () => {
 
   it("wallet to bank, then settlement moves real money and every issuer stays fully backed", () => {
     const acct = openAccount(w, "ecobank", { card: ama.ghana_card, fingerprint: ama.fingerprint });
-    expect(dial(w, amaNo, "*170#", "1", "3", acct.account_no, "50", "1234").text).toMatch(/GHS 50.00 sent to Ama Owusu \(Ecobank Ghana\)/);
+    // To her own bank account it is free; to someone else's the wallet-to-bank fee applies.
+    expect(dial(w, amaNo, "*170#", "1", "3", acct.account_no, "50").text).toMatch(/Fee: GHS0.00/);
+    expect(dial(w, amaNo, "*170#", "1", "3", acct.account_no, "50", "1234").text).toMatch(/GHS 50.00 sent to Ama Owusu \(Ecobank Ghana\). Fee GHS 0.00/);
+    const yawNo = (w.db.prepare("SELECT account_no FROM bank_accounts WHERE id = ?").get(yawAccount) as { account_no: string }).account_no;
+    expect(dial(w, amaNo, "*170#", "1", "3", yawNo, "200").text).toMatch(/Fee: GHS1.50/);
+    expect(dial(w, amaNo, "*170#", "1", "3", yawNo, "200", "1234").text).toMatch(/GHS 200.00 sent to Yaw Asante \(GCB Bank\). Fee GHS 1.50/);
+    setConfig(w.db, "telco.mtn", { ...getConfig(w.db, "telco.mtn"), ownBankAccountFree: false }, "Charge own-account transfers", "api");
+    expect(dial(w, amaNo, "*170#", "1", "3", acct.account_no, "200").text).toMatch(/Fee: GHS1.50/);
+    setConfig(w.db, "telco.mtn", { ...getConfig(w.db, "telco.mtn"), ownBankAccountFree: true }, "Free again", "api");
     type Bog = { issuers: { telco: string; backed: boolean; trustBalance: number; eMoney: number; unsettled: number }[]; ledgerBalanced: boolean };
     let bog = view<Bog>(w, "bog");
     expect(bog.issuers.every((i) => i.backed)).toBe(true);

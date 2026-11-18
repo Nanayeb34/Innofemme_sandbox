@@ -4,7 +4,7 @@ import type { Condition, FactName, Menu, MenuNode } from "./config/schemas";
 import { accountByNumber, checkPin, feeFor, getWallet, walletByMsisdn, type WalletRow } from "./ledger";
 import { fullName, personById } from "./nia";
 import { render } from "./notify";
-import { walletPay, walletToBank } from "./payments";
+import { toBankFee, walletPay, walletToBank } from "./payments";
 import { changePin, getSim, selfRegisterWallet, type SimRow } from "./telco";
 import { SimError, TELCO_INFO, bankName, cedis, clock, newId, normalizeMsisdn } from "./util";
 import type { UssdSession, World } from "./world";
@@ -181,7 +181,7 @@ function draft(w: World, s: UssdSession, wallet: WalletRow) {
   const amount = v.amount ? Math.round(Number(v.amount) * 100) : 0;
   const cross = !!to && to.telco !== wallet.telco;
   const fees = getConfig(w.db, `telco.${wallet.telco}`).fees;
-  const fee = !amount ? 0 : v.till ? feeFor(fees.merchant, amount) : v.account ? feeFor(fees.to_bank, amount) : feeFor(cross ? fees.p2p_offnet : fees.p2p_onnet, amount);
+  const fee = !amount ? 0 : v.till ? feeFor(fees.merchant, amount) : bank ? toBankFee(w, wallet, bank, amount) : feeFor(cross ? fees.p2p_offnet : fees.p2p_onnet, amount);
   return { to, bank, amount, cross, fee };
 }
 

@@ -432,7 +432,7 @@ export function SettingsForm({ team, path, fields, onSaved }: { team: string; pa
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const dirty = Object.keys(draft).length > 0;
   const save = async () => {
-    const operations = fields.filter((f) => f.pointer in draft).map((f) => ({ op: "replace", path: f.pointer, value: typeof f.value === "boolean" ? draft[f.pointer] : Number(draft[f.pointer]) }));
+    const operations = fields.filter((f) => f.pointer in draft).map((f) => ({ op: "add", path: f.pointer, value: typeof f.value === "boolean" ? draft[f.pointer] : Number(draft[f.pointer]) }));
     const summary = fields.filter((f) => f.pointer in draft).map((f) => `${f.label}: ${String(f.value)} → ${String(draft[f.pointer])}`).join("; ");
     try {
       await api(team, path, { body: { action: "settings", operations, summary } });

@@ -56,8 +56,11 @@ function senderProblem(w: World, from: WalletRow): string | undefined {
   if (hold && sim.last_swap_at && w.now - sim.last_swap_at < hold * HOUR) return `This number had a SIM replacement recently. Sending money is paused for ${hold} hours after a SIM swap.`;
 }
 
-export function quoteWalletFee(w: World, from: WalletRow, kind: FeeKind, amount: number) {
-  return feeFor(getConfig(w.db, `telco.${from.telco}`).fees[kind], amount);
+/** Wallet-to-bank fee. Moving money to your own bank account is free; sending to anyone else's is charged. */
+export function toBankFee(w: World, from: WalletRow, acct: AccountRow, amount: number) {
+  const cfg = getConfig(w.db, `telco.${from.telco}`);
+  const own = !!acct.person_id && acct.person_id === from.person_id;
+  return own && cfg.ownBankAccountFree !== false ? 0 : feeFor(cfg.fees.to_bank, amount);
 }
 
 export interface WalletPayment {
@@ -169,7 +172,7 @@ export function walletToBank(w: World, req: { from: string; accountNo: string; a
   const problem = senderProblem(w, from);
   if (problem) no(problem);
   if (acct.status !== "active") no("The bank account cannot receive payments");
-  const fee = feeFor(cfg.fees.to_bank, req.amount);
+  const fee = toBankFee(w, from, acct, req.amount);
   const limit = checkSendLimits(w, from, req.amount);
   if (limit) no(limit);
   if (from.balance < req.amount + fee) no("Insufficient balance");

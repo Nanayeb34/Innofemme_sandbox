@@ -151,6 +151,7 @@ export function defaultTelco(telco: Telco): TelcoConfig {
     simSwapMomoHoldHours: 24,
     // Telecel Cash is opened at an agent or shop; MTN and AT subscribers can also register from the phone.
     selfRegistration: telco !== "telecel",
+    ownBankAccountFree: true,
   };
 }
 

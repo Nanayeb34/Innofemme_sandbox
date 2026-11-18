@@ -28,6 +28,7 @@ interface TelcoView {
     approvalMinutes: number;
     simSwapMomoHoldHours: number;
     selfRegistration: boolean;
+    ownBankAccountFree?: boolean;
   };
   limits: Record<string, { maxBalance: number; daily: number; monthly: number | null }>;
 }
@@ -337,13 +338,14 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
               onSaved={refresh}
               fields={[
                 { pointer: "/selfRegistration", label: "Customers can open a wallet from the phone", value: data.config.selfRegistration, hint: "If no, they must go to a mobile money agent." },
+                { pointer: "/ownBankAccountFree", label: "Free transfers to the customer's own bank account", value: data.config.ownBankAccountFree !== false, hint: "Transfers to anyone else's bank account are always charged the 'to_bank' fee." },
                 { pointer: "/pinAttemptsBeforeLock", label: "Wrong PINs before the wallet locks", value: data.config.pinAttemptsBeforeLock },
                 { pointer: "/approvalMinutes", label: "Minutes to approve a cash-out", value: data.config.approvalMinutes },
                 { pointer: "/simSwapMomoHoldHours", label: "Hours sending is paused after a SIM replacement", value: data.config.simSwapMomoHoldHours, hint: "0 switches the pause off." },
               ]}
             />
           </Section>
-          <Section title="Customer fees" hint="Per transaction type, as amount bands in GHS. The first band whose 'upTo' covers the amount applies ('upTo: null' is the top band). Fee = flat + pct% of the amount, capped at 'max'.">
+          <Section title="Customer fees" hint="Per transaction type, as amount bands in GHS. 'to_bank' is not charged when customers move money to their own bank account, unless you switch that off above. The first band whose 'upTo' covers the amount applies ('upTo: null' is the top band). Fee = flat + pct% of the amount, capped at 'max'.">
             <SettingsJson team={team} path={path} pointer="/fees" value={data.config.fees} onSaved={refresh} />
           </Section>
           <Section title="Agent commission" hint="What this network pays its agents for each cash-in and cash-out, in the same band format.">

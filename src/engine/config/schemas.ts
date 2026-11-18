@@ -149,6 +149,8 @@ export const TelcoSchema = z
     simSwapMomoHoldHours: z.number().int().min(0).max(168),
     /** Whether subscribers can open a wallet themselves by dialling the short code. */
     selfRegistration: z.boolean(),
+    /** No wallet-to-bank fee when the bank account belongs to the wallet's owner. On unless set to false. */
+    ownBankAccountFree: z.boolean().optional(),
   })
   .strict();
 export type TelcoConfig = z.infer<typeof TelcoSchema>;
