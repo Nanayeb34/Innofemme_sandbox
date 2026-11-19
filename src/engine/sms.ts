@@ -1,4 +1,3 @@
-import type { WalletRow } from "./ledger";
 import { logSms, sendSms, smsParts } from "./notify";
 import { getSim } from "./telco";
 import { SimError, TELCO_INFO, need, normalizeMsisdn, type Telco } from "./util";
@@ -50,19 +49,17 @@ export function sendText(w: World, req: { from: string; to?: string; text?: unkn
 }
 
 /** The name a business's texts arrive under: its registered name, letters and digits only, at most 11 characters. */
-export const senderIdOf = (merchant: Pick<WalletRow, "display_name">) => merchant.display_name.replace(/[^A-Za-z0-9]/g, "").slice(0, 11) || "INFO";
+export const senderIdOf = (business: { display_name: string }) => business.display_name.replace(/[^A-Za-z0-9]/g, "").slice(0, 11) || "INFO";
 
 /**
- * A business texts a customer from its own software. The message arrives under the business's
- * registered sender name, which the customer cannot reply to.
+ * A business texts a customer from its own software, through the network that gave it API access.
+ * The message arrives under the business's registered sender name, which the customer cannot reply to.
  */
-export function sendAppSms(w: World, merchant: WalletRow, req: { to?: string; text?: unknown }): SendResult & { senderId: string } {
-  if (merchant.owner_type !== "merchant") throw new SimError("Only an onboarded merchant can send messages from an app");
-  if (merchant.status !== "active") throw new SimError("This merchant's wallet is not active");
+export function sendAppSms(w: World, business: { display_name: string; telco: Telco }, req: { to?: string; text?: unknown }): SendResult & { senderId: string } {
   const to = normalizeMsisdn(String(need(req.to, "Number to send to")));
   if (!/^0\d{9}$/.test(to)) throw new SimError("That is not a valid mobile number.");
-  const senderId = senderIdOf(merchant);
-  return { ...deliver(w, to, senderId, textOf(req.text), { kind: "app", fromTelco: merchant.telco }), senderId };
+  const senderId = senderIdOf(business);
+  return { ...deliver(w, to, senderId, textOf(req.text), { kind: "app", fromTelco: business.telco }), senderId };
 }
 
 const isNumber = (s: string) => /^0\d{9}$/.test(s);
@@ -126,8 +123,8 @@ export function smsRecords(w: World, telco: Telco, limit = 200) {
 }
 
 /** What one business has sent from its app. */
-export function appSmsSent(w: World, merchant: WalletRow, limit = 100) {
-  return (w.db.prepare("SELECT id, at, to_msisdn, body, parts, status, reason FROM sms_log WHERE kind = 'app' AND sender = ? AND from_telco = ? ORDER BY id DESC LIMIT ?").all(senderIdOf(merchant), merchant.telco, limit) as {
+export function appSmsSent(w: World, business: { display_name: string; telco: Telco }, limit = 100) {
+  return (w.db.prepare("SELECT id, at, to_msisdn, body, parts, status, reason FROM sms_log WHERE kind = 'app' AND sender = ? AND from_telco = ? ORDER BY id DESC LIMIT ?").all(senderIdOf(business), business.telco, limit) as {
     id: number; at: number; to_msisdn: string; body: string; parts: number; status: string; reason: string | null;
   }[]).map((r) => ({ id: r.id, at: new Date(r.at).toISOString(), to: r.to_msisdn, text: r.body, parts: r.parts, status: r.status, reason: r.reason ?? undefined }));
 }

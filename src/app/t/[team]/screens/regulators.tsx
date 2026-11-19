@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ActionForm, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, Shell, Stat, Stats, Status, Table, useView, type ActivityRow } from "@/components/ui";
+import { ActionButton, ActionForm, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, Shell, Stat, Stats, Status, Table, useView, type ActivityRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
 
 // ---------- Bank of Ghana ----------
@@ -91,6 +91,7 @@ export function Bog({ team }: { team: string }) {
 interface NcaView {
   config: { maxSimsPerCard: number; minimumAge: number; primaryNumberApproval: boolean };
   networks: { telco: string; name: string; registered: number; blocked: number; deactivated: number; points: number }[];
+  shortCodes: { code: string; owner: string; url: string; allocatedAt: string; networks: string[] }[];
   registry: { msisdn: string; network: string; status: string; registered_at: string; registered_by: string; ghana_card: string; owner: string; held: number }[];
   activity: ActivityRow[];
 }
@@ -151,6 +152,42 @@ export function Nca({ team }: { team: string }) {
             { label: "Status", cell: (r) => <Status value={r.status} /> },
           ]}
         />
+      </Section>
+
+      <Section title="USSD short codes" hint="A service provider that wants its own USSD service applies here for a short code. Once allocated, each network must switch the code on for its subscribers. When someone dials it, the network forwards every step of the session to the provider's application.">
+        <ActionForm
+          team={team}
+          path={path}
+          action="allocate_code"
+          submit="Allocate short code"
+          onDone={refresh}
+          fields={[
+            { name: "code", label: "Short code", placeholder: "*714#" },
+            { name: "owner", label: "Service provider", placeholder: "PayLink Ghana" },
+            { name: "url", label: "Provider's application address", placeholder: "https://…/ussd", hint: "Receives each step as JSON and answers with the next screen." },
+          ]}
+        />
+        <div className="mt-4">
+          <Table
+            rows={data.shortCodes}
+            empty="No short codes allocated."
+            cols={[
+              { label: "Code", cell: (c) => <span className="font-mono text-sm font-semibold">{c.code}</span> },
+              { label: "Service provider", cell: (c) => c.owner },
+              { label: "Application", cell: (c) => <span className="break-all font-mono text-[11px] text-gray-600">{c.url}</span> },
+              { label: "Switched on by", cell: (c) => (c.networks.length ? c.networks.map((n) => n.toUpperCase()).join(", ") : <span className="text-gray-400">no network yet</span>) },
+              { label: "Allocated", cell: (c) => <span className="whitespace-nowrap text-gray-500">{when(c.allocatedAt)}</span> },
+              {
+                label: "",
+                cell: (c) => (
+                  <ActionButton team={team} path={path} body={{ action: "revoke_code", code: c.code }} confirmText={`Withdraw ${c.code} from ${c.owner}?`} onDone={refresh} danger>
+                    Withdraw
+                  </ActionButton>
+                ),
+              },
+            ]}
+          />
+        </div>
       </Section>
 
       <Section title="Order a number blocked" hint="The regulator directs the operator to take a number off its network, for example when its registration is found to be invalid. The operator must comply.">

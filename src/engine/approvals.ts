@@ -14,7 +14,7 @@ import type { World } from "./world";
 
 export interface ApprovalRow {
   ref: string;
-  kind: "cashout" | "rtp" | "dispute";
+  kind: "cashout" | "rtp" | "dispute" | "preapproval" | "consent";
   telco: string;
   payee_wallet: string;
   payer_msisdn: string;
@@ -47,15 +47,30 @@ export function createApproval(
   w.db
     .prepare("INSERT INTO approvals(ref, kind, telco, payee_wallet, payer_msisdn, amount, external_id, payer_message, payee_note, status, reason, callback_url, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run(ref, r.kind, payee.telco, payee.id, r.payerMsisdn, r.amount, r.externalId ?? null, r.payerMessage ?? null, r.payeeNote ?? null, payer ? "PENDING" : "FAILED", payer ? null : "PAYER_NOT_FOUND", r.callbackUrl ?? null, w.now);
-  if (payer) notify(w, payer.telco, "approval_prompt", payer.msisdn, { amount: cedis(r.amount), counterparty_name: payee.display_name, counterparty: payee.msisdn, reason: r.kind === "cashout" ? "cash-out" : r.payerMessage || "payment" });
-  else void callback(w, ref);
+  if (!payer) {
+    void callback(w, ref);
+    return getApproval(w, ref)!;
+  }
+  // A customer who gave this business a standing permission is charged without being asked again.
+  if (r.kind === "rtp" && hasPreapproval(w, payee.id, payer.msisdn)) {
+    try {
+      const res = walletPay(w, { type: "merchant", channel: "api", from: payer.id, to: payee.id, amount: r.amount, reference: r.payerMessage });
+      w.db.prepare("UPDATE approvals SET status = 'SUCCESSFUL', txn_id = ? WHERE ref = ?").run(res.txnId, ref);
+    } catch (e) {
+      if (!(e instanceof SimError)) throw e;
+      w.db.prepare("UPDATE approvals SET status = 'FAILED', reason = ? WHERE ref = ?").run(e.message, ref);
+    }
+    void callback(w, ref);
+    return getApproval(w, ref)!;
+  }
+  notify(w, payer.telco, "approval_prompt", payer.msisdn, { amount: cedis(r.amount), counterparty_name: payee.display_name, counterparty: payee.msisdn, reason: r.kind === "cashout" ? "cash-out" : r.payerMessage || "payment" });
   return getApproval(w, ref)!;
 }
 
 /** Requests nobody answered in time are closed. */
 export function expireApprovals(w: World) {
   // A request to return disputed money stays open until the recipient answers or customer care withdraws it.
-  const rows = w.db.prepare("SELECT ref, telco, created_at FROM approvals WHERE status = 'PENDING' AND kind != 'dispute'").all() as { ref: string; telco: string; created_at: number }[];
+  const rows = w.db.prepare("SELECT ref, telco, created_at FROM approvals WHERE status = 'PENDING' AND kind IN ('cashout','rtp')").all() as { ref: string; telco: string; created_at: number }[];
   for (const r of rows) {
     const minutes = getConfig(w.db, `telco.${r.telco}`).approvalMinutes;
     if (w.now - r.created_at > minutes * MINUTE) rejectApproval(w, r.ref, "EXPIRED");
@@ -66,7 +81,7 @@ export function pendingFor(w: World, msisdn: string) {
   expireApprovals(w);
   return w.db
     .prepare("SELECT a.ref, a.kind, a.amount, a.payer_message, w.display_name FROM approvals a JOIN wallets w ON w.id = a.payee_wallet WHERE a.payer_msisdn = ? AND a.status = 'PENDING' ORDER BY a.created_at DESC LIMIT 5")
-    .all(msisdn) as { ref: string; kind: "cashout" | "rtp" | "dispute"; amount: number; payer_message: string | null; display_name: string }[];
+    .all(msisdn) as { ref: string; kind: ApprovalRow["kind"]; amount: number; payer_message: string | null; display_name: string }[];
 }
 
 /** The payer approves with their PIN; the money moves. */
@@ -81,6 +96,13 @@ export function approve(w: World, ref: string, pin: string): Receipt {
     const message = recipientAnswered(w, r.external_id!, true);
     w.db.prepare("UPDATE approvals SET status = 'SUCCESSFUL' WHERE ref = ?").run(ref);
     return { txnId: "", fee: 0, commission: 0, message };
+  }
+  if (r.kind === "preapproval" || r.kind === "consent") {
+    checkPin(w, payer, pin, getConfig(w.db, `telco.${payer.telco}`).pinAttemptsBeforeLock);
+    w.db.prepare("UPDATE approvals SET status = 'SUCCESSFUL' WHERE ref = ?").run(ref);
+    if (r.kind === "preapproval") w.db.prepare("UPDATE preapprovals SET status = 'SUCCESSFUL' WHERE ref = ? AND status = 'PENDING'").run(r.external_id);
+    else w.db.prepare("UPDATE consents SET status = 'APPROVED' WHERE ref = ? AND status = 'PENDING'").run(r.external_id);
+    return { txnId: "", fee: 0, commission: 0, message: r.kind === "preapproval" ? `${r.payer_message} can now take payments from your wallet without asking each time.` : `Your details have been shared with ${r.payer_message}.` };
   }
   try {
     const res = walletPay(w, { type: r.kind === "cashout" ? "cashout" : "merchant", channel: "ussd", from: payer.id, to: r.payee_wallet, amount: r.amount, pin, reference: r.payer_message ?? undefined });
@@ -97,8 +119,86 @@ export function approve(w: World, ref: string, pin: string): Receipt {
 export function rejectApproval(w: World, ref: string, reason: string) {
   const r = getApproval(w, ref);
   if (r?.kind === "dispute" && r.status === "PENDING") recipientAnswered(w, r.external_id!, false);
+  if (r?.kind === "preapproval" && r.status === "PENDING") w.db.prepare("UPDATE preapprovals SET status = 'FAILED', reason = ? WHERE ref = ? AND status = 'PENDING'").run(reason, r.external_id);
+  if (r?.kind === "consent" && r.status === "PENDING") w.db.prepare("UPDATE consents SET status = 'REJECTED' WHERE ref = ? AND status = 'PENDING'").run(r.external_id);
   w.db.prepare("UPDATE approvals SET status = 'FAILED', reason = ? WHERE ref = ? AND status = 'PENDING'").run(reason, ref);
   void callback(w, ref);
+}
+
+// ---------- standing permissions (MoMo "pre-approval") ----------
+
+export interface PreapprovalRow {
+  ref: string;
+  telco: string;
+  payee_wallet: string;
+  payer_msisdn: string;
+  message: string | null;
+  status: "PENDING" | "SUCCESSFUL" | "FAILED";
+  reason: string | null;
+  expires_at: number;
+  created_at: number;
+}
+
+export const getPreapproval = (w: World, ref: string) => w.db.prepare("SELECT * FROM preapprovals WHERE ref = ?").get(ref) as PreapprovalRow | undefined;
+
+const hasPreapproval = (w: World, payeeWallet: string, payerMsisdn: string) =>
+  !!w.db.prepare("SELECT 1 FROM preapprovals WHERE payee_wallet = ? AND payer_msisdn = ? AND status = 'SUCCESSFUL' AND expires_at > ?").get(payeeWallet, payerMsisdn, w.now);
+
+/**
+ * A business asks a customer for permission to take payments without asking each time (for a
+ * subscription, say). The customer grants or refuses it on their own phone, with their PIN.
+ */
+export function createPreapproval(w: World, r: { ref: string; payeeWallet: string; payerMsisdn: string; message?: string; validitySeconds?: number }): PreapprovalRow {
+  const payee = getWallet(w, r.payeeWallet);
+  if (!payee) throw new SimError("Payee wallet not found");
+  const payer = walletByMsisdn(w, r.payerMsisdn);
+  const seconds = Math.min(Math.max(Number(r.validitySeconds) || 30 * 86400, 60), 365 * 86400);
+  w.db
+    .prepare("INSERT INTO preapprovals(ref, telco, payee_wallet, payer_msisdn, message, status, reason, expires_at, created_at) VALUES(?,?,?,?,?,?,?,?,?)")
+    .run(r.ref, payee.telco, payee.id, r.payerMsisdn, r.message ?? null, payer ? "PENDING" : "FAILED", payer ? null : "PAYER_NOT_FOUND", w.now + seconds * 1000, w.now);
+  if (payer) {
+    w.db
+      .prepare("INSERT INTO approvals(ref, kind, telco, payee_wallet, payer_msisdn, amount, external_id, payer_message, status, created_at) VALUES(?, 'preapproval', ?, ?, ?, 0, ?, ?, 'PENDING', ?)")
+      .run(randomUUID(), payer.telco, payee.id, payer.msisdn, r.ref, payee.display_name, w.now);
+    notify(w, payer.telco, "approval_prompt", payer.msisdn, { amount: "0.00", counterparty_name: payee.display_name, counterparty: payee.msisdn, reason: "permission to take payments without asking each time" });
+  }
+  return getPreapproval(w, r.ref)!;
+}
+
+export function cancelPreapproval(w: World, ref: string, payeeWallet: string) {
+  const p = getPreapproval(w, ref);
+  if (!p || p.payee_wallet !== payeeWallet) throw new SimError("Pre-approval not found", 404);
+  w.db.prepare("UPDATE preapprovals SET status = 'FAILED', reason = 'CANCELLED' WHERE ref = ?").run(ref);
+  w.db.prepare("UPDATE approvals SET status = 'FAILED', reason = 'CANCELLED' WHERE kind = 'preapproval' AND external_id = ? AND status = 'PENDING'").run(ref);
+}
+
+// ---------- consent to share a profile ----------
+
+export interface ConsentRow {
+  ref: string;
+  telco: string;
+  client_id: string;
+  msisdn: string;
+  scope: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  expires_at: number;
+  created_at: number;
+}
+
+export const getConsent = (w: World, ref: string) => w.db.prepare("SELECT * FROM consents WHERE ref = ?").get(ref) as ConsentRow | undefined;
+
+/** A partner asks a customer to share their profile. The customer agrees or refuses on their own phone, with their PIN. */
+export function createConsent(w: World, r: { clientId: string; partnerName: string; msisdn: string; scope: string }): ConsentRow {
+  const holder = walletByMsisdn(w, r.msisdn);
+  if (!holder) throw new SimError("That number is not registered for mobile money", 404);
+  const ref = randomUUID();
+  w.db.prepare("INSERT INTO consents(ref, telco, client_id, msisdn, scope, status, expires_at, created_at) VALUES(?,?,?,?,?, 'PENDING', ?, ?)").run(ref, holder.telco, r.clientId, holder.msisdn, r.scope, w.now + 10 * MINUTE, w.now);
+  // The approvals list needs a wallet to name; the customer's own stands in, and the partner's name is carried in the message.
+  w.db
+    .prepare("INSERT INTO approvals(ref, kind, telco, payee_wallet, payer_msisdn, amount, external_id, payer_message, status, created_at) VALUES(?, 'consent', ?, ?, ?, 0, ?, ?, 'PENDING', ?)")
+    .run(randomUUID(), holder.telco, holder.id, holder.msisdn, ref, r.partnerName, w.now);
+  notify(w, holder.telco, "approval_prompt", holder.msisdn, { amount: "0.00", counterparty_name: r.partnerName, counterparty: "", reason: "to see your name, date of birth and registration details" });
+  return getConsent(w, ref)!;
 }
 
 /** The shape the MTN MoMo Collections API returns for a Request to Pay. */

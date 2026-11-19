@@ -7,11 +7,13 @@ import { TIERS, type KycTier } from "@/engine/config/schemas";
 import { count } from "@/engine/db";
 import { balanceOf, getTxn, getWallet, walletByMsisdn } from "@/engine/ledger";
 import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } from "@/engine/nia";
+import { createClient, listClients, rotateSecret, setClientStatus } from "@/engine/partners";
 import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments";
 import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
-import { LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE, ussd } from "@/engine/ussd";
+import { LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE } from "@/engine/ussd";
+import { allocateCode, dial, listCodes, revokeCode, setActivation } from "@/engine/ussdapps";
 import { BANKS, BANK_IDS, PARTICIPANTS, SimError, TELCOS, TELCO_INFO, TRUST_BANK, amountOf, bankName, isTelco, need, normalizeMsisdn, participantName, type Telco } from "@/engine/util";
 import { applyPatch, setConfig } from "@/engine/config/store";
 import { audit, type World } from "@/engine/world";
@@ -101,6 +103,23 @@ function saveSettings(surface: string) {
   };
 }
 
+/** What every institution that issues API access can do with its partners. */
+function partnerActions(institution: string): System["actions"] {
+  return {
+    api_partner_create(w, b) {
+      const c = createClient(w, institution, { name: str(b.name), till: str(b.till) || undefined, accountNo: str(b.accountNo) || undefined, callbackUrl: str(b.callbackUrl) || undefined });
+      return ok(`${c.name} now has API access. Client ID: ${c.id}`, { clientId: c.id, apiKey: c.secret });
+    },
+    api_partner_status(w, b) {
+      setClientStatus(w, institution, String(b.id), b.status === "suspended" ? "suspended" : "active");
+      return ok("Updated.");
+    },
+    api_partner_rotate(w, b) {
+      return ok("A new API key has been issued. The old one no longer works.", { apiKey: rotateSecret(w, institution, String(b.id)) });
+    },
+  };
+}
+
 // ---------- hub ----------
 
 const hub: System = {
@@ -155,9 +174,11 @@ const nia: System = {
       },
       people: people.map((p) => ({ ...p, name: fullName(p), issued_at: iso(p.issued_at), sims: sum(w, "SELECT COUNT(*) AS n FROM sims WHERE person_id = ? AND status IN ('active','blocked')", p.id) })),
       log: log.map((l) => ({ ...l, at: iso(l.at), requesterName: systemName(l.requester), biometric: !!l.biometric })),
+      apiPartners: listClients(w, "nia"),
     };
   },
   actions: {
+    ...partnerActions("nia"),
     enrol(w, b) {
       const p = enrol(w, { surname: str(b.surname), firstNames: str(b.firstNames), dob: str(b.dob), gender: str(b.gender), nationality: str(b.nationality), region: str(b.region), town: str(b.town) });
       return ok(`Ghana Card ${p.ghana_card} issued to ${fullName(p)}. Fingerprint code: ${p.fingerprint}`, { card: p.ghana_card, fingerprint: p.fingerprint });
@@ -217,6 +238,8 @@ function telcoSystem(t: Telco): System {
           id: c.id, at: iso(c.started_at), from: c.from_msisdn, to: c.to_msisdn, fromNetwork: TELCO_INFO[c.from_telco].name, toNetwork: c.to_telco ? TELCO_INFO[c.to_telco].name : "", status: c.status, reason: c.reason, seconds: callSeconds(c),
         })),
         sms: smsRecords(w, t),
+        apiPartners: listClients(w, t),
+        shortCodes: listCodes(w).map((c) => ({ ...c, on: c.networks.includes(t) })),
         simEvents: (w.db.prepare("SELECT e.* FROM sim_events e JOIN sims s ON s.msisdn = e.msisdn WHERE s.telco = ? ORDER BY e.id DESC LIMIT 80").all(t) as { id: number; msisdn: string; at: number; kind: string; by: string; detail: string }[]).map((e) => ({ ...e, at: iso(e.at) })),
         activity: auditFeed(w, t),
         config: getConfig(w.db, `telco.${t}`),
@@ -265,6 +288,12 @@ function telcoSystem(t: Telco): System {
       reverse(w, b) {
         return ok(reverse(w, t, String(need(str(b.txnId), "Transaction"))).message);
       },
+      short_code(w, b) {
+        const on = b.on === true || b.on === "true";
+        setActivation(w, t, String(need(str(b.code), "Short code")), on);
+        return ok(on ? "Switched on for this network's subscribers." : "Switched off.");
+      },
+      ...partnerActions(t),
       settings: saveSettings(`telco.${t}`),
       txn: txnDetail,
     },
@@ -580,7 +609,7 @@ const phone: System = {
   actions: {
     ussd(w, b) {
       if (typeof b.input !== "string") throw new SimError("input is required");
-      return ussd(w, { sessionId: str(b.sessionId), msisdn: normalizeMsisdn(String(need(str(b.msisdn), "msisdn"))), input: b.input.slice(0, 182) });
+      return dial(w, { sessionId: str(b.sessionId), msisdn: normalizeMsisdn(String(need(str(b.msisdn), "msisdn"))), input: b.input.slice(0, 182) });
     },
     sms_send(w, b) {
       const r = sendText(w, { from: String(need(str(b.msisdn), "msisdn")), to: str(b.to), text: b.text });
@@ -624,9 +653,11 @@ function bankSystem(bank: string): System {
         txns: txnFeed(w, "t.from_party = ? OR t.to_party = ?", [bank, bank], 150),
         activity: auditFeed(w, bank),
         config: getConfig(w.db, `bank.${bank}`),
+        apiPartners: listClients(w, bank),
       };
     },
     actions: {
+      ...partnerActions(bank),
       open_account(w, b) {
         const a = openAccount(w, bank, { card: str(b.card), fingerprint: str(b.fingerprint) });
         return ok(`Account opened for ${a.name}. Account number: ${a.account_no}`);
@@ -676,9 +707,11 @@ const switchSystem: System = {
       })),
       config: getConfig(w.db, "switch"),
       activity: auditFeed(w, "switch"),
+      apiPartners: listClients(w, "switch"),
     };
   },
   actions: {
+    ...partnerActions("switch"),
     connect(w, b) {
       const p = String(b.participant);
       if (!PARTICIPANTS.includes(p)) throw new SimError("Unknown participant");
@@ -752,10 +785,19 @@ const nca: System = {
         )
         .all(...(card ? [card] : [])) as Record<string, string | number>[]).map((r) => ({ ...r, network: TELCO_INFO[r.telco as Telco].name, registered_at: iso(r.registered_at as number) })),
       activity: auditFeed(w, "nca"),
+      shortCodes: listCodes(w),
     };
   },
   actions: {
     settings: saveSettings("nca"),
+    allocate_code(w, b) {
+      const c = allocateCode(w, { code: str(b.code), owner: str(b.owner), url: str(b.url) });
+      return ok(`${c.code} allocated to ${c.owner}. Each network must now switch it on.`);
+    },
+    revoke_code(w, b) {
+      revokeCode(w, String(need(str(b.code), "Short code")));
+      return ok("Short code withdrawn.");
+    },
     // The regulator orders a number off the network; the operator must comply.
     order_block(w, b) {
       const sim = telcoOps.getSim(w, normalizeMsisdn(String(need(str(b.msisdn), "Mobile number"))));

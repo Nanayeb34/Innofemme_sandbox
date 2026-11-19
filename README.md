@@ -79,6 +79,9 @@ src/engine/            all simulation logic, no web code
   care.ts              customer care tickets and the dispute process (hold, consent, return)
   calls.ts             voice calls: ringing, busy, switched off, the 100 queue, call records
   sms.ts               text messages between people and from businesses' apps; conversations and records
+  partners.ts          API partners: the credentials each institution issues to outside companies
+  signals.ts           what a network tells a partner about a number: subscriber details, SIM swap, KYC match
+  ussdapps.ts          third-party USSD services on short codes the NCA allocates
   ussd.ts              USSD session engine over each telco's editable menu tree
   bank.ts              bank accounts and the telcos' trust accounts
   switch.ts            routing (lookup, quote, commit), positions and net settlement
@@ -86,6 +89,7 @@ src/engine/            all simulation logic, no web code
   config/              each institution's settings: schemas, defaults, history, undo, JSON Patch
   worlds.ts            team registry, one SQLite file per world, save points
 src/server/systems.ts  one view and one set of actions per institution's console
+src/app/api/w/[team]/  momo, network, bank, ghipss, nia: the partner APIs; s: the console API
 src/app/               Next.js pages and API routes
 ```
 
@@ -97,6 +101,21 @@ These are the main design decisions:
 - **Settlement is deferred.** Payments between institutions clear at once but move money only when the switch settles. A telco settles through its trust account at its partner bank; banks settle across their accounts at the Bank of Ghana.
 - **One SQLite file per world** (Node's built-in `node:sqlite`). Save points, rollback and reset are file operations, and the offline back-up needs no database server.
 - **Biometrics are a code.** NIA gives each person a fingerprint code that stands in for their fingerprints. It must be presented wherever a biometric check is done.
+
+## Partner APIs
+
+Besides the consoles, each institution has the API it would give an outside company, such as a licensed payments or messaging business. A company calls it with a client ID and API key that institution issued (its console → **API partners**), not with the team key. The API reference at `/t/{team}/docs` lists every endpoint.
+
+| API | At | What it offers |
+| --- | --- | --- |
+| Mobile money | `/api/w/{team}/momo/{telco}` | The MTN MoMo Open API shape: request to pay, request to withdraw, pre-approval, delivery notification, balance, account-holder checks, profile with the customer's consent, transfer, deposit, refund, callbacks. |
+| Network | `/api/w/{team}/network/{telco}` | Texts under a sender name, subscriber details, SIM-swap check, KYC match. |
+| USSD services | NCA console, then each network | The NCA allocates a short code to a provider; each network switches it on and forwards sessions to the provider's application. |
+| Bank | `/api/w/{team}/bank/{bank}` | Balance, statement, name enquiry, transfers to bank accounts and wallets, from the partner's own account. |
+| National switch | `/api/w/{team}/ghipss` | Participants, name enquiry across banks and networks, status of a routed payment. |
+| NIA | `/api/w/{team}/nia` | Ghana Card verification: valid or not with the card number, the holder's details on a fingerprint match. |
+
+Subscriber details, texts, payments and identity checks are what licensed partners get in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries and could not be confirmed for Ghana. Not included: an outside company cannot see a network's full transaction feed, freeze a wallet or block a SIM; those stay inside the institution (the console API).
 
 ## Customer care and disputes
 
@@ -118,7 +137,7 @@ Every phone has a Messages app with conversations. There are three kinds of text
 
 - **Person to person.** Write to any number on any network and reply in the thread. A blocked SIM cannot send, and a text to a number that is not in service, or is blocked, is recorded as not delivered. A phone that is not open still receives its texts: they wait in the inbox.
 - **From the network.** The texts a telco sends about its own services (registration, payments, approvals, tickets). Their wording is editable in the telco's settings. Nobody can reply to them.
-- **From a business's app.** `POST /api/w/{team}/sms/{telco}` with `{ to, text }` and `X-Merchant-Id`. The text arrives under the merchant's registered name, shortened to 11 letters and digits, with no reply.
+- **From a business's app.** `POST /api/w/{team}/network/{telco}/v1/sms/messages` with `{ to, text }` and the partner's credentials. The text arrives under the company's registered name, shortened to 11 letters and digits, with no reply.
 
 A text is at most 480 characters and is counted in 160-character parts. Texts are free: there is no airtime yet.
 
@@ -152,6 +171,7 @@ The same image runs the venue's offline back-up server. Copy `/data` from the cl
 ## Still open
 
 - Telecel and AT API specs: both telcos currently use the MTN API shape.
+- GhIPSS products not yet modelled: the national QR code, Proxy Pay and its own Request to Pay.
 - Menu trees: wording approximates the live menus. Replace it with the telcos' trees when they arrive.
 - An AI assistant to help non-coders find their way around the systems.
 - Fraud scenarios: removed for now; to be designed on top of this base.

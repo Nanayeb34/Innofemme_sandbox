@@ -71,6 +71,8 @@ export interface WalletPayment {
   amount: number; // pesewas
   pin?: string; // checked when given
   reference?: string;
+  /** No fee is charged, e.g. when a business gives a customer their money back. */
+  waiveFee?: boolean;
 }
 
 /** A payment from one wallet to another: person to person, to a merchant, or between a customer and an agent. */
@@ -110,7 +112,7 @@ export function walletPay(w: World, req: WalletPayment): Receipt {
   }
 
   const kind: FeeKind | undefined = req.type === "p2p" ? (cross ? "p2p_offnet" : "p2p_onnet") : req.type === "merchant" ? "merchant" : req.type === "cashout" ? "cashout" : undefined;
-  const fee = kind ? feeFor(cfg.fees[kind], req.amount) : 0;
+  const fee = kind && !req.waiveFee ? feeFor(cfg.fees[kind], req.amount) : 0;
   const limit = checkSendLimits(w, from, req.amount) ?? checkReceiveLimit(w, to, req.amount);
   if (limit) no(limit);
   if (from.balance < req.amount + fee) no(req.type === "cashin" ? "Agent has insufficient float" : "Insufficient balance");

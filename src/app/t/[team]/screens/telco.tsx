@@ -5,6 +5,7 @@ import { useState } from "react";
 import { TelcoMark } from "@/components/telco-mark";
 import { ActionButton, ActionForm, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, SettingsJson, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
+import { ApiPartners, type ApiPartner } from "./partners";
 
 interface TelcoView {
   telco: string;
@@ -19,6 +20,8 @@ interface TelcoView {
   txns: TxnRow[];
   calls: { id: string; at: string; from: string; to: string; fromNetwork: string; toNetwork: string; status: string; reason: string | null; seconds: number }[];
   sms: { id: number; at: string; kind: string; from: string; fromNetwork: string; to: string; toNetwork: string; body: string; parts: number; status: string; reason: string | null }[];
+  apiPartners: ApiPartner[];
+  shortCodes: { code: string; owner: string; url: string; allocatedAt: string; networks: string[]; on: boolean }[];
   simEvents: { id: number; msisdn: string; at: string; kind: string; by: string; detail: string }[];
   activity: ActivityRow[];
   config: {
@@ -36,7 +39,7 @@ interface TelcoView {
 }
 
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
-const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["settings", "Settings"]] as const;
+const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["api", "API partners"], ["settings", "Settings"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 export default function TelcoConsole({ team, telco }: { team: string; telco: string }) {
@@ -366,6 +369,47 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
             ]}
           />
         </Section>
+      )}
+
+      {tab === "api" && (
+        <>
+          <ApiPartners
+            team={team}
+            path={path}
+            partners={data.apiPartners}
+            onChange={refresh}
+            institution={b.name}
+            apiPath={`/momo/${telco} and /network/${telco}`}
+            what={`This is what ${b.name} gives a licensed payments or messaging company: taking and making ${b.wallet} payments, sending texts, and checking a subscriber's details.`}
+            link={{
+              name: "till",
+              label: "Merchant account for payments",
+              type: "select",
+              options: [["", "None (texts and subscriber checks only)"], ...data.merchants.map((m) => [m.till, `${m.name} · merchant ID ${m.till}`] as const)],
+              hint: "Payments are collected into, and paid out from, this merchant's wallet.",
+            }}
+          />
+          <Section title="USSD short codes" hint="The NCA allocates a short code to a service provider. It only works for this network's subscribers once you switch it on here. Each step of a session is then forwarded to the provider's application.">
+            <Table
+              rows={data.shortCodes}
+              empty="The NCA has not allocated any short codes yet."
+              cols={[
+                { label: "Code", cell: (c) => <span className="font-mono text-sm font-semibold">{c.code}</span> },
+                { label: "Service provider", cell: (c) => c.owner },
+                { label: "Application", cell: (c) => <span className="break-all font-mono text-[11px] text-gray-600">{c.url}</span> },
+                { label: `On ${b.name}`, cell: (c) => <Status value={c.on ? "active" : "suspended"} /> },
+                {
+                  label: "",
+                  cell: (c) => (
+                    <ActionButton team={team} path={path} body={{ action: "short_code", code: c.code, on: !c.on }} onDone={refresh} danger={c.on} dark={!c.on}>
+                      {c.on ? "Switch off" : "Switch on"}
+                    </ActionButton>
+                  ),
+                },
+              ]}
+            />
+          </Section>
+        </>
       )}
 
       {tab === "settings" && (

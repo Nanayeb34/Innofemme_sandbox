@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ActionButton, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
+import { ApiPartners, type ApiPartner } from "./partners";
 
 interface SwitchView {
   participants: { participant: string; name: string; kind: string; connected: boolean; position: number; sent: number; received: number; feesBilled: number; settlesVia: string }[];
@@ -12,10 +13,11 @@ interface SwitchView {
   txns: TxnRow[];
   disputes: { id: string; from: string; otherId: string; to: string; amount: number; held: number; returned: number; status: string; resolution: string | null; raisedAt: string; updatedAt: string }[];
   config: { feePerTxn: number; maxAmount: number };
+  apiPartners: ApiPartner[];
   activity: ActivityRow[];
 }
 
-const TABS = [["participants", "Participants and positions"], ["log", "Message log"], ["settlements", "Settlements"], ["txns", "Routed payments"], ["disputes", "Disputes"], ["settings", "Settings"]] as const;
+const TABS = [["participants", "Participants and positions"], ["log", "Message log"], ["settlements", "Settlements"], ["txns", "Routed payments"], ["disputes", "Disputes"], ["api", "API partners"], ["settings", "Settings"]] as const;
 
 export default function Switch({ team }: { team: string }) {
   const path = "/s/switch";
@@ -144,6 +146,18 @@ export default function Switch({ team }: { team: string }) {
             ]}
           />
         </Section>
+      )}
+
+      {tab === "api" && (
+        <ApiPartners
+          team={team}
+          path={path}
+          partners={data.apiPartners}
+          onChange={refresh}
+          institution="the national switch"
+          apiPath="/ghipss"
+          what="The switch gives licensed institutions name enquiry across every bank and network, the list of participants, and the status of routed payments. Payments themselves are sent through the institution's bank or network."
+        />
       )}
 
       {tab === "settings" && (

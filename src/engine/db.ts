@@ -263,7 +263,7 @@ CREATE INDEX IF NOT EXISTS ticket_events_ticket ON ticket_events(ticket_id);
 -- Payment requests waiting for the payer's approval: agent cash-outs and merchant Request to Pay.
 CREATE TABLE IF NOT EXISTS approvals (
   ref TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,                -- cashout | rtp | dispute (external_id holds the ticket)
+  kind TEXT NOT NULL,                -- cashout | rtp | dispute | preapproval | consent (external_id holds the ticket or reference)
   telco TEXT NOT NULL,
   payee_wallet TEXT NOT NULL,
   payer_msisdn TEXT NOT NULL,
@@ -291,6 +291,63 @@ CREATE TABLE IF NOT EXISTS api_transfers (
   reason TEXT,
   txn_id TEXT,
   created_at INTEGER NOT NULL
+);
+
+-- ===== Partner APIs =====
+-- A company an institution has given API access to (what a telco, bank, GhIPSS or NIA issues to a licensed partner).
+CREATE TABLE IF NOT EXISTS api_clients (
+  id TEXT PRIMARY KEY,               -- the client id (MTN calls it the API user)
+  institution TEXT NOT NULL,         -- mtn | telecel | at | a bank | switch | nia
+  name TEXT NOT NULL,
+  secret TEXT NOT NULL,              -- the API key
+  wallet_id TEXT,                    -- telco partners: the merchant wallet they collect into and pay out from
+  account_id TEXT,                   -- bank partners: the account they operate
+  callback_url TEXT,                 -- where results are sent when a request does not name its own
+  status TEXT NOT NULL DEFAULT 'active', -- active | suspended
+  calls INTEGER NOT NULL DEFAULT 0,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_clients_institution ON api_clients(institution);
+
+-- A customer's standing permission for a partner to take payments without asking each time.
+CREATE TABLE IF NOT EXISTS preapprovals (
+  ref TEXT PRIMARY KEY,
+  telco TEXT NOT NULL,
+  payee_wallet TEXT NOT NULL,
+  payer_msisdn TEXT NOT NULL,
+  message TEXT,
+  status TEXT NOT NULL,              -- PENDING | SUCCESSFUL | FAILED
+  reason TEXT,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS preapprovals_pair ON preapprovals(payee_wallet, payer_msisdn);
+
+-- A customer's consent for a partner to read their profile.
+CREATE TABLE IF NOT EXISTS consents (
+  ref TEXT PRIMARY KEY,              -- auth_req_id
+  telco TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  msisdn TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  status TEXT NOT NULL,              -- PENDING | APPROVED | REJECTED
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- USSD short codes the NCA has allocated to service providers, and the networks each is switched on for.
+CREATE TABLE IF NOT EXISTS ussd_codes (
+  code TEXT PRIMARY KEY,             -- e.g. *714#
+  owner TEXT NOT NULL,
+  url TEXT NOT NULL,                 -- the provider's application; the network forwards each step of a session to it
+  status TEXT NOT NULL DEFAULT 'allocated', -- allocated | revoked
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ussd_activations (
+  code TEXT NOT NULL,
+  telco TEXT NOT NULL,
+  PRIMARY KEY (code, telco)
 );
 
 -- ===== Settings and audit =====

@@ -489,8 +489,7 @@ describe("text messages", () => {
     expect(sms.senderIdOf(shop)).toBe("DzifasProvi");
     expect(sms.sendAppSms(w, shop, { to: nb, text: "Your order is ready" })).toMatchObject({ delivered: true, senderId: "DzifasProvi" });
     expect(sms.thread(w, nb, "DzifasProvi")).toMatchObject({ canReply: false, messages: [{ body: "Your order is ready", out: false }] });
-    dial(w, na, "*170#", "1", "1234", "1234"); // an ordinary customer wallet cannot send as a business
-    expect(() => sms.sendAppSms(w, walletByMsisdn(w, na)!, { to: nb, text: "x" })).toThrow(/Only an onboarded merchant/);
+    dial(w, na, "*170#", "1", "1234", "1234");
     expect(sms.appSmsSent(w, shop)).toMatchObject([{ to: nb, text: "Your order is ready", status: "delivered" }]);
 
     // Each network's records cover what left it and what arrived on it.
@@ -505,6 +504,107 @@ describe("text messages", () => {
     const view = resolveSystem(["phone"]).view(w, new URLSearchParams({ msisdn: na, thread: nb })) as { phone: { conversations: unknown[]; thread: { messages: unknown[] } } };
     expect(view.phone.thread.messages.length).toBe(4);
     expect(view.phone.conversations.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("partner APIs", () => {
+  it("issues credentials per institution, answers subscriber checks, and runs pre-approvals, consent and short-code services", async () => {
+    const http = await import("node:http");
+    const partners = await import("../src/engine/partners");
+    const signals = await import("../src/engine/signals");
+    const approvals = await import("../src/engine/approvals");
+    const apps = await import("../src/engine/ussdapps");
+    const w = await resetWorld("team-02");
+    const [a, c] = [person(w, "Serwaa", "Antwi", "1992-02-02"), person(w, "Nii", "Okai", "1980-08-08")];
+    telco.generateSims(w, "mtn", 3);
+    const point = telco.onboardSimAgent(w, "mtn", { card: c.ghana_card, name: "Point", kind: "service_centre", town: "Accra" }).id;
+    const na = telco.registerSim(w, "mtn", point, { card: a.ghana_card, fingerprint: a.fingerprint }).sim.msisdn;
+    const shopLine = telco.registerSim(w, "mtn", point, { card: c.ghana_card, fingerprint: c.fingerprint }).sim.msisdn;
+    dial(w, na, "*170#", "1", "1234", "1234");
+    const till = telco.onboardMerchant(w, "mtn", { msisdn: shopLine, name: "Okai Stores", town: "Accra", pin: "9999" }).till;
+    pay.bankToWallet(w, { bank: "gcb", msisdn: na, amount: 50000 });
+
+    // Credentials belong to one institution and stop working when suspended or replaced.
+    const p = partners.createClient(w, "mtn", { name: "PayLink Ghana", till });
+    expect(partners.authenticate(w, "mtn", p.id, p.secret)?.name).toBe("PayLink Ghana");
+    expect(partners.authenticate(w, "at", p.id, p.secret)).toBeUndefined();
+    expect(partners.authenticate(w, "mtn", p.id, "wrong")).toBeUndefined();
+    expect(partners.clientWallet(w, p).display_name).toBe("Okai Stores");
+    expect(() => partners.createClient(w, "mtn", { name: "X", till: "999999" })).toThrow(/No merchant/);
+    expect(() => partners.createClient(w, "gcb", { name: "X" })).toThrow(/account at this bank is required/);
+    expect(() => partners.clientWallet(w, partners.createClient(w, "mtn", { name: "Texts only" }))).toThrow(/no merchant wallet/);
+    const fresh = partners.rotateSecret(w, "mtn", p.id);
+    expect(partners.authenticate(w, "mtn", p.id, p.secret)).toBeUndefined();
+    partners.setClientStatus(w, "mtn", p.id, "suspended");
+    expect(partners.authenticate(w, "mtn", p.id, fresh)).toBeUndefined();
+    partners.setClientStatus(w, "mtn", p.id, "active");
+    expect(partners.authenticate(w, "mtn", p.id, fresh)).toBeDefined();
+
+    // What a network tells a partner about its own numbers.
+    expect(signals.subscriber(w, "mtn", na)).toMatchObject({ registeredName: "Serwaa Antwi", status: "active", mobileMoney: { registered: true } });
+    expect(() => signals.subscriber(w, "telecel", na)).toThrow(/not a Telecel subscriber/);
+    expect(signals.simSwapCheck(w, "mtn", { phoneNumber: na, maxAge: 240 })).toEqual({ swapped: false });
+    telco.swapSim(w, "mtn", point, { msisdn: na, card: a.ghana_card, fingerprint: a.fingerprint });
+    expect(signals.simSwapCheck(w, "mtn", { phoneNumber: na })).toEqual({ swapped: true });
+    expect(signals.simSwapDate(w, "mtn", { phoneNumber: na }).latestSimChange).toBeTruthy();
+    expect(signals.kycMatch(w, "mtn", { phoneNumber: na, name: "antwi  SERWAA", birthdate: "1992-02-03", idDocument: a.ghana_card.replace(/-/g, "") })).toEqual({ idDocumentMatch: "true", nameMatch: "true", birthdateMatch: "false" });
+    expect(() => signals.kycMatch(w, "mtn", { phoneNumber: na })).toThrow(/at least one detail/);
+    setConfig(w.db, "telco.mtn", { ...getConfig(w.db, "telco.mtn"), simSwapMomoHoldHours: 0 }, "No hold", "api");
+
+    // A standing permission: once the customer grants it, the business charges without asking.
+    const shop = partners.clientWallet(w, p);
+    approvals.createApproval(w, { ref: "r1", kind: "rtp", payeeWallet: shop.id, payerMsisdn: na, amount: 1000 });
+    expect(approvals.getApproval(w, "r1")!.status).toBe("PENDING");
+    approvals.rejectApproval(w, "r1", "test");
+    approvals.createPreapproval(w, { ref: "pre1", payeeWallet: shop.id, payerMsisdn: na, message: "Monthly plan" });
+    expect(dial(w, na, "*170#", "4").text).toMatch(/Let Okai Stores take payments without asking/);
+    expect(dial(w, na, "*170#", "4", "1", "1", "1234").text).toMatch(/can now take payments from your wallet without asking/);
+    expect(approvals.getPreapproval(w, "pre1")!.status).toBe("SUCCESSFUL");
+    const before = walletByMsisdn(w, na)!.balance;
+    approvals.createApproval(w, { ref: "r2", kind: "rtp", payeeWallet: shop.id, payerMsisdn: na, amount: 1500 });
+    expect(approvals.getApproval(w, "r2")!.status).toBe("SUCCESSFUL");
+    expect(walletByMsisdn(w, na)!.balance).toBe(before - 1500);
+    approvals.cancelPreapproval(w, "pre1", shop.id);
+    approvals.createApproval(w, { ref: "r3", kind: "rtp", payeeWallet: shop.id, payerMsisdn: na, amount: 1500 });
+    expect(approvals.getApproval(w, "r3")!.status).toBe("PENDING");
+    approvals.rejectApproval(w, "r3", "test");
+
+    // Consent to share a profile is the customer's to give or refuse.
+    const consent = approvals.createConsent(w, { clientId: p.id, partnerName: p.name, msisdn: na, scope: "profile" });
+    expect(dial(w, na, "*170#", "4", "1", "2").text).toMatch(/You have refused/);
+    expect(approvals.getConsent(w, consent.ref)!.status).toBe("REJECTED");
+    const again = approvals.createConsent(w, { clientId: p.id, partnerName: p.name, msisdn: na, scope: "profile" });
+    expect(dial(w, na, "*170#", "4", "1", "1", "1234").text).toMatch(/shared with PayLink Ghana/);
+    expect(approvals.getConsent(w, again.ref)!.status).toBe("APPROVED");
+
+    // A provider's own USSD service: allocated by the NCA, switched on by the network, served by the provider.
+    const seen: { input: string; text: string; newSession: boolean }[] = [];
+    const server = http.createServer((req, res) => {
+      let d = "";
+      req.on("data", (x) => (d += x));
+      req.on("end", () => {
+        const b = JSON.parse(d);
+        seen.push(b);
+        res.end(b.newSession ? "CON Okai Stores\n1) My points" : JSON.stringify({ message: `You have 40 points, ${b.msisdn}`, continueSession: false }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/ussd`;
+    expect(() => apps.allocateCode(w, { code: "*170#", owner: "X", url })).toThrow(/already used by the networks/);
+    expect(() => apps.allocateCode(w, { code: "714", owner: "X", url })).toThrow(/looks like/);
+    apps.allocateCode(w, { code: "*714#", owner: "Okai Stores", url });
+    expect((await apps.dial(w, { msisdn: na, input: "*714#" })).text).toMatch(/not available on MTN/);
+    apps.setActivation(w, "mtn", "*714#", true);
+    const first = await apps.dial(w, { msisdn: na, input: "*714#" });
+    expect(first).toMatchObject({ text: "Okai Stores\n1) My points", end: false });
+    expect(await apps.dial(w, { msisdn: na, input: "1", sessionId: first.sessionId })).toMatchObject({ text: `You have 40 points, ${na}`, end: true });
+    expect(seen.map((x) => `${x.newSession}:${x.input}:${x.text}`)).toEqual(["true::", "false:1:1"]);
+    // The network's own codes still work through the same dialler.
+    expect((await apps.dial(w, { msisdn: na, input: "*170#" })).text).toMatch(/^MTN MoMo/);
+    server.close();
+    expect((await apps.dial(w, { msisdn: na, input: "*714#" })).text).toMatch(/not responding/);
+    apps.revokeCode(w, "*714#");
+    expect((await apps.dial(w, { msisdn: na, input: "*714#" })).text).toMatch(/Unknown USSD code/);
   });
 });
 

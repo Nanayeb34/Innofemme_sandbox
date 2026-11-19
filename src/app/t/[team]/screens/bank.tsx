@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ActionButton, ActionForm, Activity, Badge, ID_FIELDS, Loading, Section, SettingsHistory, SettingsJson, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs } from "@/lib/client";
+import { ApiPartners, type ApiPartner } from "./partners";
 
 interface BankView {
   bank: string;
@@ -15,9 +16,10 @@ interface BankView {
   txns: TxnRow[];
   activity: ActivityRow[];
   config: { fees: unknown };
+  apiPartners: ApiPartner[];
 }
 
-const TABS = [["counter", "Counter"], ["transfers", "Transfers and agent float"], ["accounts", "Accounts"], ["txns", "Transactions"], ["settings", "Settings"]] as const;
+const TABS = [["counter", "Counter"], ["transfers", "Transfers and agent float"], ["accounts", "Accounts"], ["txns", "Transactions"], ["api", "API partners"], ["settings", "Settings"]] as const;
 
 export default function Bank({ team, bank }: { team: string; bank: string }) {
   const path = `/s/bank/${bank}`;
@@ -143,6 +145,19 @@ export default function Bank({ team, bank }: { team: string; bank: string }) {
         <Section title="Transactions" hint="Click a row to see its ledger postings and switch messages.">
           <TxnTable team={team} rows={data.txns} />
         </Section>
+      )}
+
+      {tab === "api" && (
+        <ApiPartners
+          team={team}
+          path={path}
+          partners={data.apiPartners}
+          onChange={refresh}
+          institution={data.name}
+          apiPath={`/bank/${bank}`}
+          what="This is what a bank gives a business customer to run its own account from software: balance, statement, name enquiry, and transfers to bank accounts and wallets."
+          link={{ name: "accountNo", label: "The company's account at this bank", type: "select", options: personal.map((a) => [a.accountNo, `${a.name} · ${a.accountNo}`] as const), hint: "Every API call acts on this account." }}
+        />
       )}
 
       {tab === "settings" && (

@@ -301,7 +301,13 @@ function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow):
       if (!list.length) return end("You have no pending approvals.");
       s.pending = { kind: "approvals", data: { step: "pick", refs: list.map((l) => l.ref) } };
       const line = (l: (typeof list)[number]) =>
-        l.kind === "dispute" ? `Return GHS ${cedis(l.amount)} to ${l.display_name} (sent by mistake)` : `${l.kind === "cashout" ? "Cash out" : "Pay"} GHS ${cedis(l.amount)} ${l.kind === "cashout" ? "at" : "to"} ${l.display_name}`;
+        l.kind === "dispute"
+          ? `Return GHS ${cedis(l.amount)} to ${l.display_name} (sent by mistake)`
+          : l.kind === "preapproval"
+            ? `Let ${l.display_name} take payments without asking`
+            : l.kind === "consent"
+              ? `Share your details with ${l.payer_message}`
+              : `${l.kind === "cashout" ? "Cash out" : "Pay"} GHS ${cedis(l.amount)} ${l.kind === "cashout" ? "at" : "to"} ${l.display_name}`;
       return show(["Pending approvals", ...list.map((l, i) => `${i + 1}) ${line(l)}`)].join("\n"));
     }
     case "change_pin":
@@ -359,13 +365,16 @@ function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: strin
     const ref = d.refs?.[Number(input) - 1];
     if (!ref) return end("Invalid option");
     s.pending = { kind: "approvals", data: { step: "decide", ref } };
-    return show(getApproval(w, ref)?.kind === "dispute" ? "1) Agree to return the money\n2) Refuse" : "1) Approve (money leaves your wallet)\n2) Reject");
+    const kind = getApproval(w, ref)?.kind;
+    return show(
+      kind === "dispute" ? "1) Agree to return the money\n2) Refuse" : kind === "preapproval" ? "1) Allow (they can charge you without asking)\n2) Refuse" : kind === "consent" ? "1) Share my details\n2) Refuse" : "1) Approve (money leaves your wallet)\n2) Reject",
+    );
   }
   if (d.step === "decide") {
     if (input !== "1") {
-      const dispute = getApproval(w, d.ref!)?.kind === "dispute";
+      const kind = getApproval(w, d.ref!)?.kind;
       rejectApproval(w, d.ref!, "Rejected by payer");
-      return end(dispute ? "You have refused. Customer care will review the claim." : "Request rejected.");
+      return end(kind === "dispute" ? "You have refused. Customer care will review the claim." : kind === "preapproval" || kind === "consent" ? "You have refused." : "Request rejected.");
     }
     s.pending = { kind: "approvals", data: { step: "pin", ref: d.ref } };
     return show("Enter PIN to approve");

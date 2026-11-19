@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ActionButton, ActionForm, Loading, REGIONS, Section, Shell, Stat, Stats, Status, Table, Tabs, useView } from "@/components/ui";
 import { when } from "@/lib/client";
+import { ApiPartners, type ApiPartner } from "./partners";
 
 interface Person {
   id: string;
@@ -21,10 +22,11 @@ interface Person {
 interface NiaView {
   stats: { cards: number; suspended: number; checks: number; failed: number };
   people: Person[];
+  apiPartners: ApiPartner[];
   log: { id: number; at: string; requesterName: string; purpose: string; ghana_card: string; biometric: boolean; result: string }[];
 }
 
-const TABS = [["enrol", "Enrol a person"], ["register", "National register"], ["log", "Verification requests"]] as const;
+const TABS = [["enrol", "Enrol a person"], ["register", "National register"], ["log", "Verification requests"], ["api", "API partners"]] as const;
 
 export default function Nia({ team }: { team: string }) {
   const path = "/s/nia";
@@ -89,6 +91,18 @@ export default function Nia({ team }: { team: string }) {
                 ]}
               />
             </Section>
+          )}
+
+          {tab === "api" && (
+            <ApiPartners
+              team={team}
+              path={path}
+              partners={data.apiPartners}
+              onChange={refresh}
+              institution="NIA"
+              apiPath="/nia"
+              what="NIA lets certified institutions verify a Ghana Card from their own systems. With the holder's fingerprint the answer includes their details; with the card number alone it only says whether the card is valid."
+            />
           )}
 
           {tab === "log" && (
