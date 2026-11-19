@@ -48,7 +48,7 @@ Things to know:
 - **It sleeps.** A Codespace stops after 30 minutes without activity in the Codespace itself; phones using the app do not count. Raise the limit under GitHub **Settings → Codespaces → Default idle timeout**, or keep the Codespace tab in use. Reopening it starts the sandbox again with the same worlds.
 - **The address belongs to that Codespace.** A new Codespace has a new address and so new QR codes.
 
-To restart by hand: `bash .devcontainer/start.sh`. This is for testing; for the event use the server under Deploying.
+A Codespace holds the code as it was when the Codespace was created. To bring in changes pushed since then, run `bash .devcontainer/start.sh update` in its terminal: it fetches the latest code, rebuilds and restarts, and keeps the team worlds. `bash .devcontainer/start.sh stop` stops the sandbox and `bash .devcontainer/start.sh` starts it. This is for testing; for the event use the server under Deploying.
 
 ## The systems
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 # Runs each time the Codespace is opened: starts the sandbox if it is not already running,
 # makes its address reachable from phones, and prints the organiser key and every team's link.
+#   bash .devcontainer/start.sh           start (or show the links if it is already running)
+#   bash .devcontainer/start.sh update    get the latest code for this branch, rebuild and restart
+#   bash .devcontainer/start.sh stop      stop the sandbox
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -40,6 +43,23 @@ make_public() {
   fi
 }
 
+stop() {
+  pkill -f next-server 2>/dev/null
+  for _ in $(seq 1 10); do up || return 0; sleep 1; done
+}
+
+# "bash .devcontainer/start.sh update" fetches the latest code for this branch and restarts on it.
+# Team worlds are kept.
+if [ "${1:-}" = "update" ]; then
+  echo "Getting the latest code..."
+  git pull --ff-only || { echo "Could not update. If it mentions local changes, run: git stash    then try again."; exit 1; }
+  stop
+elif [ "${1:-}" = "stop" ]; then
+  stop
+  echo "The sandbox is stopped. Start it again with: bash .devcontainer/start.sh"
+  exit 0
+fi
+
 if up; then
   echo "The sandbox is already running."
   make_public
@@ -66,4 +86,5 @@ make_public
 show_links
 echo
 echo "The sandbox keeps running if you close this terminal. Server log: $LOG"
-echo "To stop it: pkill -f 'next start'      To start it again: bash .devcontainer/start.sh"
+echo "Get the latest code and restart:  bash .devcontainer/start.sh update"
+echo "Stop it:                          bash .devcontainer/start.sh stop"
