@@ -10,7 +10,8 @@ import { personById } from "@/engine/nia";
 import { clientWallet, createClient, getClient, rotateSecret, type ApiClient } from "@/engine/partners";
 import { walletPay } from "@/engine/payments";
 import { sendAppSms } from "@/engine/sms";
-import { withLock, type World } from "@/engine/world";
+import { locked } from "@/engine/integrations";
+import type { World } from "@/engine/world";
 import { SimError, TELCOS, cedis, normalizeMsisdn, toIntl, type Telco } from "@/engine/util";
 
 /**
@@ -136,14 +137,14 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     const id = req.headers.get("x-reference-id") ?? randomUUID();
     const b = await json(req).catch(() => ({}) as Record<string, unknown>);
     const host = str(b.providerCallbackHost);
-    await withLock(w, () => createClient(w, telco, { id, name: str(b.name) ?? `API user ${id.slice(0, 8)}`, till: req.headers.get("x-merchant-id") ?? undefined, callbackUrl: host ? (/^https?:\/\//.test(host) ? host : `https://${host}`) : undefined }));
+    await locked(w, () => createClient(w, telco, { id, name: str(b.name) ?? `API user ${id.slice(0, 8)}`, till: req.headers.get("x-merchant-id") ?? undefined, callbackUrl: host ? (/^https?:\/\//.test(host) ? host : `https://${host}`) : undefined }));
     return new Response(null, { status: 201 });
   }
   if ((m = path.match(/^v1_0\/apiuser\/([\w-]+)\/apikey$/))) {
     const w = await authWorld(req, team);
     const id = m[1];
     if (getClient(w, id)?.institution !== telco) return momoError(404, "RESOURCE_NOT_FOUND", "API user not found");
-    return NextResponse.json({ apiKey: await withLock(w, () => rotateSecret(w, telco, id)) }, { status: 201 });
+    return NextResponse.json({ apiKey: await locked(w, () => rotateSecret(w, telco, id)) }, { status: 201 });
   }
 
   const who = await caller(req, team, telco);
@@ -159,7 +160,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     if (!amount || !payer) return momoError(400, "INVALID_INPUT", "amount and payer.partyId are required");
     if (b.currency && b.currency !== "GHS") return momoError(400, "INVALID_CURRENCY", "Currency must be GHS");
     if (getApproval(w, ref)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
-    await withLock(w, () =>
+    await locked(w, () =>
       createApproval(w, { ref, kind: "rtp", payeeWallet: who.wallet().id, payerMsisdn: normalizeMsisdn(payer), amount, externalId: str(b.externalId), payerMessage: str(b.payerMessage) ?? (m![1] === "requesttowithdraw" ? "Withdrawal" : undefined), payeeNote: str(b.payeeNote), callbackUrl }),
     );
     return accepted();
@@ -172,7 +173,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     if (!r || r.telco !== telco || r.kind !== "rtp" || r.payee_wallet !== who.wallet().id) return momoError(404, "RESOURCE_NOT_FOUND", "Requested resource was not found");
     if (r.status !== "SUCCESSFUL") return momoError(409, "NOT_ALLOWED", "A delivery notification can only follow a successful payment");
     if (!text || text.length > 160) return momoError(400, "INVALID_INPUT", "notificationMessage is required, at most 160 characters");
-    await withLock(w, () => sendAppSms(w, { display_name: who.wallet().display_name, telco }, { to: r.payer_msisdn, text }));
+    await locked(w, () => sendAppSms(w, { display_name: who.wallet().display_name, telco }, { to: r.payer_msisdn, text }));
     return new Response(null, { status: 200 });
   }
 
@@ -181,7 +182,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     const payer = party(b.payer);
     if (!payer) return momoError(400, "INVALID_INPUT", "payer.partyId is required");
     if (getPreapproval(w, ref)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
-    await withLock(w, () => createPreapproval(w, { ref, payeeWallet: who.wallet().id, payerMsisdn: normalizeMsisdn(payer), message: str(b.payerMessage), validitySeconds: Number(b.validityTime) || undefined }));
+    await locked(w, () => createPreapproval(w, { ref, payeeWallet: who.wallet().id, payerMsisdn: normalizeMsisdn(payer), message: str(b.payerMessage), validitySeconds: Number(b.validityTime) || undefined }));
     return accepted();
   }
 
@@ -192,7 +193,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     const hint = (form.get("login_hint") ?? "").replace(/^(ID|MSISDN):/i, "").replace(/\/MSISDN$/i, "");
     if (!hint) return momoError(400, "INVALID_INPUT", "login_hint is required, e.g. ID:233241234567/MSISDN");
     try {
-      const c = await withLock(w, () => createConsent(w, { clientId: who.client!.id, partnerName: who.name, msisdn: normalizeMsisdn(hint), scope: form.get("scope") ?? "profile" }));
+      const c = await locked(w, () => createConsent(w, { clientId: who.client!.id, partnerName: who.name, msisdn: normalizeMsisdn(hint), scope: form.get("scope") ?? "profile" }));
       return { auth_req_id: c.ref, interval: 5, expires_in: 600 };
     } catch (e) {
       if (e instanceof SimError) return momoError(404, "RESOURCE_NOT_FOUND", e.message);
@@ -218,7 +219,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     const amount = amountOf(b.amount);
     if (!amount || !payee) return momoError(400, "INVALID_INPUT", "amount and payee.partyId are required");
     if (getPayout(w, ref, telco)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
-    const r = await withLock(w, () => payout(w, telco, who.wallet(), ref, { msisdn: normalizeMsisdn(payee), amount, externalId: str(b.externalId), payerMessage: str(b.payerMessage), payeeNote: str(b.payeeNote) }));
+    const r = await locked(w, () => payout(w, telco, who.wallet(), ref, { msisdn: normalizeMsisdn(payee), amount, externalId: str(b.externalId), payerMessage: str(b.payerMessage), payeeNote: str(b.payeeNote) }));
     void notifyPartner(callbackUrl, { referenceId: ref, ...payoutView(r) });
     return accepted();
   }
@@ -234,7 +235,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     if (getPayout(w, ref, telco)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
     const refunded = Number((w.db.prepare("SELECT COALESCE(SUM(amount),0) AS n FROM api_transfers WHERE external_id = ? AND status = 'SUCCESSFUL'").get(`refund:${original.ref}`) as { n: number }).n);
     if (refunded + amount > original.amount) return momoError(409, "NOT_ALLOWED", "The refund is more than what is left of the original payment");
-    const r = await withLock(w, () => payout(w, telco, who.wallet(), ref, { msisdn: original.payer_msisdn, amount, externalId: `refund:${original.ref}`, payerMessage: str(b.payerMessage) ?? "Refund", payeeNote: str(b.payeeNote), waiveFee: true }));
+    const r = await locked(w, () => payout(w, telco, who.wallet(), ref, { msisdn: original.payer_msisdn, amount, externalId: `refund:${original.ref}`, payerMessage: str(b.payerMessage) ?? "Refund", payeeNote: str(b.payeeNote), waiveFee: true }));
     void notifyPartner(callbackUrl, { referenceId: ref, ...payoutView(r) });
     return accepted();
   }
@@ -307,6 +308,6 @@ export const DELETE = handle(async (req: Request, ctx: Ctx) => {
   const m = path.match(/^collection\/v[12]_0\/preapproval\/([\w-]+)$/);
   if (!m) return momoError(404, "NOT_FOUND", `No such endpoint: DELETE ${path}`);
   const who = await caller(req, team, telco);
-  await withLock(who.w, () => cancelPreapproval(who.w, m[1], who.wallet().id));
+  await locked(who.w, () => cancelPreapproval(who.w, m[1], who.wallet().id));
   return new Response(null, { status: 200 });
 });

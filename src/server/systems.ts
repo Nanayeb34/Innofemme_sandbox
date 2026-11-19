@@ -5,6 +5,7 @@ import { openAccount, setAccountStatus } from "@/engine/bank";
 import { getConfig } from "@/engine/config/store";
 import { TIERS, type KycTier } from "@/engine/config/schemas";
 import { count } from "@/engine/db";
+import { EVENTS, SAMPLES, addIntegration, integrationLog, listIntegrations, pointsFor, removeIntegration, setIntegrationEnabled, testIntegration } from "@/engine/integrations";
 import { balanceOf, getTxn, getWallet, walletByMsisdn } from "@/engine/ledger";
 import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } from "@/engine/nia";
 import { createClient, listClients, rotateSecret, setClientStatus } from "@/engine/partners";
@@ -119,6 +120,32 @@ function partnerActions(institution: string): System["actions"] {
     },
   };
 }
+
+/** What a telco or bank can do with the outside APIs it has plugged into its own steps. */
+function pluginActions(institution: string): System["actions"] {
+  return {
+    plugin_add(w, b) {
+      const i = addIntegration(w, institution, { point: str(b.point), name: str(b.name), url: str(b.url), failOpen: b.ifDown !== "refuse", timeoutMs: b.timeoutMs });
+      return ok(`"${i.name}" is plugged in. From now on it is asked every time.`);
+    },
+    plugin_switch(w, b) {
+      setIntegrationEnabled(w, institution, b.id, b.on === true || b.on === "true");
+      return ok("Updated.");
+    },
+    plugin_remove(w, b) {
+      removeIntegration(w, institution, b.id);
+      return ok("Unplugged.");
+    },
+    plugin_test: async (w, b) => ok(await testIntegration(w, institution, b.id)),
+  };
+}
+
+const pluginView = (w: World, institution: string) => ({
+  plugins: listIntegrations(w, institution),
+  pluginPoints: pointsFor(institution).map(([id, p]) => ({ id, when: p.when, answers: p.answers, sample: SAMPLES[id] })),
+  pluginEvents: EVENTS,
+  pluginCalls: integrationLog(w, institution),
+});
 
 // ---------- hub ----------
 
@@ -239,6 +266,7 @@ function telcoSystem(t: Telco): System {
         })),
         sms: smsRecords(w, t),
         apiPartners: listClients(w, t),
+        ...pluginView(w, t),
         shortCodes: listCodes(w).map((c) => ({ ...c, on: c.networks.includes(t) })),
         simEvents: (w.db.prepare("SELECT e.* FROM sim_events e JOIN sims s ON s.msisdn = e.msisdn WHERE s.telco = ? ORDER BY e.id DESC LIMIT 80").all(t) as { id: number; msisdn: string; at: number; kind: string; by: string; detail: string }[]).map((e) => ({ ...e, at: iso(e.at) })),
         activity: auditFeed(w, t),
@@ -294,6 +322,7 @@ function telcoSystem(t: Telco): System {
         return ok(on ? "Switched on for this network's subscribers." : "Switched off.");
       },
       ...partnerActions(t),
+      ...pluginActions(t),
       settings: saveSettings(`telco.${t}`),
       txn: txnDetail,
     },
@@ -654,10 +683,12 @@ function bankSystem(bank: string): System {
         activity: auditFeed(w, bank),
         config: getConfig(w.db, `bank.${bank}`),
         apiPartners: listClients(w, bank),
+        ...pluginView(w, bank),
       };
     },
     actions: {
       ...partnerActions(bank),
+      ...pluginActions(bank),
       open_account(w, b) {
         const a = openAccount(w, bank, { card: str(b.card), fingerprint: str(b.fingerprint) });
         return ok(`Account opened for ${a.name}. Account number: ${a.account_no}`);

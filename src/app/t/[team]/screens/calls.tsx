@@ -15,6 +15,8 @@ export interface CallState {
   peerNetwork: string;
   status: "ringing" | "active" | "ended" | "missed" | "declined" | "busy" | "failed";
   reason: string | null;
+  /** A label the network put on this incoming call. */
+  warning?: string;
   offer?: string;
   answer?: string;
   candidates: RTCIceCandidateInit[];
@@ -312,6 +314,7 @@ export function CallScreen({ calls }: { calls: Calls }) {
         <div className="text-sm text-gray-300">{status}</div>
         <div className="mt-3 text-3xl font-semibold tracking-wide">{call.peer}</div>
         {call.peerNetwork && <div className="mt-1 text-sm text-gray-400">{call.peerNetwork}</div>}
+        {call.warning && <p className="mx-auto mt-4 max-w-[260px] rounded-lg bg-amber-400 px-3 py-2 text-sm font-medium text-gray-900">⚠ {call.warning}</p>}
         {audio === "failed" && (
           <p className="mx-auto mt-4 max-w-[240px] text-xs text-amber-300">
             The two phones could not reach each other. {calls.relay ? "Check the Wi-Fi connection." : "This Wi-Fi may stop phones talking directly. Ask an organiser to switch on the call relay."}

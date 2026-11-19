@@ -117,6 +117,33 @@ Besides the consoles, each institution has the API it would give an outside comp
 
 Subscriber details, texts, payments and identity checks are what licensed partners get in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries and could not be confirmed for Ghana. Not included: an outside company cannot see a network's full transaction feed, freeze a wallet or block a SIM; those stay inside the institution (the console API).
 
+## Plug-in points
+
+A team's product can be an API that a network or bank adds to its own system. Each network and bank
+console has a **Plug-ins** tab: enter the API's address and choose the step it should be asked at. From
+then on the institution sends the details to that API every time the step happens, waits for the answer,
+and acts on it.
+
+| Step | Asked when | The API can answer |
+| --- | --- | --- |
+| `pin.set` | a customer chooses or changes a wallet PIN | allow, reject |
+| `wallet.open` | a wallet is about to be opened | allow, reject |
+| `payment.authorize` | a payment is about to leave a wallet | allow, warn, delay, reject |
+| `sim.register` | a SIM is about to be registered | allow, reject |
+| `sim.swap` | a number is about to move to a replacement SIM | allow, reject |
+| `sms.deliver` | a text is about to reach a subscriber | allow, warn, reject |
+| `call.connect` | a call is about to ring a subscriber | allow, warn, reject |
+| `transfer.authorize` (banks) | a transfer is about to leave an account | allow, reject |
+| `events` | after something has happened | nothing: it is only told |
+
+`examples/pin-check-api.mjs` is a complete example: it rejects a PIN that is the end of the customer's
+number, one digit repeated, a simple sequence or their date of birth. Run it with
+`node examples/pin-check-api.mjs`, plug `http://localhost:4010/` into a network at "A customer chooses or
+changes a wallet PIN", and register a wallet on the customer phone. The API reference inside the app
+(section 7) shows exactly what is sent at each step.
+
+With nothing plugged in, the sandbox behaves exactly as it did before.
+
 ## Customer care and disputes
 
 A customer raises a complaint by calling 100 (a real voice call to their network's care console, when an agent there is on line) or from the phone: wallet short code → My Wallet → Report a Problem. Either way a ticket is opened and the customer is told by SMS.

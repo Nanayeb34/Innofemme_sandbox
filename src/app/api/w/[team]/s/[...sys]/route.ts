@@ -1,6 +1,7 @@
 import { authWorld, body, handle } from "@/server/http";
 import { resolveSystem } from "@/server/systems";
 import { SimError } from "@/engine/util";
+import { locked } from "@/engine/integrations";
 import { withLock } from "@/engine/world";
 import type { Role } from "@/engine/worlds";
 
@@ -29,5 +30,5 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   const b = await body(req);
   const action = system.actions[String(b.action)];
   if (!action) throw new SimError(`Unknown action. This system supports: ${Object.keys(system.actions).join(", ")}`);
-  return withLock(w, () => action(w, b));
+  return locked(w, () => action(w, b));
 });

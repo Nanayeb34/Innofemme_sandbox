@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ActionButton, ActionForm, Activity, Badge, ID_FIELDS, Loading, Section, SettingsHistory, SettingsJson, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs } from "@/lib/client";
 import { ApiPartners, type ApiPartner } from "./partners";
+import { Plugins, type PluginView } from "./plugins";
 
 interface BankView {
   bank: string;
@@ -17,9 +18,13 @@ interface BankView {
   activity: ActivityRow[];
   config: { fees: unknown };
   apiPartners: ApiPartner[];
+  plugins: PluginView["plugins"];
+  pluginPoints: PluginView["pluginPoints"];
+  pluginEvents: PluginView["pluginEvents"];
+  pluginCalls: PluginView["pluginCalls"];
 }
 
-const TABS = [["counter", "Counter"], ["transfers", "Transfers and agent float"], ["accounts", "Accounts"], ["txns", "Transactions"], ["api", "API partners"], ["settings", "Settings"]] as const;
+const TABS = [["counter", "Counter"], ["transfers", "Transfers and agent float"], ["accounts", "Accounts"], ["txns", "Transactions"], ["api", "API partners"], ["plugins", "Plug-ins"], ["settings", "Settings"]] as const;
 
 export default function Bank({ team, bank }: { team: string; bank: string }) {
   const path = `/s/bank/${bank}`;
@@ -146,6 +151,8 @@ export default function Bank({ team, bank }: { team: string; bank: string }) {
           <TxnTable team={team} rows={data.txns} />
         </Section>
       )}
+
+      {tab === "plugins" && <Plugins team={team} path={path} institution={data.name} view={data} onChange={refresh} />}
 
       {tab === "api" && (
         <ApiPartners

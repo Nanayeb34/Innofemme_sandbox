@@ -647,3 +647,197 @@ describe("fees", () => {
     expect(fee("telecel", "cashout", 2000)).toBe(20);
   });
 });
+
+describe("plug-in points: an outside API plugged into an institution's own steps", () => {
+  let w: World;
+  let api: import("node:http").Server;
+  let url = "";
+  let amaNo = "", kofiNo = "", point = "";
+  /** How the pretend outside API answers, and everything it was asked. */
+  let answer: (point: string, data: Record<string, unknown>) => Record<string, unknown> = () => ({ decision: "allow" });
+  const asked: { point: string; data: Record<string, unknown> }[] = [];
+  let run: <T>(fn: () => T) => Promise<T>;
+  let plug: (institution: string, point: string, extra?: Record<string, unknown>) => string;
+  const settled = () => new Promise((r) => setTimeout(r, 60));
+
+  beforeAll(async () => {
+    const http = await import("node:http");
+    const integrations = await import("../src/engine/integrations");
+    api = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const j = JSON.parse(body) as { point: string; data: Record<string, unknown> };
+        asked.push(j);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(answer(j.point, j.data)));
+      });
+    });
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    url = `http://127.0.0.1:${(api.address() as import("node:net").AddressInfo).port}/`;
+
+    w = await resetWorld("team-02");
+    run = (fn) => integrations.locked(w, fn);
+    plug = (institution, p, extra = {}) => integrations.addIntegration(w, institution, { point: p, name: `Test ${p}`, url, ...extra }).id;
+    const [ama, kofi] = [person(w, "Ama", "Serwaa", "1994-03-12"), person(w, "Kofi", "Badu", "1988-08-08")];
+    telco.generateSims(w, "mtn", 3);
+    point = telco.onboardSimAgent(w, "mtn", { card: ama.ghana_card, name: "Point", kind: "service_centre", town: "Tema" }).id;
+    amaNo = telco.registerSim(w, "mtn", point, { card: ama.ghana_card, fingerprint: ama.fingerprint }).sim.msisdn;
+    kofiNo = telco.registerSim(w, "mtn", point, { card: kofi.ghana_card, fingerprint: kofi.fingerprint }).sim.msisdn;
+    return () => api.close();
+  });
+
+  it("a PIN-checking API rejects the last four digits of the number, and the customer is asked for another", async () => {
+    answer = (p, d) => (p === "pin.set" && String(d.msisdn).endsWith(String(d.pin)) ? { decision: "reject", message: "Too easy to guess: it is the end of your number." } : { decision: "allow" });
+    plug("mtn", "pin.set");
+    const weak = amaNo.slice(-4);
+    const strong = weak === "2580" ? "1379" : "2580";
+
+    let s = await run(() => ussd(w, { msisdn: amaNo, input: "*170#" }));
+    s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input: "1" }));
+    expect(s.text).toMatch(/Create a 4-digit PIN/);
+    // The weak PIN is refused with the API's own words, and the session stays open for another try.
+    s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input: weak }));
+    expect(s).toMatchObject({ end: false });
+    expect(s.text).toMatch(/Too easy to guess/);
+    expect(walletByMsisdn(w, amaNo)).toBeUndefined();
+    s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input: strong }));
+    expect(s.text).toMatch(/again to confirm/);
+    s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input: strong }));
+    expect(s.text).toMatch(/You are now registered/);
+    expect(walletByMsisdn(w, amaNo)?.pin).toBe(strong);
+
+    // The API was told who was choosing, and the network kept a record of each question and answer.
+    expect(asked[0]).toMatchObject({ point: "pin.set", data: { msisdn: amaNo, pin: weak, reason: "new_wallet", customer: { name: "Ama Serwaa", dateOfBirth: "1994-03-12" } } });
+    const log = view<{ pluginCalls: { decision: string; message: string | null }[] }>(w, "telco", "mtn").pluginCalls;
+    expect(log.map((c) => c.decision)).toContain("reject");
+
+    // It also guards a PIN change, and an agent opening a wallet for someone.
+    await expect(run(() => telco.changePin(w, walletByMsisdn(w, amaNo)!, weak))).rejects.toThrow(/Too easy to guess/);
+    expect(walletByMsisdn(w, amaNo)?.pin).toBe(strong);
+    // Other networks are not affected: nothing is plugged into them.
+    const before = asked.length;
+    await run(() => telco.generateSims(w, "telecel", 1));
+    expect(asked.length).toBe(before);
+  });
+
+  it("at the moment of payment the API can warn, pause or block, and a half-done payment leaves no trace", async () => {
+    const strong = walletByMsisdn(w, amaNo)!.pin;
+    await run(() => telco.selfRegisterWallet(w, kofiNo, "8642"));
+    w.db.prepare("UPDATE wallets SET balance = 50000 WHERE msisdn = ?").run(amaNo);
+    w.db.prepare("INSERT INTO postings(txn_id, account, amount, at) VALUES('seed', ?, 50000, 0)").run(`w:w_${amaNo}`);
+    const send = async (amount: string, ...more: string[]) => {
+      let s = await run(() => ussd(w, { msisdn: amaNo, input: "*170#" }));
+      for (const input of ["1", "1", kofiNo, kofiNo, amount, "test", strong, ...more]) {
+        if (s.end) break;
+        s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input }));
+      }
+      return s;
+    };
+    const txns = () => count(w.db, "SELECT COUNT(*) AS n FROM txns");
+    const balance = () => walletByMsisdn(w, amaNo)!.balance;
+
+    plug("mtn", "payment.authorize");
+    plug("mtn", "events");
+
+    // Warn: nothing moves until the customer has read the warning and chosen to continue.
+    answer = (p) => (p === "payment.authorize" ? { decision: "warn", message: "You have never paid this number before." } : {});
+    const [n0, b0] = [txns(), balance()];
+    let s = await send("20");
+    expect(s).toMatchObject({ end: false });
+    expect(s.text).toMatch(/never paid this number before[\s\S]*1\) Continue/);
+    expect([txns(), balance()]).toEqual([n0, b0]);
+    const question = asked.findLast((a) => a.point === "payment.authorize")!;
+    expect(question.data).toMatchObject({ type: "p2p", amount: 20, payer: { msisdn: amaNo, balance: 500, onCallWith: null }, payee: { msisdn: kofiNo }, paymentsToThisPayeeBefore: 0, afterDelay: false });
+    // Cancel: still nothing moved.
+    s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input: "2" }));
+    expect(s.text).toMatch(/cancelled/i);
+    expect(balance()).toBe(b0);
+    // Continue: the money moves.
+    s = await send("20", "1");
+    expect(s.text).toMatch(/sent to Kofi Badu/);
+    expect(balance()).toBeLessThan(b0);
+    await settled();
+    expect(asked.filter((a) => a.point === "events").map((a) => a.data.event)).toEqual(expect.arrayContaining(["payment.warning_shown", "payment.cancelled_after_warning", "payment.completed"]));
+    expect(asked.findLast((a) => a.data.event === "payment.completed")!.data).toMatchObject({ continuedAfterWarning: true, amount: 20 });
+
+    // Block: refused with the API's message, and the refusal is on the network's records.
+    answer = (p) => (p === "payment.authorize" ? { decision: "reject", message: "This number has been reported for fraud." } : {});
+    const b1 = balance();
+    s = await send("30");
+    expect(s.text).toMatch(/reported for fraud/);
+    expect(balance()).toBe(b1);
+    expect((w.db.prepare("SELECT status, reason FROM txns ORDER BY rowid DESC LIMIT 1").get() as { status: string; reason: string })).toMatchObject({ status: "failed", reason: "This number has been reported for fraud." });
+
+    // Pause: refused now, and again without asking while the pause lasts.
+    answer = (p) => (p === "payment.authorize" ? { decision: "delay", minutes: 5, message: "Paused for 5 minutes. Hang up and think it over." } : {});
+    s = await send("30");
+    expect(s.text).toMatch(/Hang up and think it over/);
+    const questions = asked.filter((a) => a.point === "payment.authorize").length;
+    s = await send("30");
+    expect(s.text).toMatch(/paused for your protection until/);
+    expect(asked.filter((a) => a.point === "payment.authorize").length).toBe(questions);
+    expect(balance()).toBe(b1);
+
+    // The books still balance after all of that.
+    expect(count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings WHERE txn_id != 'seed'")).toBe(0);
+  });
+
+  it("an API that is down is treated as its owner chose: carry on, or refuse", async () => {
+    const integrations = await import("../src/engine/integrations");
+    w.cooldowns.clear();
+    for (const p of integrations.listIntegrations(w, "mtn")) integrations.removeIntegration(w, "mtn", p.id);
+    const dead = "http://127.0.0.1:9/";
+    const id = integrations.addIntegration(w, "mtn", { point: "payment.authorize", name: "Down", url: dead }).id;
+    const from = walletByMsisdn(w, amaNo)!, to = walletByMsisdn(w, kofiNo)!;
+    const b0 = from.balance;
+    await run(() => pay.walletPay(w, { type: "p2p", channel: "api", from: from.id, to: to.id, amount: 1000 }));
+    expect(walletByMsisdn(w, amaNo)!.balance).toBeLessThan(b0);
+    integrations.removeIntegration(w, "mtn", id);
+    integrations.addIntegration(w, "mtn", { point: "payment.authorize", name: "Down, strict", url: dead, failOpen: false });
+    await expect(run(() => pay.walletPay(w, { type: "p2p", channel: "api", from: from.id, to: to.id, amount: 1000 }))).rejects.toThrow(/temporarily unavailable/);
+    expect(integrations.integrationLog(w, "mtn")[0]).toMatchObject({ decision: "error" });
+    expect(() => integrations.addIntegration(w, "mtn", { point: "transfer.authorize", name: "x", url })).toThrow(/no such step/);
+    expect(() => integrations.addIntegration(w, "mtn", { point: "pin.set", name: "x", url: "http://169.254.169.254/latest" })).toThrow(/not allowed/);
+    for (const p of integrations.listIntegrations(w, "mtn")) integrations.removeIntegration(w, "mtn", p.id);
+  });
+
+  it("SIM swaps, texts, calls and bank transfers can be screened too", async () => {
+    const sms = await import("../src/engine/sms");
+    const calls = await import("../src/engine/calls");
+    const ama = w.db.prepare("SELECT p.* FROM persons p JOIN sims s ON s.person_id = p.id WHERE s.msisdn = ?").get(amaNo) as unknown as Person;
+    for (const p of ["sim.swap", "sms.deliver", "call.connect"]) plug("mtn", p);
+    answer = (p, d) =>
+      p === "sim.swap" ? { decision: "reject", message: "Too many replacements requested at this point today." }
+      : p === "sms.deliver" ? (/by mistake/.test(String(d.text)) ? { decision: "warn", message: "Possible scam" } : /win/.test(String(d.text)) ? { decision: "reject" } : { decision: "allow" })
+      : p === "call.connect" ? { decision: "warn", message: "Reported 12 times as a scam caller" }
+      : { decision: "allow" };
+
+    await expect(run(() => telco.swapSim(w, "mtn", point, { msisdn: amaNo, card: ama.ghana_card, fingerprint: ama.fingerprint }))).rejects.toThrow(/Too many replacements/);
+    expect(asked.findLast((a) => a.point === "sim.swap")!.data).toMatchObject({ msisdn: amaNo, hasWallet: true, swapsOnThisNumberBefore: 0 });
+    expect(telco.getSim(w, amaNo)!.last_swap_at).toBeNull();
+
+    // A text with a warning arrives labelled; a blocked one never arrives.
+    expect(await run(() => sms.sendText(w, { from: kofiNo, to: amaNo, text: "I sent you GHS 500 by mistake" }))).toMatchObject({ delivered: true });
+    expect(sms.thread(w, amaNo, kofiNo).messages.at(-1)).toMatchObject({ out: false, warning: "Possible scam" });
+    expect(sms.thread(w, kofiNo, amaNo).messages.at(-1)).toMatchObject({ out: true, warning: null });
+    expect(await run(() => sms.sendText(w, { from: kofiNo, to: amaNo, text: "You win a prize" }))).toMatchObject({ delivered: false });
+    expect(sms.thread(w, amaNo, kofiNo).messages.at(-1)!.body).toMatch(/by mistake/);
+
+    // An incoming call shows the label on the screen of the person being called.
+    calls.pollCall(w, { msisdn: amaNo, device: "A" });
+    const { id } = await run(() => calls.startCall(w, { from: kofiNo, to: amaNo, device: "K", offer: "o" }));
+    expect(calls.pollCall(w, { msisdn: amaNo, device: "A" }).call).toMatchObject({ id, role: "callee", warning: "Reported 12 times as a scam caller" });
+    expect(calls.pollCall(w, { msisdn: kofiNo, device: "K", callId: id }).call?.warning).toBeUndefined();
+    calls.endCall(w, { callId: id, msisdn: kofiNo });
+
+    // A bank asks before money leaves an account.
+    plug("gcb", "transfer.authorize");
+    answer = (p) => (p === "transfer.authorize" ? { decision: "reject", message: "Unusual transfer for this account." } : { decision: "allow" });
+    const account = openAccount(w, "gcb", { card: ama.ghana_card, fingerprint: ama.fingerprint });
+    pay.bankCash(w, { bank: "gcb", account: account.id, amount: 100000, kind: "deposit" });
+    await expect(run(() => pay.bankToWallet(w, { bank: "gcb", fromAccount: account.id, msisdn: kofiNo, amount: 5000 }))).rejects.toThrow(/Unusual transfer/);
+    // Cash over the counter is not a transfer from an account, so it is not screened.
+    await run(() => pay.bankToWallet(w, { bank: "gcb", msisdn: kofiNo, amount: 5000 }));
+  });
+});

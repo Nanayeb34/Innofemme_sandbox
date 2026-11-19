@@ -1,7 +1,7 @@
 import { HttpError, body, handle } from "@/server/http";
 import { issueToken, requirePartner } from "@/server/partner-auth";
 import { verify } from "@/engine/nia";
-import { withLock } from "@/engine/world";
+import { locked } from "@/engine/integrations";
 import { SimError } from "@/engine/util";
 
 /**
@@ -24,7 +24,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   const b = await body(req);
   if (!b.cardNumber) throw new HttpError(400, "cardNumber is required");
   const biometric = !!b.fingerprint;
-  return withLock(w, () => {
+  return locked(w, () => {
     try {
       const p = verify(w, { requester: client.name, purpose: String(b.purpose ?? "API verification").slice(0, 80), card: String(b.cardNumber), fingerprint: b.fingerprint as string | undefined, biometric });
       if (!biometric) return { valid: true, cardNumber: p.ghana_card, biometricMatch: null };

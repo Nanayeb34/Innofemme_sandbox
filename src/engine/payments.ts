@@ -1,10 +1,11 @@
 import { getConfig } from "./config/store";
 import type { FeeKind } from "./config/schemas";
 import { count, tx } from "./db";
+import { Confirm, consult, emit } from "./integrations";
 import { accountByNumber, checkPin, feeFor, getAccount, getTxn, getWallet, insertTxn, post, walletByMsisdn, type AccountRow, type TxnRow, type WalletRow } from "./ledger";
 import { notify } from "./notify";
 import { commit, positionEntries, route } from "./switch";
-import { DAY, HOUR, SimError, TELCO_INFO, bankName, cedis, newId, type Telco } from "./util";
+import { DAY, HOUR, MINUTE, SimError, TELCO_INFO, bankName, cedis, clock, newId, type Telco } from "./util";
 import { audit, type World } from "./world";
 
 /** Every way money moves: wallet payments, agent cash-in and cash-out, bank transfers and teller cash. */
@@ -56,6 +57,45 @@ function senderProblem(w: World, from: WalletRow): string | undefined {
   if (hold && sim.last_swap_at && w.now - sim.last_swap_at < hold * HOUR) return `This number had a SIM replacement recently. Sending money is paused for ${hold} hours after a SIM swap.`;
 }
 
+const iso = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString() : null);
+const describeWallet = (x: WalletRow) => ({ msisdn: x.msisdn, name: x.display_name, network: x.telco, walletType: x.owner_type, kycTier: x.kyc_tier, walletOpenedAt: iso(x.created_at) });
+const describeAccount = (a: AccountRow) => ({ bank: a.bank, bankName: bankName(a.bank), accountNumber: a.account_no, name: a.name, accountOpenedAt: iso(a.created_at) });
+
+/** What the payer's network tells an API plugged in at "payment.authorize" about the person paying. */
+function describePayer(w: World, from: WalletRow) {
+  const call = w.db.prepare("SELECT from_msisdn, to_msisdn FROM calls WHERE status = 'active' AND (from_msisdn = ? OR to_msisdn = ?) LIMIT 1").get(from.msisdn, from.msisdn) as { from_msisdn: string; to_msisdn: string } | undefined;
+  const day = w.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS total FROM txns WHERE from_wallet = ? AND status = 'success' AND created_at >= ?").get(from.id, w.now - DAY) as { n: number; total: number };
+  return {
+    ...describeWallet(from),
+    balance: from.balance / 100,
+    lastSimSwapAt: iso(simOf(w, from.msisdn)?.last_swap_at),
+    // The number the payer is talking to right now, if they are on a call: the classic sign of someone being talked through a payment.
+    onCallWith: call ? (call.from_msisdn === from.msisdn ? call.to_msisdn : call.from_msisdn) : null,
+    paymentsInLast24Hours: Number(day.n),
+    amountSentInLast24Hours: Number(day.total) / 100,
+  };
+}
+
+/**
+ * The moment of authorisation: the payer's network asks any API plugged in at "payment.authorize"
+ * whether the payment may go ahead. It can allow it, block it, pause it, or ask that the customer
+ * be warned first (only where the customer is in front of a screen that can show the warning).
+ */
+function authorize(w: World, from: WalletRow, payeeKey: string, about: Record<string, unknown>, o: { interactive: boolean; acknowledged?: boolean }, no: (why: string) => never) {
+  const key = `${from.id}>${payeeKey}`;
+  const until = w.cooldowns.get(key);
+  if (until && w.now < until) no(`This payment is paused for your protection until ${clock(until).slice(6)}. You can try again after that.`);
+  if (o.acknowledged) return;
+  const d = consult(w, from.telco, "payment.authorize", { ...about, afterDelay: !!until });
+  if (d.decision === "reject") no(d.message ?? "This payment was blocked for your protection.");
+  if (d.decision === "delay") {
+    const minutes = d.minutes ?? 10;
+    w.cooldowns.set(key, w.now + minutes * MINUTE);
+    no(d.message ?? `This payment is paused for your protection. You can try again in ${minutes} minutes.`);
+  }
+  if (d.decision === "warn" && o.interactive) throw new Confirm(d.message ?? "This payment looks unusual. Make sure you know who you are paying.");
+}
+
 /** Wallet-to-bank fee. Moving money to your own bank account is free; sending to anyone else's is charged. */
 export function toBankFee(w: World, from: WalletRow, acct: AccountRow, amount: number) {
   const cfg = getConfig(w.db, `telco.${from.telco}`);
@@ -73,6 +113,8 @@ export interface WalletPayment {
   reference?: string;
   /** No fee is charged, e.g. when a business gives a customer their money back. */
   waiveFee?: boolean;
+  /** The customer was shown a warning from a plugged-in API and chose to continue. */
+  acknowledged?: boolean;
 }
 
 /** A payment from one wallet to another: person to person, to a merchant, or between a customer and an agent. */
@@ -117,6 +159,18 @@ export function walletPay(w: World, req: WalletPayment): Receipt {
   if (limit) no(limit);
   if (from.balance < req.amount + fee) no(req.type === "cashin" ? "Agent has insufficient float" : "Insufficient balance");
 
+  const about = {
+    type: req.type,
+    channel: req.channel,
+    amount: req.amount / 100,
+    fee: fee / 100,
+    reference: req.reference ?? null,
+    payer: describePayer(w, from),
+    payee: describeWallet(to),
+    paymentsToThisPayeeBefore: count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE from_wallet = ? AND to_wallet = ? AND status = 'success'", from.id, to.id),
+  };
+  authorize(w, from, to.id, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
+
   if (cross) {
     try {
       route(w, id, from.telco, to.telco, req.amount, to.msisdn);
@@ -153,13 +207,22 @@ export function walletPay(w: World, req: WalletPayment): Receipt {
       notify(w, t.telco, "transfer_received", t.msisdn, toRecipient);
     }
   });
+  w.cooldowns.delete(`${from.id}>${to.id}`);
+  emit(w, from.telco, "payment.completed", { ...about, transactionId: id, continuedAfterWarning: !!req.acknowledged });
 
   const verb = req.type === "cashin" ? "deposited to" : req.type === "cashout" ? "cashed out at" : req.type === "merchant" ? "paid to" : req.type === "float" ? "float moved to" : "sent to";
   return { txnId: id, fee, commission, message: `GHS ${cedis(req.amount)} ${verb} ${to.display_name}. Fee GHS ${cedis(fee)}. Trans ID ${shortId(id)}.` };
 }
 
+/** A bank asks any API plugged in at "transfer.authorize" before money leaves one of its accounts. */
+function authorizeTransfer(w: World, bank: string, about: Record<string, unknown>, no: (why: string) => never) {
+  const d = consult(w, bank, "transfer.authorize", about);
+  if (d.decision === "reject") no(d.message ?? "This transfer was blocked by the bank.");
+  return about;
+}
+
 /** Wallet to bank account, through the national switch. */
-export function walletToBank(w: World, req: { from: string; accountNo: string; amount: number; pin?: string; reference?: string; channel: "ussd" | "api" | "console" }): Receipt {
+export function walletToBank(w: World, req: { from: string; accountNo: string; amount: number; pin?: string; reference?: string; channel: "ussd" | "api" | "console"; acknowledged?: boolean }): Receipt {
   const from = getWallet(w, req.from);
   if (!from) throw new SimError("Sender wallet not found");
   const acct = accountByNumber(w, req.accountNo);
@@ -178,6 +241,17 @@ export function walletToBank(w: World, req: { from: string; accountNo: string; a
   const limit = checkSendLimits(w, from, req.amount);
   if (limit) no(limit);
   if (from.balance < req.amount + fee) no("Insufficient balance");
+  const about = {
+    type: "wallet_to_bank",
+    channel: req.channel,
+    amount: req.amount / 100,
+    fee: fee / 100,
+    reference: req.reference ?? null,
+    payer: describePayer(w, from),
+    payee: { ...describeAccount(acct), payersOwnAccount: !!acct.person_id && acct.person_id === from.person_id },
+    paymentsToThisPayeeBefore: count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE from_wallet = ? AND to_account = ? AND status = 'success'", from.id, acct.id),
+  };
+  authorize(w, from, acct.id, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
   try {
     route(w, id, from.telco, acct.bank, req.amount, `account ${acct.account_no}`);
   } catch (e) {
@@ -190,6 +264,8 @@ export function walletToBank(w: World, req: { from: string; accountNo: string; a
     commit(w, id, from.telco, acct.bank, req.amount);
     notify(w, from.telco, "transfer_sent", from.msisdn, { amount: cedis(req.amount), fee: cedis(fee), counterparty: bankName(acct.bank), counterparty_name: acct.name, balance: cedis(getWallet(w, from.id)!.balance), reference: req.reference ?? "", txn_id: shortId(id) });
   });
+  w.cooldowns.delete(`${from.id}>${acct.id}`);
+  emit(w, from.telco, "payment.completed", { ...about, transactionId: id, continuedAfterWarning: !!req.acknowledged });
   return { txnId: id, fee, commission: 0, message: `GHS ${cedis(req.amount)} sent to ${acct.name} (${bankName(acct.bank)}). Fee GHS ${cedis(fee)}. Trans ID ${shortId(id)}.` };
 }
 
@@ -218,6 +294,7 @@ export function bankToWallet(w: World, req: { bank: string; fromAccount?: string
   if (src && src.balance < req.amount + fee) no("Insufficient funds in the account");
   const limit = checkReceiveLimit(w, to, req.amount);
   if (limit) no(limit);
+  const about = src ? authorizeTransfer(w, req.bank, { type: "bank_to_wallet", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: describeWallet(to) }, no) : undefined;
   try {
     route(w, id, req.bank, to.telco, req.amount, to.msisdn);
   } catch (e) {
@@ -236,6 +313,7 @@ export function bankToWallet(w: World, req: { bank: string; fromAccount?: string
     notify(w, to.telco, "transfer_received", to.msisdn, { amount: cedis(req.amount), counterparty: bankName(req.bank), counterparty_name: src?.name ?? "Cash deposit", balance: cedis(getWallet(w, to.id)!.balance), reference: req.reference ?? "", txn_id: shortId(id) });
     audit(w, req.bank, "bank_to_wallet", `GHS ${cedis(req.amount)} ${src ? `from ${src.name}` : "in cash"} to ${to.display_name} (${to.msisdn})`);
   });
+  if (about) emit(w, req.bank, "transfer.completed", { ...about, transactionId: id });
   return { txnId: id, fee, commission: 0, message: `GHS ${cedis(req.amount)} sent to ${to.display_name} on ${TELCO_INFO[to.telco].wallet}. Fee GHS ${cedis(fee)}.` };
 }
 
@@ -253,6 +331,7 @@ export function bankTransfer(w: World, req: { bank: string; fromAccount: string;
   if (dest.status !== "active") no("Destination account is frozen");
   const fee = interbank ? feeFor(getConfig(w.db, `bank.${req.bank}`).fees.interbank, req.amount) : 0;
   if (src.balance < req.amount + fee) no("Insufficient funds in the account");
+  const about = authorizeTransfer(w, req.bank, { type: "bank_transfer", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: describeAccount(dest) }, no);
   if (interbank) {
     try {
       route(w, id, req.bank, dest.bank, req.amount, `account ${dest.account_no}`);
@@ -266,6 +345,7 @@ export function bankTransfer(w: World, req: { bank: string; fromAccount: string;
     if (interbank) commit(w, id, req.bank, dest.bank, req.amount);
     audit(w, req.bank, "transfer", `GHS ${cedis(req.amount)} from ${src.name} to ${dest.name} (${bankName(dest.bank)})`);
   });
+  emit(w, req.bank, "transfer.completed", { ...about, transactionId: id });
   return { txnId: id, fee, commission: 0, message: `GHS ${cedis(req.amount)} sent to ${dest.name} at ${bankName(dest.bank)}. Fee GHS ${cedis(fee)}.` };
 }
 

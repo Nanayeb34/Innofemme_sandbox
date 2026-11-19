@@ -1,3 +1,5 @@
+import { count } from "./db";
+import { consult } from "./integrations";
 import { logSms, sendSms, smsParts } from "./notify";
 import { getSim } from "./telco";
 import { SimError, TELCO_INFO, need, normalizeMsisdn, type Telco } from "./util";
@@ -33,9 +35,25 @@ function undeliverable(w: World, to: string): string | undefined {
 }
 
 function deliver(w: World, to: string, sender: string, text: string, meta: { kind: "person" | "app"; fromTelco: Telco }): SendResult {
-  const reason = undeliverable(w, to);
+  let reason = undeliverable(w, to);
+  let warning: string | undefined;
+  if (!reason) {
+    // The recipient's network may have plugged in an API that screens texts before they arrive.
+    const network = getSim(w, to)!.telco;
+    const d = consult(w, network, "sms.deliver", {
+      from: sender,
+      fromType: meta.kind === "person" ? "person" : "business",
+      fromNetwork: meta.fromTelco,
+      to,
+      toNetwork: network,
+      text,
+      textsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM sms_log WHERE status = 'delivered' AND ((sender = ? AND to_msisdn = ?) OR (sender = ? AND to_msisdn = ?))", sender, to, to, sender),
+    });
+    if (d.decision === "reject") reason = `Blocked by the recipient's network${d.message ? `: ${d.message}` : ""}`;
+    if (d.decision === "warn") warning = d.message ?? "Possible scam. Do not share your PIN or send money.";
+  }
   if (reason) logSms(w, to, sender, text, meta, reason);
-  else sendSms(w, to, sender, text, meta);
+  else sendSms(w, to, sender, text, meta, warning);
   return { delivered: !reason, parts: smsParts(text), to, reason };
 }
 
@@ -70,6 +88,8 @@ interface Message {
   out: boolean;
   body: string;
   failed: string | null;
+  /** A label the recipient's network attached to a text it delivered. */
+  warning: string | null;
 }
 
 /**
@@ -83,9 +103,9 @@ function messagesOf(w: World, msisdn: string): (Message & { with: string })[] {
   const out: (Message & { with: string })[] = [];
   for (const m of rows.reverse()) {
     const sent = m.kind === "person" && m.sender === msisdn;
-    if (sent) out.push({ id: `out${m.id}`, at: m.at, out: true, body: m.body, failed: m.status === "failed" ? (m.reason ?? "Not delivered") : null, with: m.to_msisdn });
+    if (sent) out.push({ id: `out${m.id}`, at: m.at, out: true, body: m.body, failed: m.status === "failed" ? (m.reason ?? "Not delivered") : null, warning: null, with: m.to_msisdn });
     // A text to your own number shows on both sides of the conversation.
-    if (m.to_msisdn === msisdn && m.status === "delivered") out.push({ id: `in${m.id}`, at: m.at, out: false, body: m.body, failed: null, with: m.sender });
+    if (m.to_msisdn === msisdn && m.status === "delivered") out.push({ id: `in${m.id}`, at: m.at, out: false, body: m.body, failed: null, warning: m.reason, with: m.sender });
   }
   return out;
 }
@@ -109,7 +129,7 @@ export function thread(w: World, msisdn: string, other: string) {
     messages: messagesOf(w, msisdn)
       .filter((m) => m.with === who)
       .slice(-80)
-      .map(({ id, at, out, body, failed }) => ({ id, at: new Date(at).toISOString(), out, body, failed })),
+      .map(({ id, at, out, body, failed, warning }) => ({ id, at: new Date(at).toISOString(), out, body, failed, warning })),
   };
 }
 

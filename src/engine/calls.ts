@@ -1,3 +1,5 @@
+import { count } from "./db";
+import { consult } from "./integrations";
 import { sendSms } from "./notify";
 import { getSim } from "./telco";
 import { SimError, TELCO_INFO, clock, isTelco, newId, normalizeMsisdn, type Telco } from "./util";
@@ -101,8 +103,20 @@ export function startCall(w: World, req: { from: string; to: string; device: str
     refuse("missed", "The number you are calling cannot be reached. Their phone is switched off.");
   }
 
+  // The called person's network may have plugged in an API that screens calls before they ring.
+  const d = consult(w, to!.telco, "call.connect", {
+    from: from.msisdn,
+    fromNetwork: from.telco,
+    callerSimRegisteredAt: from.registered_at ? new Date(from.registered_at).toISOString() : null,
+    to: dialled,
+    toNetwork: to!.telco,
+    callsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE answered_at IS NOT NULL AND ((from_msisdn = ? AND to_msisdn = ?) OR (from_msisdn = ? AND to_msisdn = ?))", from.msisdn, dialled, dialled, from.msisdn),
+    numbersTheCallerHasRungToday: count(w.db, "SELECT COUNT(DISTINCT to_msisdn) AS n FROM calls WHERE from_msisdn = ? AND started_at >= ?", from.msisdn, w.now - (w.now % 86_400_000)),
+  });
+  if (d.decision === "reject") refuse("failed", "The number you are calling is not available.");
+
   const id = record(w, { ...base, status: "ringing", reason: null });
-  w.calls.set(id, { offer: req.offer, candidates: { caller: [], callee: [] }, seen: { caller: w.now, callee: w.now }, callerDevice: req.device });
+  w.calls.set(id, { offer: req.offer, candidates: { caller: [], callee: [] }, seen: { caller: w.now, callee: w.now }, callerDevice: req.device, warning: d.decision === "warn" ? (d.message ?? "Possible scam call") : undefined });
   return { id };
 }
 
@@ -147,6 +161,8 @@ export interface CallState {
   offer?: string;
   /** For the caller: the other phone's reply, once it has answered. */
   answer?: string;
+  /** For the called phone: a label its network put on this call. */
+  warning?: string;
   /** The other phone's network paths, beyond the `have` already received. */
   candidates: unknown[];
 }
@@ -188,6 +204,7 @@ export function pollCall(w: World, req: { msisdn: string; device: string; callId
       reason: c.reason,
       startedAt: c.started_at,
       answeredAt: c.answered_at,
+      warning: s && role === "callee" ? s.warning : undefined,
       offer: s && role === "callee" ? s.offer : undefined,
       answer: s && role === "caller" ? s.answer : undefined,
       candidates: s ? s.candidates[other].slice(Math.max(0, Number(req.have ?? 0))) : [],

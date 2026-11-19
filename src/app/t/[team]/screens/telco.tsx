@@ -6,6 +6,7 @@ import { TelcoMark } from "@/components/telco-mark";
 import { ActionButton, ActionForm, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, SettingsJson, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
 import { ApiPartners, type ApiPartner } from "./partners";
+import { Plugins, type PluginView } from "./plugins";
 
 interface TelcoView {
   telco: string;
@@ -21,6 +22,10 @@ interface TelcoView {
   calls: { id: string; at: string; from: string; to: string; fromNetwork: string; toNetwork: string; status: string; reason: string | null; seconds: number }[];
   sms: { id: number; at: string; kind: string; from: string; fromNetwork: string; to: string; toNetwork: string; body: string; parts: number; status: string; reason: string | null }[];
   apiPartners: ApiPartner[];
+  plugins: PluginView["plugins"];
+  pluginPoints: PluginView["pluginPoints"];
+  pluginEvents: PluginView["pluginEvents"];
+  pluginCalls: PluginView["pluginCalls"];
   shortCodes: { code: string; owner: string; url: string; allocatedAt: string; networks: string[]; on: boolean }[];
   simEvents: { id: number; msisdn: string; at: string; kind: string; by: string; detail: string }[];
   activity: ActivityRow[];
@@ -39,7 +44,7 @@ interface TelcoView {
 }
 
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
-const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["api", "API partners"], ["settings", "Settings"]] as const;
+const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["api", "API partners"], ["plugins", "Plug-ins"], ["settings", "Settings"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 export default function TelcoConsole({ team, telco }: { team: string; telco: string }) {
@@ -370,6 +375,8 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
           />
         </Section>
       )}
+
+      {tab === "plugins" && <Plugins team={team} path={path} institution={b.name} view={data} onChange={refresh} />}
 
       {tab === "api" && (
         <>

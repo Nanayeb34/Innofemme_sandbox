@@ -24,16 +24,19 @@ export interface SmsMeta {
   fromTelco?: string | null;
 }
 
-/** Records a text in the networks' message log, whether or not it could be delivered. */
-export function logSms(w: World, to: string, sender: string, body: string, meta: SmsMeta, failure?: string) {
+/**
+ * Records a text in the networks' message log, whether or not it could be delivered. A delivered text
+ * can carry a warning label that the recipient's network attached to it.
+ */
+export function logSms(w: World, to: string, sender: string, body: string, meta: SmsMeta, failure?: string, warning?: string) {
   const sim = w.db.prepare("SELECT telco FROM sims WHERE msisdn = ?").get(to) as { telco: string } | undefined;
   w.db
     .prepare("INSERT INTO sms_log(at, kind, sender, from_telco, to_msisdn, to_telco, body, parts, status, reason) VALUES(?,?,?,?,?,?,?,?,?,?)")
-    .run(w.now, meta.kind, sender, meta.fromTelco ?? sim?.telco ?? null, to, sim?.telco ?? null, body, smsParts(body), failure ? "failed" : "delivered", failure ?? null);
+    .run(w.now, meta.kind, sender, meta.fromTelco ?? sim?.telco ?? null, to, sim?.telco ?? null, body, smsParts(body), failure ? "failed" : "delivered", failure ?? warning ?? null);
 }
 
 /** Puts a text in a phone's inbox and on the networks' message log. Texts from the network itself are the default. */
-export function sendSms(w: World, msisdn: string, sender: string, body: string, meta: SmsMeta = { kind: "network" }) {
-  w.db.prepare("INSERT INTO sms(msisdn, sender, body, at) VALUES(?,?,?,?)").run(msisdn, sender, body, w.now);
-  logSms(w, msisdn, sender, body, meta);
+export function sendSms(w: World, msisdn: string, sender: string, body: string, meta: SmsMeta = { kind: "network" }, warning?: string) {
+  w.db.prepare("INSERT INTO sms(msisdn, sender, body, at) VALUES(?,?,?,?)").run(msisdn, sender, warning ? `[${warning}] ${body}` : body, w.now);
+  logSms(w, msisdn, sender, body, meta, undefined, warning);
 }

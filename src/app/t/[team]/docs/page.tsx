@@ -5,6 +5,7 @@ import { pageOrigin } from "@/server/qr";
 import { SYSTEM_PATHS } from "@/server/systems";
 import { teamById } from "@/engine/worlds";
 import { SURFACE_NAMES } from "@/engine/config/schemas";
+import { EVENTS, POINTS, SAMPLES } from "@/engine/integrations";
 import { BANK_IDS } from "@/engine/util";
 import NoAccess from "../no-access";
 
@@ -25,13 +26,17 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
           ← All systems
         </Link>
         <h1 className="mt-2 text-2xl font-semibold text-gray-900">API for coders</h1>
-        <p className="mt-1 text-gray-600">There are two kinds of API here, and they are for different jobs.</p>
+        <p className="mt-1 text-gray-600">There are three kinds of API here, and they are for different jobs.</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-700">
           <li>
             <b>Partner APIs</b> (sections 1 to 6) are what an institution gives an outside company, such as a licensed payments or messaging business. You call them with credentials that institution issued, not with your team key. Build a third-party product on these.
           </li>
           <li>
-            <b>Console API</b> (sections 7 to 10) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
+            <b>Plug-in points</b> (section 7) work the other way round: <em>you</em> build an API, and a network or bank plugs it into one of its own steps. It asks your API every time that step happens and does what you answer. Build this when your product is something an institution would
+            add to its own system: a PIN checker, a payment warning, a SIM-swap check, a scam-text filter.
+          </li>
+          <li>
+            <b>Console API</b> (sections 8 to 11) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
           </li>
         </ul>
 
@@ -152,7 +157,75 @@ GET  v1/transactions/{id}                                        status of a rou
 POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch, person}   a biometric check; the holder's details come back only on a match`}</Code>
         </Section>
 
-        <Section title="7. Console API: one endpoint per institution">
+        <Section title="7. Plug-in points: your API inside an institution's system" id="plugins">
+          <p>
+            Put your API online, then open a network&apos;s or bank&apos;s console, go to <b>Plug-ins</b>, and enter its address and the step it should be asked at. From then on the institution sends a <code>POST</code> with a JSON body to your address every time that step
+            happens, waits for your answer (2 seconds by default), and acts on it. The same tab shows every question it asked and what you answered, and has a <b>Send a test</b> button.
+          </p>
+          <Code>{`# What you receive
+{ "point": "pin.set", "institution": "mtn", "world": "${team}", "at": "2026-11-26T10:15:00.000Z", "data": { … } }
+
+# What you answer (status 200, JSON)
+{ "decision": "allow" }
+{ "decision": "reject", "message": "Shown to the customer. Keep it short: a phone screen holds about 150 characters." }
+{ "decision": "warn",   "message": "Shown first. The customer then chooses 1) Continue or 2) Cancel." }
+{ "decision": "delay",  "minutes": 10, "message": "The payment is refused now and can be tried again after the pause." }`}</Code>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 text-[11px] uppercase tracking-wide text-gray-500">
+                  <th className="px-2 py-2 font-medium">Step</th>
+                  <th className="px-2 py-2 font-medium">Who asks</th>
+                  <th className="px-2 py-2 font-medium">When</th>
+                  <th className="px-2 py-2 font-medium">You can answer</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(POINTS).map(([id, p]) => (
+                  <tr key={id} className="border-b border-gray-100 align-top">
+                    <td className="px-2 py-2 font-mono">{id}</td>
+                    <td className="px-2 py-2">{p.who === "telco" ? "A network" : p.who === "bank" ? "A bank" : "A network or bank"}</td>
+                    <td className="px-2 py-2">{p.when}</td>
+                    <td className="px-2 py-2">{p.answers.join(", ") || "nothing"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              <b>Who is asked.</b> For a payment, the payer&apos;s network. For a text or a call, the network of the person receiving it. For a bank transfer, the bank the money is leaving.
+            </li>
+            <li>
+              <b>warn</b> is shown where the customer is looking at a screen: on a payment from the phone menu, as a label on a text, and on the incoming call screen. On a payment with nobody there to read it (through an API, or at an agent) it counts as allow.
+            </li>
+            <li>
+              <b>delay</b> pauses payments from that payer to that payee. Asked again after the pause, you receive <code>afterDelay: true</code>.
+            </li>
+            <li>
+              <b>If you do not answer</b> in time, or answer with something else, the institution does what its owner chose when plugging you in: carry on as normal, or refuse. Several APIs on one step: the strictest answer wins.
+            </li>
+            <li>
+              <b>events</b> are told to you after the fact, as <code>data.event</code>: {Object.keys(EVENTS).map((e) => <code key={e} className="mr-1 break-all">{e}</code>)}. Your answer is ignored.
+            </li>
+            <li>Amounts are in cedis. Your API can call anything else it likes while deciding: the partner APIs above, your own database, a scam-report service.</li>
+          </ul>
+          <p>What <code>data</code> holds at each step:</p>
+          {Object.entries(SAMPLES).map(([id, sample]) => (
+            <details key={id} className="rounded-lg border border-gray-200 px-3 py-2">
+              <summary className="cursor-pointer font-mono text-xs">
+                {id} <span className="font-sans text-gray-500">· {POINTS[id].when}</span>
+              </summary>
+              <pre className="mt-2 overflow-x-auto rounded bg-gray-900 p-3 font-mono text-xs leading-relaxed text-gray-100">{JSON.stringify(sample, null, 2)}</pre>
+            </details>
+          ))}
+          <p>
+            A complete example is in the repository: <code>examples/pin-check-api.mjs</code>, a 40-line API that rejects a PIN when it is the end of the customer&apos;s number, one digit repeated, a simple sequence, or their date of birth. Plug one in from a script:
+          </p>
+          <Code>{`curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"plugin_add","name":"Weak PIN checker","point":"pin.set","url":"https://your-api.example.com/","ifDown":"carry_on"}'`}</Code>
+        </Section>
+
+        <Section title="8. Console API: one endpoint per institution">
           <p className="break-words">
             <code>GET {"{base}"}/s/{"{system}"}</code> returns what that institution&apos;s console shows. <code>POST</code> with <code>{"{ action, ...fields }"}</code> does something there. Systems: {SYSTEM_PATHS.map((p) => <code key={p} className="mr-1 break-all">{p}</code>)}
           </p>
@@ -175,7 +248,7 @@ curl ${base}/s/switch ${auth}`}</Code>
           <p>Send an unknown action to a system and the error lists the actions it supports.</p>
         </Section>
 
-        <Section title="8. Phones">
+        <Section title="9. Phones">
           <p>Drive any registered SIM. Start a USSD session by sending the short code; pass the returned <code>sessionId</code> with each reply.</p>
           <Code>{`curl -X POST ${base}/ussd ${auth} ${json} -d '{"msisdn":"024…","input":"*170#"}'
 curl -X POST ${base}/ussd ${auth} ${json} -d '{"msisdn":"024…","sessionId":"ussd_…","input":"1"}'
@@ -183,7 +256,7 @@ curl -X POST ${base}/s/phone ${auth} ${json} -d '{"action":"sms_send","msisdn":"
 curl "${base}/s/phone?msisdn=024…&thread=027…" ${auth}       # that phone's conversations, and one thread`}</Code>
         </Section>
 
-        <Section title="9. Settings">
+        <Section title="10. Settings">
           <p className="break-words">
             Each institution owns one settings document: {SURFACE_NAMES.map((s) => <code key={s} className="mr-1 break-all">{s}</code>)}. Read it, replace it, or patch it with JSON Patch (<code>add</code>, <code>replace</code>, <code>remove</code>). Every change is validated, recorded and can be undone.
           </p>
@@ -196,7 +269,7 @@ curl ${base}/history ${auth}                       # changes, newest first
 curl -X POST ${base}/history/{changeId} ${auth}     # undo`}</Code>
         </Section>
 
-        <Section title="10. Save points">
+        <Section title="11. Save points">
           <Code>{`curl -X POST ${base}/snapshots ${auth} ${json} -d '{"label":"Before changing fees"}'
 curl ${base}/snapshots ${auth}
 curl -X POST ${base}/snapshots/{id} ${auth}          # roll back
@@ -207,9 +280,9 @@ curl -X POST ${base}/world ${auth} ${json} -d '{"action":"reset"}'   # wipe to a
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
   return (
-    <section className="mt-6 space-y-2">
+    <section id={id} className="mt-6 scroll-mt-4 space-y-2">
       <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
       {children}
     </section>

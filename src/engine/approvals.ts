@@ -1,3 +1,4 @@
+import { Ask, Confirm } from "./integrations";
 import { randomUUID } from "node:crypto";
 import { getConfig } from "./config/store";
 import { recipientAnswered } from "./care";
@@ -85,7 +86,7 @@ export function pendingFor(w: World, msisdn: string) {
 }
 
 /** The payer approves with their PIN; the money moves. */
-export function approve(w: World, ref: string, pin: string): Receipt {
+export function approve(w: World, ref: string, pin: string, acknowledged = false): Receipt {
   expireApprovals(w);
   const r = getApproval(w, ref);
   if (!r || r.status !== "PENDING") throw new SimError("This request is no longer pending.");
@@ -105,11 +106,13 @@ export function approve(w: World, ref: string, pin: string): Receipt {
     return { txnId: "", fee: 0, commission: 0, message: r.kind === "preapproval" ? `${r.payer_message} can now take payments from your wallet without asking each time.` : `Your details have been shared with ${r.payer_message}.` };
   }
   try {
-    const res = walletPay(w, { type: r.kind === "cashout" ? "cashout" : "merchant", channel: "ussd", from: payer.id, to: r.payee_wallet, amount: r.amount, pin, reference: r.payer_message ?? undefined });
+    const res = walletPay(w, { type: r.kind === "cashout" ? "cashout" : "merchant", channel: "ussd", from: payer.id, to: r.payee_wallet, amount: r.amount, pin, reference: r.payer_message ?? undefined, acknowledged });
     w.db.prepare("UPDATE approvals SET status = 'SUCCESSFUL', txn_id = ? WHERE ref = ?").run(res.txnId, ref);
     void callback(w, ref);
     return res;
   } catch (e) {
+    // Waiting on an outside API, or on the customer's answer to a warning: the request stays open.
+    if (e instanceof Ask || e instanceof Confirm) throw e;
     // A wrong PIN leaves the request open for another try; anything else closes it.
     if (!(e as Error).message.startsWith("Wrong PIN.")) rejectApproval(w, ref, (e as Error).message);
     throw e;

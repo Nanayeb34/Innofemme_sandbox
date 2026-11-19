@@ -4,7 +4,7 @@ import { accountByNumber, getTxn } from "@/engine/ledger";
 import { clientAccount } from "@/engine/partners";
 import { bankToWallet, bankTransfer } from "@/engine/payments";
 import { switchLog } from "@/engine/switch";
-import { withLock } from "@/engine/world";
+import { locked } from "@/engine/integrations";
 import { BANK_IDS, amountOf, bankName, need, normalizeMsisdn } from "@/engine/util";
 
 /**
@@ -34,7 +34,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   if (path === "token") return issueToken(req, team, bank);
   const { w, client } = requirePartner(req, team, bank);
   const b = await body(req);
-  return withLock(w, () => {
+  return locked(w, () => {
     const account = clientAccount(w, client);
     switch (path) {
       case "v1/name-enquiry": {

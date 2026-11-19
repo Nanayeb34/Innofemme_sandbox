@@ -1,5 +1,6 @@
 import { BANK_IDS, SimError, isTelco, need, newId } from "./util";
-import { audit, type World } from "./world";
+import { count } from "./db";
+import { audit, withLock, type World } from "./world";
 
 /**
  * Plug-in points. An outside company can build an API and an institution can plug it into one of its
@@ -34,6 +35,52 @@ export const POINTS: Record<string, { who: "telco" | "bank" | "both"; when: stri
   "call.connect": { who: "telco", when: "A call is about to ring one of this network's subscribers", answers: ["allow", "warn", "reject"] },
   "transfer.authorize": { who: "bank", when: "A transfer from one of this bank's accounts is about to go through", answers: ["allow", "reject"] },
   events: { who: "both", when: "After something has happened (a payment, a SIM replacement, a new wallet…). For information only: the answer is ignored", answers: [] },
+};
+
+const CUSTOMER = { name: "Ama Mensah", ghanaCard: "GHA-123456789-0", dateOfBirth: "1994-03-12", gender: "F", region: "Ashanti" };
+const WALLET = { msisdn: "0241234567", name: "Ama Mensah", network: "mtn", walletType: "person", kycTier: "medium", walletOpenedAt: "2026-11-02T09:14:00.000Z" };
+const POINT = { id: "sa_1a2b3c", name: "Adum Service Centre", kind: "service_centre", town: "Kumasi" };
+
+/** An example of what an institution sends at each step: used in the API reference and by the console's "Send a test" button. */
+export const SAMPLES: Record<string, Record<string, unknown>> = {
+  "pin.set": { msisdn: "0241234567", pin: "4567", reason: "new_wallet", network: "mtn", customer: CUSTOMER },
+  "wallet.open": { msisdn: "0241234567", network: "mtn", walletType: "person", walletName: "Ama Mensah", kycTier: "minimum", openedBy: "self-registration (USSD)", customer: CUSTOMER, simRegisteredAt: "2026-11-02T09:02:00.000Z", lastSimSwapAt: null, walletsOnThisGhanaCard: 0 },
+  "payment.authorize": {
+    type: "p2p",
+    channel: "ussd",
+    amount: 500,
+    fee: 0,
+    reference: "school fees",
+    payer: { ...WALLET, balance: 1250.5, lastSimSwapAt: null, onCallWith: "0209876543", paymentsInLast24Hours: 1, amountSentInLast24Hours: 40 },
+    payee: { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person", kycTier: "minimum", walletOpenedAt: "2026-11-18T16:40:00.000Z" },
+    paymentsToThisPayeeBefore: 0,
+    afterDelay: false,
+  },
+  "sim.register": { msisdn: "0241234567", network: "mtn", registeredBy: POINT, customer: CUSTOMER, simsAlreadyOnThisGhanaCard: 1, primaryNumber: "0201112223" },
+  "sim.swap": { msisdn: "0241234567", network: "mtn", replacedBy: POINT, customer: CUSTOMER, simRegisteredAt: "2026-11-02T09:02:00.000Z", previousSwapAt: null, simStatus: "active", hasWallet: true, walletBalance: 1250.5, swapsOnThisNumberBefore: 0 },
+  "sms.deliver": { from: "0209876543", fromType: "person", fromNetwork: "telecel", to: "0241234567", toNetwork: "mtn", text: "Hello, I sent GHS 500 to your number by mistake. Please send it back.", textsBetweenThemBefore: 0 },
+  "call.connect": { from: "0209876543", fromNetwork: "telecel", callerSimRegisteredAt: "2026-11-18T16:31:00.000Z", to: "0241234567", toNetwork: "mtn", callsBetweenThemBefore: 0, numbersTheCallerHasRungToday: 14 },
+  "transfer.authorize": {
+    type: "bank_to_wallet",
+    amount: 2000,
+    fee: 5,
+    reference: "rent",
+    from: { bank: "gcb", bankName: "GCB Bank", accountNumber: "0401000012", name: "Ama Mensah", accountOpenedAt: "2026-11-03T10:00:00.000Z", balance: 5400 },
+    to: { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person", kycTier: "minimum", walletOpenedAt: "2026-11-18T16:40:00.000Z" },
+  },
+  events: { event: "payment.completed", type: "p2p", channel: "ussd", amount: 500, fee: 0, payer: WALLET, payee: { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel" }, transactionId: "tx_9f8e7d6c5b4a3210", continuedAfterWarning: false },
+};
+
+/** What an institution tells APIs plugged in at "events". */
+export const EVENTS: Record<string, string> = {
+  "payment.completed": "A payment from one of the network's wallets went through",
+  "payment.warning_shown": "A customer was shown a warning from a plugged-in API",
+  "payment.cancelled_after_warning": "The customer read the warning and cancelled",
+  "wallet.opened": "A wallet was opened",
+  "pin.changed": "A customer changed their wallet PIN",
+  "sim.registered": "A SIM was registered",
+  "sim.swapped": "A number was moved to a replacement SIM",
+  "transfer.completed": "A transfer from one of the bank's accounts went through",
 };
 
 export const pointsFor = (institution: string) => Object.entries(POINTS).filter(([, p]) => p.who === "both" || (p.who === "telco" ? isTelco(institution) : BANK_IDS.includes(institution)));
@@ -113,6 +160,9 @@ export function integrationLog(w: World, institution: string, limit = 60) {
   return rows.map((r) => ({ id: r.id, at: new Date(r.at).toISOString(), api: r.name ?? "(removed)", point: r.point, request: r.request, decision: r.decision, message: r.message, ms: r.ms }));
 }
 
+/** An outside API asked that the customer be warned before going ahead. On the phone it becomes "1) Continue 2) Cancel". */
+export class Confirm extends SimError {}
+
 /** A step is waiting on an outside API's answer. Not a failure: the request handler fetches the answer and runs the step again. */
 export class Ask extends Error {
   constructor(
@@ -178,6 +228,20 @@ async function ask(w: World, i: Integration, point: string, payload: unknown): P
   }
 }
 
+/** Sends an example request to a plugged-in API so its owner can see how it answers, without doing anything for real. */
+export async function testIntegration(w: World, institution: string, id: unknown): Promise<string> {
+  const i = own(w, institution, id);
+  if (i.point === "events") {
+    await flush(w, [{ institution, event: String(SAMPLES.events.event), data: SAMPLES.events }], [i], false);
+  } else {
+    await ask(w, i, i.point, SAMPLES[i.point]);
+  }
+  const last = w.db.prepare("SELECT decision, message, ms FROM integration_calls WHERE integration_id = ? ORDER BY id DESC LIMIT 1").get(i.id) as { decision: string; message: string | null; ms: number };
+  if (last.decision === "error") return `"${i.name}" did not answer properly: ${last.message}.`;
+  if (last.decision === "sent") return `"${i.name}" received the example event in ${last.ms} ms.`;
+  return `"${i.name}" answered "${last.decision}"${last.message ? ` with the message "${last.message}"` : ""} in ${last.ms} ms.`;
+}
+
 /** Fetches the answer a step is waiting for. When several APIs are plugged into one step, the strictest answer wins. */
 async function settle(w: World, a: Ask) {
   const answers = await Promise.all(active(w, a.institution, a.point).map((i) => ask(w, i, a.point, a.payload)));
@@ -190,17 +254,22 @@ export function emit(w: World, institution: string, event: string, data: unknown
   if (w.asking && active(w, institution, "events").length) w.outbox.push({ institution, event, data });
 }
 
-async function flush(w: World, events: World["outbox"]) {
+async function flush(w: World, events: World["outbox"], only?: Integration[], queued = true) {
   for (const e of events) {
-    for (const i of active(w, e.institution, "events")) {
+    for (const i of only ?? active(w, e.institution, "events")) {
       const started = Date.now();
       const payload = { event: e.event, ...(e.data as object) };
+      let outcome: [string, string];
       try {
         const r = await post(w, i, "events", payload);
-        record(w, i, "events", payload, r.status >= 200 && r.status < 300 ? "sent" : "error", r.status >= 200 && r.status < 300 ? e.event : `status ${r.status}`, Date.now() - started);
+        outcome = r.status >= 200 && r.status < 300 ? ["sent", e.event] : ["error", `${e.event}: answered with status ${r.status}`];
       } catch (err) {
-        record(w, i, "events", payload, "error", (err as Error).message, Date.now() - started);
+        outcome = ["error", `${e.event}: ${(err as Error).name === "TimeoutError" ? "no answer in time" : (err as Error).message}`];
       }
+      // Written in turn with everything else that touches this world.
+      const write = () => record(w, i, "events", payload, outcome[0], outcome[1], Date.now() - started);
+      if (queued) await withLock(w, write).catch(() => undefined);
+      else write();
     }
   }
 }
@@ -214,6 +283,8 @@ const copy = <K, V>(m: Map<K, V>) => new Map([...m].map(([k, v]) => [k, structur
  */
 export async function runWithIntegrations<T>(w: World, fn: () => T | Promise<T>): Promise<T> {
   if (w.asking) return fn(); // already inside one
+  // With nothing plugged in anywhere there is nothing to wait for.
+  if (!count(w.db, "SELECT COUNT(*) AS n FROM integrations WHERE enabled = 1")) return fn();
   w.asking = true;
   try {
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -245,3 +316,6 @@ export async function runWithIntegrations<T>(w: World, fn: () => T | Promise<T>)
     w.outbox = [];
   }
 }
+
+/** One request at a time per world, and able to wait for plugged-in APIs. Use this wherever a request changes the world. */
+export const locked = <T>(w: World, fn: () => T | Promise<T>): Promise<T> => withLock(w, () => runWithIntegrations(w, fn));

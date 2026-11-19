@@ -19,6 +19,8 @@ export interface CallSignal {
   seen: { caller: number; callee: number };
   callerDevice: string;
   calleeDevice?: string;
+  /** A label the called person's network puts on the incoming call screen. */
+  warning?: string;
 }
 
 /** A team's isolated copy of the country's systems, open in this process. */

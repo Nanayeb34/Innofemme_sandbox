@@ -5,8 +5,9 @@ import type { Condition, FactName, Menu, MenuNode } from "./config/schemas";
 import { accountByNumber, checkPin, feeFor, getWallet, walletByMsisdn, type WalletRow } from "./ledger";
 import { fullName, personById } from "./nia";
 import { render } from "./notify";
-import { toBankFee, walletPay, walletToBank } from "./payments";
-import { changePin, getSim, selfRegisterWallet, type SimRow } from "./telco";
+import { Confirm, emit } from "./integrations";
+import { toBankFee, walletPay, walletToBank, type Receipt } from "./payments";
+import { changePin, getSim, pinProblem, selfRegisterWallet, type SimRow } from "./telco";
 import { SimError, TELCO_INFO, bankName, cedis, clock, newId, normalizeMsisdn } from "./util";
 import type { UssdSession, World } from "./world";
 
@@ -131,7 +132,8 @@ function handleRegistration(w: World, s: UssdSession, input: string): Screen {
     return show("Create a 4-digit PIN for your wallet. Keep it secret.");
   }
   if (d.step === "pin") {
-    if (!/^\d{4}$/.test(input)) return show("PIN must be 4 digits.\nCreate a 4-digit PIN");
+    const problem = pinProblem(w, s.msisdn, input, "new_wallet");
+    if (problem) return show(`${problem}\nCreate a 4-digit PIN`);
     s.pending = { kind: "register", data: { step: "confirm", pin: input } };
     return show("Enter the PIN again to confirm");
   }
@@ -270,7 +272,22 @@ function acceptInput(w: World, s: UssdSession, varName: string, kind: string, in
   }
 }
 
-function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow): Screen {
+/**
+ * Makes a payment. If an API plugged into the network asks for a warning first, the customer sees it
+ * and must choose to continue; `again` records how to carry on if they do.
+ */
+function pay(w: World, s: UssdSession, wallet: WalletRow, again: { kind: string; data?: unknown }, go: () => Receipt): Screen {
+  try {
+    return end(go().message);
+  } catch (e) {
+    if (!(e instanceof Confirm)) throw e;
+    s.pending = again;
+    emit(w, wallet.telco, "payment.warning_shown", { payer: wallet.msisdn, network: wallet.telco, warning: e.message });
+    return show(`${e.message}\n1) Continue\n2) Cancel`);
+  }
+}
+
+function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow, acknowledged = false): Screen {
   const v = s.vars;
   const d = draft(w, s, wallet);
   const attempts = getConfig(w.db, `telco.${wallet.telco}`).pinAttemptsBeforeLock;
@@ -278,13 +295,13 @@ function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow):
   switch (action) {
     case "send_money":
       if (!d.to) return end("Recipient is not registered for mobile money.");
-      return end(walletPay(w, { type: "p2p", channel: "ussd", from: wallet.id, to: d.to.id, amount: d.amount, pin: v.pin ?? "", reference: v.reference }).message);
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => walletPay(w, { type: "p2p", channel: "ussd", from: wallet.id, to: d.to!.id, amount: d.amount, pin: v.pin ?? "", reference: v.reference, acknowledged }));
     case "pay_merchant":
       if (!d.to) return end("Merchant ID not found.");
-      return end(walletPay(w, { type: "merchant", channel: "ussd", from: wallet.id, to: d.to.id, amount: d.amount, pin: v.pin ?? "", reference: v.reference }).message);
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => walletPay(w, { type: "merchant", channel: "ussd", from: wallet.id, to: d.to!.id, amount: d.amount, pin: v.pin ?? "", reference: v.reference, acknowledged }));
     case "to_bank":
       if (!d.bank) return end("Account not found.");
-      return end(walletToBank(w, { from: wallet.id, accountNo: d.bank.account_no, amount: d.amount, pin: v.pin ?? "", reference: v.reference, channel: "ussd" }).message);
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => walletToBank(w, { from: wallet.id, accountNo: d.bank!.account_no, amount: d.amount, pin: v.pin ?? "", reference: v.reference, channel: "ussd", acknowledged }));
     case "check_balance":
       checkPin(w, wallet, v.pin ?? "", attempts);
       return end(`Your ${TELCO_INFO[wallet.telco].wallet} balance is GHS ${cedis(wallet.balance)}.`);
@@ -328,7 +345,17 @@ function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow):
 function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: string): Screen {
   const p = s.pending!;
   s.pending = undefined;
-  const d = p.data as { step: string; refs?: string[]; ref?: string; pin?: string; ids?: string[]; types?: string[]; id?: string; agent?: boolean };
+  const d = p.data as { step: string; refs?: string[]; ref?: string; pin?: string; ids?: string[]; types?: string[]; id?: string; agent?: boolean; action?: string };
+
+  if (p.kind === "warned") {
+    // The customer has read a warning from an API plugged into the network.
+    if (input !== "1") {
+      emit(w, wallet.telco, "payment.cancelled_after_warning", { payer: wallet.msisdn, network: wallet.telco });
+      return end("Payment cancelled. No money has left your wallet.");
+    }
+    if (d.ref) return pay(w, s, wallet, p, () => approve(w, d.ref!, d.pin ?? "", true));
+    return runAction(w, s, d.action ?? "", wallet, true);
+  }
 
   if (p.kind === "report") {
     if (d.step === "pick") {
@@ -352,7 +379,11 @@ function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: strin
       return show("Enter a new 4-digit PIN");
     }
     if (d.step === "new") {
-      if (!/^\d{4}$/.test(input)) return end("PIN must be 4 digits. PIN not changed.");
+      const problem = pinProblem(w, wallet.msisdn, input, "change");
+      if (problem) {
+        s.pending = { kind: "change_pin", data: { step: "new" } };
+        return show(`${problem}\nEnter a new 4-digit PIN`);
+      }
       s.pending = { kind: "change_pin", data: { step: "confirm", pin: input } };
       return show("Enter the new PIN again");
     }
@@ -379,6 +410,6 @@ function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: strin
     s.pending = { kind: "approvals", data: { step: "pin", ref: d.ref } };
     return show("Enter PIN to approve");
   }
-  if (d.step === "pin") return end(approve(w, d.ref!, input).message);
+  if (d.step === "pin") return pay(w, s, wallet, { kind: "warned", data: { ref: d.ref, pin: input } }, () => approve(w, d.ref!, input));
   return end("Session ended.");
 }

@@ -3,7 +3,7 @@ import { issueToken, requirePartner } from "@/server/partner-auth";
 import { getConfig } from "@/engine/config/store";
 import { accountByNumber, getTxn, walletByMsisdn } from "@/engine/ledger";
 import { switchLog } from "@/engine/switch";
-import { withLock } from "@/engine/world";
+import { locked } from "@/engine/integrations";
 import { PARTICIPANTS, bankName, isTelco, normalizeMsisdn, participantName } from "@/engine/util";
 
 /**
@@ -26,7 +26,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   const { w, client } = requirePartner(req, team, INSTITUTION);
   if (path !== "v1/name-enquiry") throw new HttpError(404, `No such endpoint: POST ${path}`);
   const b = await body(req);
-  return withLock(w, () => {
+  return locked(w, () => {
     if (b.msisdn) {
       const wallet = walletByMsisdn(w, normalizeMsisdn(String(b.msisdn)));
       if (!wallet) throw new HttpError(404, "No mobile money wallet on that number");

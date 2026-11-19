@@ -5,6 +5,7 @@ import { count, tx } from "./db";
 import { getWallet, walletByMsisdn, type WalletRow } from "./ledger";
 import { ageOf, fullName, personById, verify, type Person } from "./nia";
 import { createApproval } from "./approvals";
+import { consult, emit } from "./integrations";
 import { notify, sendSms } from "./notify";
 import { walletPay, type Receipt } from "./payments";
 import { SimError, TELCO_INFO, amountOf, cedis, digits, need, normalizeMsisdn, telcoOf, type Telco } from "./util";
@@ -47,6 +48,28 @@ const pinOk = (pin: unknown): string => {
   if (!/^\d{4}$/.test(String(pin ?? ""))) throw new SimError("PIN must be 4 digits");
   return String(pin);
 };
+
+/** How a customer is described to an API the network has plugged in. */
+const customerOf = (p: Person | undefined) => (p ? { name: fullName(p), ghanaCard: p.ghana_card, dateOfBirth: p.dob, gender: p.gender, region: p.region } : null);
+const iso = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString() : null);
+
+export type PinReason = "new_wallet" | "change" | "agent_line" | "merchant_line";
+
+/** What is wrong with a PIN someone wants to use, if anything: its format, or the verdict of an API plugged in at "pin.set". */
+export function pinProblem(w: World, msisdn: string, pin: unknown, reason: PinReason): string | undefined {
+  if (!/^\d{4}$/.test(String(pin ?? ""))) return "PIN must be 4 digits";
+  const sim = getSim(w, msisdn);
+  if (!sim) return;
+  const d = consult(w, sim.telco, "pin.set", { msisdn, pin: String(pin), reason, network: sim.telco, customer: customerOf(personById(w, sim.person_id ?? "")) });
+  if (d.decision === "reject") return d.message ?? "That PIN is not allowed. Choose a different one.";
+}
+
+/** The PIN, once it has passed the checks. */
+function acceptPin(w: World, msisdn: string, pin: unknown, reason: PinReason): string {
+  const problem = pinProblem(w, msisdn, pin, reason);
+  if (problem) throw new SimError(problem);
+  return String(pin);
+}
 
 function ownSim(w: World, telco: Telco, msisdnInput: unknown): SimRow {
   const msisdn = normalizeMsisdn(String(need(msisdnInput as string, "Mobile number")));
@@ -143,6 +166,11 @@ export function registerSim(w: World, telco: Telco, agentId: unknown, input: { c
   if (!sim) throw new SimError(input.msisdn ? "That number is not in stock" : `No blank SIMs in stock. ${TELCO_INFO[telco].name} must add SIM stock first.`);
   if (sim.telco !== telco || sim.status !== "in_stock") throw new SimError("That number is not available for registration");
 
+  const about = { msisdn: sim.msisdn, network: telco, registeredBy: { id: agent.id, name: agent.name, kind: agent.kind, town: agent.town }, customer: customerOf(p), simsAlreadyOnThisGhanaCard: held, primaryNumber: primary?.msisdn ?? null };
+  const verdict = consult(w, telco, "sim.register", about);
+  if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This SIM cannot be registered right now.");
+  emit(w, telco, "sim.registered", about);
+
   tx(w.db, () => {
     w.db.prepare("UPDATE sims SET status = 'active', person_id = ?, registered_at = ?, registered_by = ? WHERE msisdn = ?").run(p.id, w.now, agent.id, sim.msisdn);
     simEvent(w, sim.msisdn, "registered", agent.id, `Ghana Card ${p.ghana_card}, biometric match`);
@@ -167,6 +195,22 @@ export function swapSim(w: World, telco: Telco, agentId: unknown, input: { msisd
   if (sim.status === "in_stock" || sim.status === "deactivated") throw new SimError("Only a registered number can be replaced");
   const p = verifyOwner(w, telco, sim, agent.id, "SIM replacement", input);
   const hold = getConfig(w.db, `telco.${telco}`).simSwapMomoHoldHours;
+  const wallet = walletByMsisdn(w, sim.msisdn);
+  const about = {
+    msisdn: sim.msisdn,
+    network: telco,
+    replacedBy: { id: agent.id, name: agent.name, kind: agent.kind, town: agent.town },
+    customer: customerOf(p),
+    simRegisteredAt: iso(sim.registered_at),
+    previousSwapAt: iso(sim.last_swap_at),
+    simStatus: sim.status,
+    hasWallet: !!wallet,
+    walletBalance: wallet ? wallet.balance / 100 : null,
+    swapsOnThisNumberBefore: count(w.db, "SELECT COUNT(*) AS n FROM sim_events WHERE msisdn = ? AND kind = 'swapped'", sim.msisdn),
+  };
+  const verdict = consult(w, telco, "sim.swap", about);
+  if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This SIM cannot be replaced right now.");
+  emit(w, telco, "sim.swapped", about);
   tx(w.db, () => {
     w.db.prepare("UPDATE sims SET iccid = ?, puk = ?, status = 'active', block_reason = NULL, last_swap_at = ? WHERE msisdn = ?").run(newIccid(), digits(8), w.now, sim.msisdn);
     simEvent(w, sim.msisdn, "swapped", agent.id, `New SIM card issued to ${fullName(p)}${hold ? `; mobile money sending paused for ${hold}h` : ""}`);
@@ -195,6 +239,21 @@ export function setSimStatus(w: World, telco: Telco, by: string, msisdn: unknown
 function openWallet(w: World, sim: SimRow, o: { pin: string; tier: KycTier; ownerType: WalletRow["owner_type"]; displayName: string; by: string }): WalletRow {
   if (sim.status !== "active" || !sim.person_id) throw new SimError("Only an active, registered SIM can hold a wallet");
   if (walletByMsisdn(w, sim.msisdn)) throw new SimError(`${sim.msisdn} already has a ${TELCO_INFO[sim.telco].wallet} wallet`);
+  const about = {
+    msisdn: sim.msisdn,
+    network: sim.telco,
+    walletType: o.ownerType,
+    walletName: o.displayName,
+    kycTier: o.tier,
+    openedBy: o.by,
+    customer: customerOf(personById(w, sim.person_id)),
+    simRegisteredAt: iso(sim.registered_at),
+    lastSimSwapAt: iso(sim.last_swap_at),
+    walletsOnThisGhanaCard: count(w.db, "SELECT COUNT(*) AS n FROM wallets WHERE person_id = ?", sim.person_id),
+  };
+  const verdict = consult(w, sim.telco, "wallet.open", about);
+  if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This wallet cannot be opened right now.");
+  emit(w, sim.telco, "wallet.opened", about);
   const id = `w_${sim.msisdn}`;
   w.db
     .prepare("INSERT INTO wallets(id, msisdn, telco, person_id, owner_type, display_name, kyc_tier, pin, created_at) VALUES(?,?,?,?,?,?,?,?,?)")
@@ -211,7 +270,7 @@ export function selfRegisterWallet(w: World, msisdn: string, pin: string): Walle
   if (!getConfig(w.db, `telco.${sim.telco}`).selfRegistration) throw new SimError("Visit an agent with your Ghana Card to register for mobile money.");
   const p = personById(w, sim.person_id ?? "");
   if (!p) throw new SimError("This SIM is not registered");
-  return tx(w.db, () => openWallet(w, sim, { pin: pinOk(pin), tier: "minimum", ownerType: "person", displayName: fullName(p), by: "self-registration (USSD)" }));
+  return tx(w.db, () => openWallet(w, sim, { pin: acceptPin(w, sim.msisdn, pin, "new_wallet"), tier: "minimum", ownerType: "person", displayName: fullName(p), by: "self-registration (USSD)" }));
 }
 
 export interface MomoAgentRow {
@@ -246,7 +305,7 @@ export function agentRegisterWallet(w: World, telco: Telco, agentCode: unknown, 
     if (existing.owner_type !== "person" || existing.kyc_tier !== "minimum") throw new SimError(`${sim.msisdn} already has a wallet on ${existing.kyc_tier} KYC`);
     return upgradeTier(w, telco, sim.msisdn, "medium", `agent ${agent.code}`);
   }
-  return tx(w.db, () => openWallet(w, sim, { pin: pinOk(input.pin), tier: "medium", ownerType: "person", displayName: fullName(p), by: `agent ${agent.name} (${agent.code})` }));
+  return tx(w.db, () => openWallet(w, sim, { pin: acceptPin(w, sim.msisdn, input.pin, "new_wallet"), tier: "medium", ownerType: "person", displayName: fullName(p), by: `agent ${agent.name} (${agent.code})` }));
 }
 
 export function upgradeTier(w: World, telco: Telco, msisdn: unknown, tier: KycTier, by: string, proofOfAddress?: string): WalletRow {
@@ -285,7 +344,8 @@ export function resetPin(w: World, telco: Telco, by: string, input: { msisdn?: s
 }
 
 export function changePin(w: World, wallet: WalletRow, newPin: string) {
-  w.db.prepare("UPDATE wallets SET pin = ? WHERE id = ?").run(pinOk(newPin), wallet.id);
+  w.db.prepare("UPDATE wallets SET pin = ? WHERE id = ?").run(acceptPin(w, wallet.msisdn, newPin, "change"), wallet.id);
+  emit(w, wallet.telco, "pin.changed", { msisdn: wallet.msisdn, network: wallet.telco });
 }
 
 // ---------- mobile money agents and merchants ----------
@@ -307,8 +367,9 @@ function nextCode(w: World, table: "momo_agents" | "merchants", column: "code" |
 export function onboardMomoAgent(w: World, telco: Telco, input: { msisdn?: string; name?: string; town?: string; pin?: string }): MomoAgentRow {
   const name = need(input.name?.trim(), "Business name");
   const town = need(input.town?.trim(), "Town");
-  const pin = pinOk(input.pin);
+  pinOk(input.pin);
   const { sim, person } = businessLine(w, telco, input.msisdn);
+  const pin = acceptPin(w, sim.msisdn, input.pin, "agent_line");
   verify(w, { requester: telco, purpose: "Mobile money agent onboarding", card: person.ghana_card, biometric: false });
   const agentCode = nextCode(w, "momo_agents", "code", 200000);
   tx(w.db, () => {
@@ -329,8 +390,9 @@ export function setMomoAgentStatus(w: World, telco: Telco, agentCode: string, st
 export function onboardMerchant(w: World, telco: Telco, input: { msisdn?: string; name?: string; category?: string; town?: string; pin?: string }) {
   const name = need(input.name?.trim(), "Business name");
   const town = need(input.town?.trim(), "Town");
-  const pin = pinOk(input.pin);
+  pinOk(input.pin);
   const { sim, person } = businessLine(w, telco, input.msisdn);
+  const pin = acceptPin(w, sim.msisdn, input.pin, "merchant_line");
   verify(w, { requester: telco, purpose: "Merchant onboarding", card: person.ghana_card, biometric: false });
   const till = nextCode(w, "merchants", "till", 100000);
   tx(w.db, () => {

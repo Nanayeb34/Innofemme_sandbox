@@ -29,7 +29,7 @@ interface PhoneState {
   approvals: { ref: string; kind: string; amount: number; from: string }[];
   calls: CallLogRow[];
   conversations: { with: string; canReply: boolean; lastBody: string; lastAt: string; lastOut: boolean; count: number }[];
-  thread: { with: string; canReply: boolean; messages: { id: string; at: string; out: boolean; body: string; failed: string | null }[] } | null;
+  thread: { with: string; canReply: boolean; messages: { id: string; at: string; out: boolean; body: string; failed: string | null; warning: string | null }[] } | null;
   recent: { id: string; at: string; type: string; amount: number; status: string; from: string; to: string; out: boolean }[];
 }
 interface PhoneView {
@@ -405,6 +405,7 @@ function Messages({ team, state, thread, setThread, onSent }: { team: string; st
             open.messages.map((m) => (
               <div key={m.id} className={`flex ${m.out ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-snug ${m.out ? (m.failed ? "bg-red-100 text-red-900" : "bg-green-600 text-white") : "bg-white text-gray-900 shadow-sm"}`}>
+                  {m.warning && <p className="mb-1 rounded bg-amber-100 px-1.5 py-1 text-[11px] font-medium text-amber-900">⚠ {m.warning}</p>}
                   <p className="whitespace-pre-wrap break-words">{m.body}</p>
                   <p className={`mt-0.5 text-[10px] ${m.out && !m.failed ? "text-green-100" : "text-gray-400"}`}>
                     {when(m.at)}

@@ -2,7 +2,7 @@ import { HttpError, body, handle } from "@/server/http";
 import { issueToken, requirePartner } from "@/server/partner-auth";
 import { kycMatch, simSwapCheck, simSwapDate, subscriber } from "@/engine/signals";
 import { appSmsSent, sendAppSms, senderIdOf } from "@/engine/sms";
-import { withLock } from "@/engine/world";
+import { locked } from "@/engine/integrations";
 import { isTelco } from "@/engine/util";
 
 /**
@@ -31,7 +31,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   if (path === "token") return issueToken(req, team, telco);
   const { w, client } = requirePartner(req, team, telco);
   const b = await body(req);
-  return withLock(w, () => {
+  return locked(w, () => {
     switch (path) {
       case "v1/sms/messages": {
         const r = sendAppSms(w, { display_name: client.name, telco }, { to: b.to as string, text: b.text });
