@@ -34,6 +34,14 @@ export interface World {
   calls: Map<string, CallSignal>;
   /** When each number's phone screen was last open, to tell "switched off" from "not answering". */
   presence: Map<string, number>;
+  /** Payments an outside API asked to delay: when each may be tried again. */
+  cooldowns: Map<string, number>;
+  /** Answers from plugged-in APIs for the request being handled now. See integrations.ts. */
+  answers: Map<string, unknown>;
+  /** True while a request is being handled somewhere that can wait for an outside API. */
+  asking: boolean;
+  /** Events to tell plugged-in APIs about once the current request has succeeded. */
+  outbox: { institution: string; event: string; data: unknown }[];
   lock: Promise<unknown>;
 }
 
@@ -48,6 +56,10 @@ export function makeWorld(id: string, db: DB): World {
     otps: new Map(),
     calls: new Map(),
     presence: new Map(),
+    cooldowns: new Map(),
+    answers: new Map(),
+    asking: false,
+    outbox: [],
     lock: Promise.resolve(),
   };
 }

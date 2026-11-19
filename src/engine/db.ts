@@ -350,6 +350,37 @@ CREATE TABLE IF NOT EXISTS ussd_activations (
   PRIMARY KEY (code, telco)
 );
 
+-- ===== Plug-in points =====
+-- An outside company's API that an institution has plugged into one of its own steps. The institution
+-- calls it at that step and acts on the answer.
+CREATE TABLE IF NOT EXISTS integrations (
+  id TEXT PRIMARY KEY,
+  institution TEXT NOT NULL,         -- mtn | telecel | at | a bank
+  point TEXT NOT NULL,               -- the step it is plugged into, e.g. pin.set, payment.authorize
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  fail_open INTEGER NOT NULL DEFAULT 1, -- when the API does not answer: 1 carry on, 0 refuse
+  timeout_ms INTEGER NOT NULL DEFAULT 2000,
+  calls INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS integrations_point ON integrations(institution, point);
+
+-- What each plugged-in API was asked and what it answered.
+CREATE TABLE IF NOT EXISTS integration_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  integration_id TEXT NOT NULL,
+  institution TEXT NOT NULL,
+  point TEXT NOT NULL,
+  request TEXT NOT NULL,
+  decision TEXT NOT NULL,            -- allow | warn | delay | reject | error | sent (for events)
+  message TEXT,
+  ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS integration_calls_inst ON integration_calls(institution, id);
+
 -- ===== Settings and audit =====
 CREATE TABLE IF NOT EXISTS config (
   surface TEXT PRIMARY KEY,
@@ -387,8 +418,22 @@ export function openDb(file: string): DB {
   return db;
 }
 
+let savepoints = 0;
+
+/** Runs `fn` so that its writes all happen or none do. Inside a larger transaction it uses a savepoint, so it stays all-or-nothing on its own. */
 export function tx<T>(db: DB, fn: () => T): T {
-  if (db.isTransaction) return fn();
+  if (db.isTransaction) {
+    const name = `sp${++savepoints}`;
+    db.exec(`SAVEPOINT ${name}`);
+    try {
+      const out = fn();
+      db.exec(`RELEASE ${name}`);
+      return out;
+    } catch (e) {
+      db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`);
+      throw e;
+    }
+  }
   db.exec("BEGIN");
   try {
     const out = fn();
