@@ -1,5 +1,6 @@
 import { getConfig } from "./config/store";
-import { tx } from "./db";
+import { count, tx } from "./db";
+import { SWITCH, consult, emit } from "./integrations";
 import { balanceOf, getAccount, insertTxn, post } from "./ledger";
 import { BANK_IDS, PARTICIPANTS, SimError, TELCOS, cedis, isTelco, newId, participantName } from "./util";
 import { audit, type World } from "./world";
@@ -24,6 +25,16 @@ export function route(w: World, txnId: string, from: string, to: string, amount:
   if (!cfg.participants[from]?.connected) reject(`${participantName(from)} is disconnected from the national switch`);
   if (!cfg.participants[to]?.connected) reject(`${participantName(to)} is disconnected from the national switch`);
   if (amount > cfg.maxAmount * 100) reject(`Amount is above the switch limit of GHS ${cfg.maxAmount} per transaction`);
+  const d = consult(w, SWITCH, "switch.route", {
+    from,
+    fromName: participantName(from),
+    to,
+    toName: participantName(to),
+    amount: amount / 100,
+    destination: target.replace(/^account /, ""),
+    paymentsRoutedBetweenThemToday: count(w.db, "SELECT COUNT(*) AS n FROM switch_log WHERE step = 'commit' AND from_party = ? AND to_party = ? AND at >= ?", from, to, w.now - (w.now % 86_400_000)),
+  });
+  if (d.decision === "reject") reject(d.message ?? "The national switch refused this payment.");
   switchLog(w, txnId, "quote", from, to, `amount ${cedis(amount)}; switch fee ${cfg.feePerTxn.toFixed(2)} billed to ${participantName(from)}`);
 }
 
@@ -36,6 +47,7 @@ export function requireLink(w: World, from: string, to: string) {
 /** Step 3: the payment is final. The sender now owes the receiver through the switch until settlement. */
 export function commit(w: World, txnId: string, from: string, to: string, amount: number) {
   switchLog(w, txnId, "commit", from, to, `${cedis(amount)} cleared; ${participantName(from)} owes ${participantName(to)}`);
+  emit(w, SWITCH, "payment.routed", { transactionId: txnId, from, fromName: participantName(from), to, toName: participantName(to), amount: amount / 100 });
 }
 
 /** Ledger entries that move `amount` from one participant's position to another's. */

@@ -169,7 +169,6 @@ export function registerSim(w: World, telco: Telco, agentId: unknown, input: { c
   const about = { msisdn: sim.msisdn, network: telco, registeredBy: { id: agent.id, name: agent.name, kind: agent.kind, town: agent.town }, customer: customerOf(p), simsAlreadyOnThisGhanaCard: held, primaryNumber: primary?.msisdn ?? null };
   const verdict = consult(w, telco, "sim.register", about);
   if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This SIM cannot be registered right now.");
-  emit(w, telco, "sim.registered", about);
 
   tx(w.db, () => {
     w.db.prepare("UPDATE sims SET status = 'active', person_id = ?, registered_at = ?, registered_by = ? WHERE msisdn = ?").run(p.id, w.now, agent.id, sim.msisdn);
@@ -177,6 +176,7 @@ export function registerSim(w: World, telco: Telco, agentId: unknown, input: { c
     notify(w, telco, "sim_registered", sim.msisdn, { msisdn: sim.msisdn, name: fullName(p), ghana_card: p.ghana_card });
     audit(w, telco, "sim_registered", `${agent.name} registered ${sim.msisdn} to ${fullName(p)} (${p.ghana_card})`);
   });
+  emit(w, telco, "sim.registered", about);
   return { sim: getSim(w, sim.msisdn)!, person: p };
 }
 
@@ -210,13 +210,13 @@ export function swapSim(w: World, telco: Telco, agentId: unknown, input: { msisd
   };
   const verdict = consult(w, telco, "sim.swap", about);
   if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This SIM cannot be replaced right now.");
-  emit(w, telco, "sim.swapped", about);
   tx(w.db, () => {
     w.db.prepare("UPDATE sims SET iccid = ?, puk = ?, status = 'active', block_reason = NULL, last_swap_at = ? WHERE msisdn = ?").run(newIccid(), digits(8), w.now, sim.msisdn);
     simEvent(w, sim.msisdn, "swapped", agent.id, `New SIM card issued to ${fullName(p)}${hold ? `; mobile money sending paused for ${hold}h` : ""}`);
     notify(w, telco, "sim_swapped", sim.msisdn, { msisdn: sim.msisdn });
     audit(w, telco, "sim_swap", `${agent.name} replaced the SIM for ${sim.msisdn}`);
   });
+  emit(w, telco, "sim.swapped", about);
   return getSim(w, sim.msisdn)!;
 }
 
@@ -232,6 +232,7 @@ export function setSimStatus(w: World, telco: Telco, by: string, msisdn: unknown
     simEvent(w, sim.msisdn, status === "active" ? "unblocked" : status, by, reason);
     audit(w, telco, "sim_status", `${sim.msisdn} ${status === "active" ? "unblocked" : status} by ${by}${reason ? `: ${reason}` : ""}`);
   });
+  emit(w, telco, "sim.status_changed", { msisdn: sim.msisdn, network: telco, from: sim.status, to: status, by, reason: reason || null });
 }
 
 // ---------- wallets ----------
@@ -253,13 +254,13 @@ function openWallet(w: World, sim: SimRow, o: { pin: string; tier: KycTier; owne
   };
   const verdict = consult(w, sim.telco, "wallet.open", about);
   if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This wallet cannot be opened right now.");
-  emit(w, sim.telco, "wallet.opened", about);
   const id = `w_${sim.msisdn}`;
   w.db
     .prepare("INSERT INTO wallets(id, msisdn, telco, person_id, owner_type, display_name, kyc_tier, pin, created_at) VALUES(?,?,?,?,?,?,?,?,?)")
     .run(id, sim.msisdn, sim.telco, sim.person_id, o.ownerType, o.displayName, o.tier, o.pin, w.now);
   notify(w, sim.telco, "wallet_opened", sim.msisdn, {});
   audit(w, sim.telco, "wallet_opened", `${TELCO_INFO[sim.telco].wallet} wallet opened for ${o.displayName} (${sim.msisdn}), ${o.tier} KYC, via ${o.by}`);
+  emit(w, sim.telco, "wallet.opened", about);
   return getWallet(w, id)!;
 }
 
@@ -314,6 +315,10 @@ export function upgradeTier(w: World, telco: Telco, msisdn: unknown, tier: KycTi
   const order: KycTier[] = ["minimum", "medium", "enhanced"];
   if (!order.includes(tier)) throw new SimError("Unknown KYC tier");
   if (wallet.kyc_tier === tier) throw new SimError(`Wallet is already on ${tier} KYC`);
+  const about = { msisdn: wallet.msisdn, network: telco, from: wallet.kyc_tier, to: tier, requestedBy: by, customer: customerOf(personById(w, wallet.person_id)), walletOpenedAt: iso(wallet.created_at), proofOfAddress: proofOfAddress?.trim() || null };
+  const verdict = consult(w, telco, "kyc.upgrade", about);
+  if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This wallet's KYC level cannot be raised right now.");
+  emit(w, telco, "kyc.upgraded", about);
   tx(w.db, () => {
     w.db.prepare("UPDATE wallets SET kyc_tier = ? WHERE id = ?").run(tier, wallet.id);
     notify(w, telco, "kyc_upgraded", wallet.msisdn, { tier, daily: getConfig(w.db, "bog").kycTiers[tier].daily });
@@ -327,13 +332,27 @@ export function setWalletStatus(w: World, telco: Telco, msisdn: unknown, status:
   if (wallet.status === status) throw new SimError(`Wallet is already ${status}`);
   w.db.prepare("UPDATE wallets SET status = ?, pin_fails = 0 WHERE id = ?").run(status, wallet.id);
   audit(w, telco, "wallet_status", `Wallet ${wallet.msisdn} set to ${status}${reason ? `: ${reason}` : ""}`);
+  emit(w, telco, "wallet.status_changed", { msisdn: wallet.msisdn, network: telco, from: wallet.status, to: status, reason: reason || null });
 }
 
 /** PIN reset after the owner is verified in person. A temporary PIN is sent by SMS and the wallet is unlocked. */
 export function resetPin(w: World, telco: Telco, by: string, input: { msisdn?: string; card?: string; fingerprint?: string }) {
   const sim = ownSim(w, telco, input.msisdn);
   const wallet = ownWallet(w, telco, input.msisdn);
-  verifyOwner(w, telco, sim, by, "Mobile money PIN reset", input);
+  const owner = verifyOwner(w, telco, sim, by, "Mobile money PIN reset", input);
+  const about = {
+    msisdn: wallet.msisdn,
+    network: telco,
+    requestedBy: by,
+    customer: customerOf(owner),
+    walletBalance: wallet.balance / 100,
+    walletStatus: wallet.status,
+    lastSimSwapAt: iso(sim.last_swap_at),
+    pinResetsBefore: count(w.db, "SELECT COUNT(*) AS n FROM sim_events WHERE msisdn = ? AND kind = 'pin_reset'", sim.msisdn),
+  };
+  const verdict = consult(w, telco, "pin.reset", about);
+  if (verdict.decision === "reject") throw new SimError(verdict.message ?? "This PIN cannot be reset right now.");
+  emit(w, telco, "pin.reset", about);
   const pin = digits(4);
   tx(w.db, () => {
     w.db.prepare("UPDATE wallets SET pin = ?, pin_fails = 0, status = CASE WHEN status = 'locked' THEN 'active' ELSE status END WHERE id = ?").run(pin, wallet.id);
@@ -360,6 +379,21 @@ function businessLine(w: World, telco: Telco, msisdn: unknown): { sim: SimRow; p
   return { sim, person };
 }
 
+/** The network asks any API plugged in at "business.onboard" before signing up an agent or a merchant. */
+function screenBusiness(w: World, telco: Telco, b: { type: "agent" | "merchant"; businessName: string; category: string | null; town: string; msisdn: string; owner: Person }) {
+  const d = consult(w, telco, "business.onboard", {
+    type: b.type,
+    businessName: b.businessName,
+    category: b.category,
+    town: b.town,
+    msisdn: b.msisdn,
+    network: telco,
+    owner: customerOf(b.owner),
+    businessLinesAlreadyOnThisGhanaCard: count(w.db, "SELECT COUNT(*) AS n FROM wallets WHERE person_id = ? AND owner_type IN ('agent','merchant')", b.owner.id),
+  });
+  if (d.decision === "reject") throw new SimError(d.message ?? `This ${b.type} cannot be signed up right now.`);
+}
+
 function nextCode(w: World, table: "momo_agents" | "merchants", column: "code" | "till", base: number) {
   return String(base + count(w.db, `SELECT COUNT(*) AS n FROM ${table}`) + 1);
 }
@@ -369,6 +403,7 @@ export function onboardMomoAgent(w: World, telco: Telco, input: { msisdn?: strin
   const town = need(input.town?.trim(), "Town");
   pinOk(input.pin);
   const { sim, person } = businessLine(w, telco, input.msisdn);
+  screenBusiness(w, telco, { type: "agent", businessName: name, category: null, town, msisdn: sim.msisdn, owner: person });
   const pin = acceptPin(w, sim.msisdn, input.pin, "agent_line");
   verify(w, { requester: telco, purpose: "Mobile money agent onboarding", card: person.ghana_card, biometric: false });
   const agentCode = nextCode(w, "momo_agents", "code", 200000);
@@ -392,6 +427,7 @@ export function onboardMerchant(w: World, telco: Telco, input: { msisdn?: string
   const town = need(input.town?.trim(), "Town");
   pinOk(input.pin);
   const { sim, person } = businessLine(w, telco, input.msisdn);
+  screenBusiness(w, telco, { type: "merchant", businessName: name, category: input.category?.trim() || "General", town, msisdn: sim.msisdn, owner: person });
   const pin = acceptPin(w, sim.msisdn, input.pin, "merchant_line");
   verify(w, { requester: telco, purpose: "Merchant onboarding", card: person.ghana_card, biometric: false });
   const till = nextCode(w, "merchants", "till", 100000);

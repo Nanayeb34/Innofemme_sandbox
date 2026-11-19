@@ -739,10 +739,12 @@ const switchSystem: System = {
       config: getConfig(w.db, "switch"),
       activity: auditFeed(w, "switch"),
       apiPartners: listClients(w, "switch"),
+      ...pluginView(w, "switch"),
     };
   },
   actions: {
     ...partnerActions("switch"),
+    ...pluginActions("switch"),
     connect(w, b) {
       const p = String(b.participant);
       if (!PARTICIPANTS.includes(p)) throw new SimError("Unknown participant");

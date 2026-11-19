@@ -1,4 +1,6 @@
 import { BANKS, SimError, TELCOS, TELCO_INFO, TRUST_BANK, digits, newId } from "./util";
+import { count } from "./db";
+import { consult, emit } from "./integrations";
 import { fullName, verify } from "./nia";
 import { getAccount, type AccountRow } from "./ledger";
 import { audit, type World } from "./world";
@@ -16,10 +18,19 @@ function newAccountNo(w: World, bank: string): string {
 export function openAccount(w: World, bank: string, input: { card?: string; fingerprint?: string }): AccountRow {
   const p = verify(w, { requester: bank, purpose: "Bank account opening", card: input.card, fingerprint: input.fingerprint, biometric: true });
   if (w.db.prepare("SELECT 1 FROM bank_accounts WHERE bank = ? AND person_id = ? AND kind = 'personal'").get(bank, p.id)) throw new SimError(`${fullName(p)} already has an account at this bank`);
+  const about = {
+    bank,
+    customer: { name: fullName(p), ghanaCard: p.ghana_card, dateOfBirth: p.dob, gender: p.gender, region: p.region },
+    accountsAtOtherBanks: count(w.db, "SELECT COUNT(*) AS n FROM bank_accounts WHERE person_id = ? AND kind = 'personal'", p.id),
+    walletsOnThisGhanaCard: count(w.db, "SELECT COUNT(*) AS n FROM wallets WHERE person_id = ?", p.id),
+  };
+  const d = consult(w, bank, "account.open", about);
+  if (d.decision === "reject") throw new SimError(d.message ?? "This account cannot be opened right now.");
   const id = newId("acct");
   const no = newAccountNo(w, bank);
   w.db.prepare("INSERT INTO bank_accounts(id, bank, account_no, person_id, name, kind, created_at) VALUES(?,?,?,?,?, 'personal', ?)").run(id, bank, no, p.id, fullName(p), w.now);
   audit(w, bank, "account_opened", `Opened account ${no} for ${fullName(p)} (${p.ghana_card})`);
+  emit(w, bank, "account.opened", { ...about, accountNumber: no });
   return getAccount(w, id)!;
 }
 

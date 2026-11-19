@@ -33,7 +33,7 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
           </li>
           <li>
             <b>Plug-in points</b> (section 7) work the other way round: <em>you</em> build an API, and a network or bank plugs it into one of its own steps. It asks your API every time that step happens and does what you answer. Build this when your product is something an institution would
-            add to its own system: a PIN checker, a payment warning, a SIM-swap check, a scam-text filter.
+            add to its own system.
           </li>
           <li>
             <b>Console API</b> (sections 8 to 11) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
@@ -159,7 +159,7 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
 
         <Section title="7. Plug-in points: your API inside an institution's system" id="plugins">
           <p>
-            Put your API online, then open a network&apos;s or bank&apos;s console, go to <b>Plug-ins</b>, and enter its address and the step it should be asked at. From then on the institution sends a <code>POST</code> with a JSON body to your address every time that step
+            Put your API online, then open the console of a network, a bank or the national switch, go to <b>Plug-ins</b>, and enter its address and the step it should be asked at. From then on the institution sends a <code>POST</code> with a JSON body to your address every time that step
             happens, waits for your answer (2 seconds by default), and acts on it. The same tab shows every question it asked and what you answered, and has a <b>Send a test</b> button.
           </p>
           <Code>{`# What you receive
@@ -184,7 +184,7 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
                 {Object.entries(POINTS).map(([id, p]) => (
                   <tr key={id} className="border-b border-gray-100 align-top">
                     <td className="px-2 py-2 font-mono">{id}</td>
-                    <td className="px-2 py-2">{p.who === "telco" ? "A network" : p.who === "bank" ? "A bank" : "A network or bank"}</td>
+                    <td className="px-2 py-2">{p.who.map((x) => (x === "telco" ? "a network" : x === "bank" ? "a bank" : "the national switch")).join(", ").replace(/^a/, "A")}</td>
                     <td className="px-2 py-2">{p.when}</td>
                     <td className="px-2 py-2">{p.answers.join(", ") || "nothing"}</td>
                   </tr>
@@ -194,10 +194,12 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
           </div>
           <ul className="list-disc space-y-1 pl-5">
             <li>
-              <b>Who is asked.</b> For a payment, the payer&apos;s network. For a text or a call, the network of the person receiving it. For a bank transfer, the bank the money is leaving.
+              <b>Who is asked.</b> For a payment leaving a wallet, the payer&apos;s network (<code>payment.authorize</code>); for money arriving, the payee&apos;s network or bank (<code>payment.receive</code>); between two institutions, also the national switch. For a
+              request to approve a payment, the network of the customer being asked. For a text or a call, the network of the person receiving it. For a bank transfer, the bank the money is leaving.
             </li>
             <li>
-              <b>warn</b> is shown where the customer is looking at a screen: on a payment from the phone menu, as a label on a text, and on the incoming call screen. On a payment with nobody there to read it (through an API, or at an agent) it counts as allow.
+              <b>warn</b> is shown where the customer is looking at a screen: before the phone menu opens, on a payment from the phone menu, as a label on a text, and on the incoming call screen. On a payment with nobody there to read it (through an API, or at an
+              agent) it counts as allow.
             </li>
             <li>
               <b>delay</b> pauses payments from that payer to that payee. Asked again after the pause, you receive <code>afterDelay: true</code>.
@@ -208,7 +210,7 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
             <li>
               <b>events</b> are told to you after the fact, as <code>data.event</code>: {Object.keys(EVENTS).map((e) => <code key={e} className="mr-1 break-all">{e}</code>)}. Your answer is ignored.
             </li>
-            <li>Amounts are in cedis. Your API can call anything else it likes while deciding: the partner APIs above, your own database, a scam-report service.</li>
+            <li>Amounts are in cedis. Your API can call anything else it likes while deciding, including the partner APIs above.</li>
           </ul>
           <p>What <code>data</code> holds at each step:</p>
           {Object.entries(SAMPLES).map(([id, sample]) => (
@@ -220,9 +222,9 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
             </details>
           ))}
           <p>
-            A complete example is in the repository: <code>examples/pin-check-api.mjs</code>, a 40-line API that rejects a PIN when it is the end of the customer&apos;s number, one digit repeated, a simple sequence, or their date of birth. Plug one in from a script:
+            A starting point is in the repository: <code>examples/starter-api.mjs</code> answers &quot;allow&quot; to everything and prints what it was sent. Plug an API in from a script:
           </p>
-          <Code>{`curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"plugin_add","name":"Weak PIN checker","point":"pin.set","url":"https://your-api.example.com/","ifDown":"carry_on"}'`}</Code>
+          <Code>{`curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"plugin_add","name":"My API","point":"payment.authorize","url":"https://your-api.example.com/","ifDown":"carry_on"}'`}</Code>
         </Section>
 
         <Section title="8. Console API: one endpoint per institution">

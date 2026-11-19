@@ -50,7 +50,7 @@ function deliver(w: World, to: string, sender: string, text: string, meta: { kin
       textsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM sms_log WHERE status = 'delivered' AND ((sender = ? AND to_msisdn = ?) OR (sender = ? AND to_msisdn = ?))", sender, to, to, sender),
     });
     if (d.decision === "reject") reason = `Blocked by the recipient's network${d.message ? `: ${d.message}` : ""}`;
-    if (d.decision === "warn") warning = d.message ?? "Possible scam. Do not share your PIN or send money.";
+    if (d.decision === "warn") warning = d.message ?? "Flagged by your network";
   }
   if (reason) logSms(w, to, sender, text, meta, reason);
   else sendSms(w, to, sender, text, meta, warning);

@@ -119,28 +119,33 @@ Subscriber details, texts, payments and identity checks are what licensed partne
 
 ## Plug-in points
 
-A team's product can be an API that a network or bank adds to its own system. Each network and bank
-console has a **Plug-ins** tab: enter the API's address and choose the step it should be asked at. From
-then on the institution sends the details to that API every time the step happens, waits for the answer,
-and acts on it.
+A team's product can be an API that a network, a bank or the national switch adds to its own system. Each
+of their consoles has a **Plug-ins** tab: enter the API's address and choose the step it should be asked
+at. From then on the institution sends the details to that API every time the step happens, waits for the
+answer, and acts on it.
 
-| Step | Asked when | The API can answer |
-| --- | --- | --- |
-| `pin.set` | a customer chooses or changes a wallet PIN | allow, reject |
-| `wallet.open` | a wallet is about to be opened | allow, reject |
-| `payment.authorize` | a payment is about to leave a wallet | allow, warn, delay, reject |
-| `sim.register` | a SIM is about to be registered | allow, reject |
-| `sim.swap` | a number is about to move to a replacement SIM | allow, reject |
-| `sms.deliver` | a text is about to reach a subscriber | allow, warn, reject |
-| `call.connect` | a call is about to ring a subscriber | allow, warn, reject |
-| `transfer.authorize` (banks) | a transfer is about to leave an account | allow, reject |
-| `events` | after something has happened | nothing: it is only told |
+| Step | Who asks | Asked when | The API can answer |
+| --- | --- | --- | --- |
+| `pin.set` | network | a customer chooses or changes a wallet PIN | allow, reject |
+| `wallet.open` | network | a wallet is about to be opened | allow, reject |
+| `menu.open` | network | a customer opens the mobile money menu | allow, warn, reject |
+| `payment.authorize` | network | a payment is about to leave a wallet | allow, warn, delay, reject |
+| `payment.receive` | network, bank | money is about to arrive in a wallet or account | allow, reject |
+| `payment.request` | network | a business or agent asks a customer to approve a payment | allow, reject |
+| `kyc.upgrade` | network | a wallet's KYC level is about to be raised | allow, reject |
+| `pin.reset` | network | a PIN is about to be reset at a service point | allow, reject |
+| `business.onboard` | network | an agent or merchant is about to be signed up | allow, reject |
+| `sim.register` | network | a SIM is about to be registered | allow, reject |
+| `sim.swap` | network | a number is about to move to a replacement SIM | allow, reject |
+| `sms.deliver` | network | a text is about to reach a subscriber | allow, warn, reject |
+| `call.connect` | network | a call is about to ring a subscriber | allow, warn, reject |
+| `transfer.authorize` | bank | a transfer is about to leave an account | allow, reject |
+| `account.open` | bank | an account is about to be opened | allow, reject |
+| `switch.route` | national switch | a payment is about to pass between two institutions | allow, reject |
+| `events` | all | after something has happened | nothing: it is only told |
 
-`examples/pin-check-api.mjs` is a complete example: it rejects a PIN that is the end of the customer's
-number, one digit repeated, a simple sequence or their date of birth. Run it with
-`node examples/pin-check-api.mjs`, plug `http://localhost:4010/` into a network at "A customer chooses or
-changes a wallet PIN", and register a wallet on the customer phone. The API reference inside the app
-(section 7) shows exactly what is sent at each step.
+`examples/starter-api.mjs` is a starting point: it answers "allow" to everything and prints what it was
+sent. The API reference inside the app (section 7) shows exactly what is sent at each step.
 
 With nothing plugged in, the sandbox behaves exactly as it did before.
 

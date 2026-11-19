@@ -116,7 +116,7 @@ export function startCall(w: World, req: { from: string; to: string; device: str
   if (d.decision === "reject") refuse("failed", "The number you are calling is not available.");
 
   const id = record(w, { ...base, status: "ringing", reason: null });
-  w.calls.set(id, { offer: req.offer, candidates: { caller: [], callee: [] }, seen: { caller: w.now, callee: w.now }, callerDevice: req.device, warning: d.decision === "warn" ? (d.message ?? "Possible scam call") : undefined });
+  w.calls.set(id, { offer: req.offer, candidates: { caller: [], callee: [] }, seen: { caller: w.now, callee: w.now }, callerDevice: req.device, warning: d.decision === "warn" ? (d.message ?? "Flagged by your network") : undefined });
   return { id };
 }
 

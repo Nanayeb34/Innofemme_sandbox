@@ -78,7 +78,7 @@ export function Plugins({ team, path, institution, view, onChange }: { team: str
           submit="Plug in"
           onDone={onChange}
           fields={[
-            { name: "name", label: "Name", placeholder: "Weak PIN checker" },
+            { name: "name", label: "Name", placeholder: "My team's API" },
             { name: "point", label: "Ask it when…", type: "select", options: pointOptions },
             { name: "url", label: "The API's address", placeholder: "https://my-api.example.com/check", hint: "Must be reachable from this sandbox. Requests are sent as POST with a JSON body." },
             {

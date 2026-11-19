@@ -1,4 +1,5 @@
 import type { Fee } from "./config/schemas";
+import { emit } from "./integrations";
 import { SimError, type Telco } from "./util";
 import type { World } from "./world";
 
@@ -114,6 +115,7 @@ export function checkPin(w: World, wallet: WalletRow, pin: string | undefined, a
   const fails = wallet.pin_fails + 1;
   if (fails >= attemptsBeforeLock) {
     w.db.prepare("UPDATE wallets SET pin_fails = ?, status = 'locked' WHERE id = ?").run(fails, wallet.id);
+    emit(w, wallet.telco, "wallet.locked", { msisdn: wallet.msisdn, network: wallet.telco, wrongPins: fails });
     throw new SimError("Wrong PIN. Your wallet is now locked. Visit a service centre to reset your PIN.");
   }
   w.db.prepare("UPDATE wallets SET pin_fails = ? WHERE id = ?").run(fails, wallet.id);

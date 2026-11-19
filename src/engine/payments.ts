@@ -1,7 +1,7 @@
 import { getConfig } from "./config/store";
 import type { FeeKind } from "./config/schemas";
 import { count, tx } from "./db";
-import { Confirm, consult, emit } from "./integrations";
+import { Ask, Confirm, consult, emit } from "./integrations";
 import { accountByNumber, checkPin, feeFor, getAccount, getTxn, getWallet, insertTxn, post, walletByMsisdn, type AccountRow, type TxnRow, type WalletRow } from "./ledger";
 import { notify } from "./notify";
 import { commit, positionEntries, route } from "./switch";
@@ -69,7 +69,7 @@ function describePayer(w: World, from: WalletRow) {
     ...describeWallet(from),
     balance: from.balance / 100,
     lastSimSwapAt: iso(simOf(w, from.msisdn)?.last_swap_at),
-    // The number the payer is talking to right now, if they are on a call: the classic sign of someone being talked through a payment.
+    // The number the payer is talking to right now, if they are on a call.
     onCallWith: call ? (call.from_msisdn === from.msisdn ? call.to_msisdn : call.from_msisdn) : null,
     paymentsInLast24Hours: Number(day.n),
     amountSentInLast24Hours: Number(day.total) / 100,
@@ -93,7 +93,26 @@ function authorize(w: World, from: WalletRow, payeeKey: string, about: Record<st
     w.cooldowns.set(key, w.now + minutes * MINUTE);
     no(d.message ?? `This payment is paused for your protection. You can try again in ${minutes} minutes.`);
   }
-  if (d.decision === "warn" && o.interactive) throw new Confirm(d.message ?? "This payment looks unusual. Make sure you know who you are paying.");
+  if (d.decision === "warn" && o.interactive) throw new Confirm(d.message ?? "Please check this payment before you continue.");
+}
+
+/** The receiving end: the payee's network or bank asks any API plugged in at "payment.receive" before the money arrives. */
+function receive(w: World, institution: string, about: Record<string, unknown>, to: { wallet?: WalletRow; account?: AccountRow }, fromId: string | null, no: (why: string) => never) {
+  const column = to.wallet ? "to_wallet" : "to_account";
+  const id = (to.wallet ?? to.account)!.id;
+  const day = w.db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS total, COUNT(DISTINCT COALESCE(from_wallet, from_account)) AS payers FROM txns WHERE ${column} = ? AND status = 'success' AND created_at >= ?`).get(id, w.now - DAY) as { n: number; total: number; payers: number };
+  const d = consult(w, institution, "payment.receive", {
+    ...about,
+    payee: {
+      ...(to.wallet ? describeWallet(to.wallet) : describeAccount(to.account!)),
+      balance: (to.wallet ?? to.account)!.balance / 100,
+      paymentsReceivedInLast24Hours: Number(day.n),
+      differentPayersInLast24Hours: Number(day.payers),
+      amountReceivedInLast24Hours: Number(day.total) / 100,
+    },
+    paymentsFromThisPayerBefore: fromId ? count(w.db, `SELECT COUNT(*) AS n FROM txns WHERE ${column} = ? AND (from_wallet = ? OR from_account = ?) AND status = 'success'`, id, fromId, fromId) : 0,
+  });
+  if (d.decision === "reject") no(d.message ?? "The recipient cannot receive this payment right now.");
 }
 
 /** Wallet-to-bank fee. Moving money to your own bank account is free; sending to anyone else's is charged. */
@@ -170,11 +189,13 @@ export function walletPay(w: World, req: WalletPayment): Receipt {
     paymentsToThisPayeeBefore: count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE from_wallet = ? AND to_wallet = ? AND status = 'success'", from.id, to.id),
   };
   authorize(w, from, to.id, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
+  receive(w, to.telco, { type: req.type, amount: req.amount / 100, reference: req.reference ?? null, payer: describeWallet(from) }, { wallet: to }, from.id, no);
 
   if (cross) {
     try {
       route(w, id, from.telco, to.telco, req.amount, to.msisdn);
     } catch (e) {
+      if (e instanceof Ask) throw e;
       no((e as Error).message);
     }
   }
@@ -252,9 +273,11 @@ export function walletToBank(w: World, req: { from: string; accountNo: string; a
     paymentsToThisPayeeBefore: count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE from_wallet = ? AND to_account = ? AND status = 'success'", from.id, acct.id),
   };
   authorize(w, from, acct.id, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
+  receive(w, acct.bank, { type: "wallet_to_bank", amount: req.amount / 100, reference: req.reference ?? null, payer: describeWallet(from) }, { account: acct }, from.id, no);
   try {
     route(w, id, from.telco, acct.bank, req.amount, `account ${acct.account_no}`);
   } catch (e) {
+    if (e instanceof Ask) throw e;
     no((e as Error).message);
   }
 
@@ -295,9 +318,11 @@ export function bankToWallet(w: World, req: { bank: string; fromAccount?: string
   const limit = checkReceiveLimit(w, to, req.amount);
   if (limit) no(limit);
   const about = src ? authorizeTransfer(w, req.bank, { type: "bank_to_wallet", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: describeWallet(to) }, no) : undefined;
+  receive(w, to.telco, { type: "bank_to_wallet", amount: req.amount / 100, reference: req.reference ?? null, payer: src ? describeAccount(src) : { bank: req.bank, bankName: bankName(req.bank), cashOverTheCounter: true } }, { wallet: to }, src?.id ?? null, no);
   try {
     route(w, id, req.bank, to.telco, req.amount, to.msisdn);
   } catch (e) {
+    if (e instanceof Ask) throw e;
     no((e as Error).message);
   }
 
@@ -332,10 +357,12 @@ export function bankTransfer(w: World, req: { bank: string; fromAccount: string;
   const fee = interbank ? feeFor(getConfig(w.db, `bank.${req.bank}`).fees.interbank, req.amount) : 0;
   if (src.balance < req.amount + fee) no("Insufficient funds in the account");
   const about = authorizeTransfer(w, req.bank, { type: "bank_transfer", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: describeAccount(dest) }, no);
+  receive(w, dest.bank, { type: "bank_transfer", amount: req.amount / 100, reference: req.reference ?? null, payer: describeAccount(src) }, { account: dest }, src.id, no);
   if (interbank) {
     try {
       route(w, id, req.bank, dest.bank, req.amount, `account ${dest.account_no}`);
     } catch (e) {
+      if (e instanceof Ask) throw e;
       no((e as Error).message);
     }
   }

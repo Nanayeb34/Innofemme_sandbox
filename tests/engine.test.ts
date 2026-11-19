@@ -840,4 +840,96 @@ describe("plug-in points: an outside API plugged into an institution's own steps
     // Cash over the counter is not a transfer from an account, so it is not screened.
     await run(() => pay.bankToWallet(w, { bank: "gcb", msisdn: kofiNo, amount: 5000 }));
   });
+
+  it("the menu, money arriving, payment requests, KYC, PIN resets, sign-ups, bank accounts and the switch can be screened too", async () => {
+    const integrations = await import("../src/engine/integrations");
+    const approvals = await import("../src/engine/approvals");
+    for (const i of ["mtn", "gcb"]) for (const p of integrations.listIntegrations(w, i)) integrations.removeIntegration(w, i, p.id);
+    w.cooldowns.clear();
+    const only = (point: string, reply: Record<string, unknown>) => {
+      answer = (p) => (p === point ? reply : { decision: "allow" });
+    };
+    const ama = w.db.prepare("SELECT p.* FROM persons p JOIN sims s ON s.person_id = p.id WHERE s.msisdn = ?").get(amaNo) as unknown as Person;
+    const last = (point: string) => asked.findLast((a) => a.point === point)!.data;
+
+    // Before the menu opens: a message the customer must read first, or no menu at all.
+    plug("mtn", "menu.open");
+    only("menu.open", { decision: "warn", message: "A message before the menu." });
+    let s = await run(() => ussd(w, { msisdn: amaNo, input: "*170#" }));
+    expect(s).toMatchObject({ end: false });
+    expect(s.text).toMatch(/A message before the menu\.\n1\) Continue/);
+    expect(last("menu.open")).toMatchObject({ msisdn: amaNo, hasWallet: true, onCallWith: null });
+    s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input: "1" }));
+    expect(s.text).toContain((getConfig(w.db, "telco.mtn").menu.nodes.main as { text: string }).text);
+    only("menu.open", { decision: "reject", message: "Not available." });
+    expect(await run(() => ussd(w, { msisdn: amaNo, input: "*170#" }))).toMatchObject({ end: true, text: "Not available." });
+    only("", {});
+
+    // Money arriving: the payee's network is asked, and can refuse it.
+    plug("mtn", "payment.receive");
+    only("payment.receive", { decision: "reject", message: "This wallet cannot receive money right now." });
+    const from = walletByMsisdn(w, amaNo)!, to = walletByMsisdn(w, kofiNo)!;
+    await expect(run(() => pay.walletPay(w, { type: "p2p", channel: "api", from: from.id, to: to.id, amount: 500 }))).rejects.toThrow(/cannot receive money/);
+    expect(last("payment.receive")).toMatchObject({ amount: 5, payer: { msisdn: amaNo }, payee: { msisdn: kofiNo, paymentsReceivedInLast24Hours: expect.any(Number) } });
+    expect(walletByMsisdn(w, amaNo)!.balance).toBe(from.balance);
+
+    // Signing up a merchant.
+    const esi = person(w, "Esi", "Quaye", "1983-03-03");
+    const shopNo = telco.registerSim(w, "mtn", point, { card: esi.ghana_card, fingerprint: esi.fingerprint }).sim.msisdn;
+    plug("mtn", "business.onboard");
+    only("business.onboard", { decision: "reject", message: "Sign-up refused." });
+    await expect(run(() => telco.onboardMerchant(w, "mtn", { msisdn: shopNo, name: "Esi Provisions", town: "Tema", pin: "1357" }))).rejects.toThrow(/Sign-up refused/);
+    expect(last("business.onboard")).toMatchObject({ type: "merchant", businessName: "Esi Provisions", owner: { name: "Esi Quaye" } });
+    only("", {});
+    await run(() => telco.onboardMerchant(w, "mtn", { msisdn: shopNo, name: "Esi Provisions", town: "Tema", pin: "1357" }));
+
+    // A business asks a customer to pay: blocked before the customer ever sees it.
+    plug("mtn", "payment.request");
+    only("payment.request", { decision: "reject", message: "Request blocked." });
+    const r = await run(() => approvals.createApproval(w, { kind: "rtp", payeeWallet: `w_${shopNo}`, payerMsisdn: amaNo, amount: 1000, payerMessage: "Order 1" }));
+    expect(r).toMatchObject({ status: "FAILED", reason: "Request blocked." });
+    expect(approvals.pendingFor(w, amaNo)).toHaveLength(0);
+    expect(last("payment.request")).toMatchObject({ kind: "payment_request", amount: 10, requester: { name: "Esi Provisions" }, customer: { msisdn: amaNo }, customerHasPaidThisRequesterBefore: false });
+
+    // KYC upgrades and PIN resets.
+    plug("mtn", "kyc.upgrade");
+    plug("mtn", "pin.reset");
+    only("kyc.upgrade", { decision: "reject", message: "Upgrade refused." });
+    await expect(run(() => telco.upgradeTier(w, "mtn", amaNo, "medium", "back office"))).rejects.toThrow(/Upgrade refused/);
+    only("pin.reset", { decision: "reject", message: "Reset refused." });
+    await expect(run(() => telco.resetPin(w, "mtn", point, { msisdn: amaNo, card: ama.ghana_card, fingerprint: ama.fingerprint }))).rejects.toThrow(/Reset refused/);
+    expect(walletByMsisdn(w, amaNo)).toMatchObject({ kyc_tier: "minimum", pin: from.pin });
+
+    // Opening a bank account.
+    plug("ecobank", "account.open");
+    only("account.open", { decision: "reject", message: "Account refused." });
+    await expect(run(() => openAccount(w, "ecobank", { card: ama.ghana_card, fingerprint: ama.fingerprint }))).rejects.toThrow(/Account refused/);
+    expect(last("account.open")).toMatchObject({ bank: "ecobank", accountsAtOtherBanks: 1 });
+
+    // The national switch, between a network and a bank.
+    for (const p of integrations.listIntegrations(w, "mtn")) integrations.removeIntegration(w, "mtn", p.id);
+    plug("switch", "switch.route");
+    plug("switch", "events");
+    const acct = w.db.prepare("SELECT account_no FROM bank_accounts WHERE bank = 'gcb' AND kind = 'personal'").get() as { account_no: string };
+    only("switch.route", { decision: "reject", message: "Refused by the switch." });
+    await expect(run(() => pay.walletToBank(w, { from: from.id, accountNo: acct.account_no, amount: 1000, channel: "api" }))).rejects.toThrow(/Refused by the switch/);
+    expect(last("switch.route")).toMatchObject({ from: "mtn", to: "gcb", amount: 10, destination: acct.account_no });
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM switch_log WHERE step = 'reject' AND detail = 'Refused by the switch.'")).toBe(1);
+    only("", {});
+    await run(() => pay.walletToBank(w, { from: from.id, accountNo: acct.account_no, amount: 1000, channel: "api" }));
+    await settled();
+    expect(asked.findLast((a) => a.data.event === "payment.routed")!.data).toMatchObject({ from: "mtn", to: "gcb", amount: 10 });
+
+    // Something that happens on a refused request is still reported: a wallet locking on wrong PINs.
+    plug("mtn", "events");
+    const attempts = getConfig(w.db, "telco.mtn").pinAttemptsBeforeLock;
+    for (let i = 0; i < attempts; i++) await expect(run(() => pay.walletPay(w, { type: "p2p", channel: "api", from: to.id, to: from.id, amount: 100, pin: "0000" }))).rejects.toThrow(/Wrong PIN/);
+    await settled();
+    expect(asked.findLast((a) => a.data.event === "wallet.locked")!.data).toMatchObject({ msisdn: kofiNo });
+    expect(walletByMsisdn(w, kofiNo)!.status).toBe("locked");
+
+    // Each institution only has its own steps.
+    expect(integrations.pointsFor("switch").map(([id]) => id)).toEqual(["switch.route", "events"]);
+    expect(() => integrations.addIntegration(w, "gcb", { point: "sim.swap", name: "x", url })).toThrow(/no such step/);
+  });
 });

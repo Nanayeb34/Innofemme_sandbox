@@ -5,7 +5,7 @@ import type { Condition, FactName, Menu, MenuNode } from "./config/schemas";
 import { accountByNumber, checkPin, feeFor, getWallet, walletByMsisdn, type WalletRow } from "./ledger";
 import { fullName, personById } from "./nia";
 import { render } from "./notify";
-import { Confirm, emit } from "./integrations";
+import { Confirm, consult, emit } from "./integrations";
 import { toBankFee, walletPay, walletToBank, type Receipt } from "./payments";
 import { changePin, getSim, pinProblem, selfRegisterWallet, type SimRow } from "./telco";
 import { SimError, TELCO_INFO, bankName, cedis, clock, newId, normalizeMsisdn } from "./util";
@@ -38,6 +38,17 @@ export function ussd(w: World, args: { sessionId?: string; msisdn: string; input
   const menu = cfg.menu;
   const brand = TELCO_INFO[sim.telco];
 
+  /** The first screen of the mobile money menu: the menu itself, or the offer to register. */
+  const opening = (session: UssdSession): Screen => {
+    const wallet = walletByMsisdn(w, sim.msisdn);
+    if (!wallet) {
+      if (!cfg.selfRegistration) return end(`You are not registered for ${brand.wallet}. Visit a ${brand.wallet} agent with your Ghana Card.`);
+      session.pending = { kind: "register", data: { step: "offer" } };
+      return show(`Welcome to ${brand.wallet}. This number has no wallet yet.\n1) Register now\n2) Cancel`);
+    }
+    return guard(() => advance(w, session, menu, wallet));
+  };
+
   let s = args.sessionId ? w.ussd.get(args.sessionId) : undefined;
   if (!s) {
     const dialled = args.input.trim();
@@ -48,13 +59,25 @@ export function ussd(w: World, args: { sessionId?: string; msisdn: string; input
     if (dialled !== menu.shortcode) return none(`Unknown USSD code. ${brand.wallet} is ${menu.shortcode}. Other codes: ${REGISTRATION_CHECK_CODE} registration status, ${LINKED_SIMS_CODE} numbers on your Ghana Card, ${OWN_NUMBER_CODE[sim.telco]} your number.`);
     s = { id: newId("ussd"), msisdn: sim.msisdn, telco: sim.telco, node: menu.start, vars: {}, startedAt: Date.now(), lastAt: Date.now() };
     w.ussd.set(s.id, s);
+    // The network may have plugged in an API that has something to say before the menu opens.
     const wallet = walletByMsisdn(w, sim.msisdn);
-    if (!wallet) {
-      if (!cfg.selfRegistration) return reply(w, s, end(`You are not registered for ${brand.wallet}. Visit a ${brand.wallet} agent with your Ghana Card.`));
-      s.pending = { kind: "register", data: { step: "offer" } };
-      return reply(w, s, show(`Welcome to ${brand.wallet}. This number has no wallet yet.\n1) Register now\n2) Cancel`));
+    const owner = personById(w, sim.person_id ?? "");
+    const call = w.db.prepare("SELECT from_msisdn, to_msisdn FROM calls WHERE status = 'active' AND (from_msisdn = ? OR to_msisdn = ?) LIMIT 1").get(sim.msisdn, sim.msisdn) as { from_msisdn: string; to_msisdn: string } | undefined;
+    const d = consult(w, sim.telco, "menu.open", {
+      msisdn: sim.msisdn,
+      network: sim.telco,
+      hasWallet: !!wallet,
+      customer: owner ? { name: fullName(owner), ghanaCard: owner.ghana_card, dateOfBirth: owner.dob, gender: owner.gender, region: owner.region } : null,
+      wallet: wallet ? { kycTier: wallet.kyc_tier, walletOpenedAt: new Date(wallet.created_at).toISOString(), status: wallet.status } : null,
+      lastSimSwapAt: sim.last_swap_at ? new Date(sim.last_swap_at).toISOString() : null,
+      onCallWith: call ? (call.from_msisdn === sim.msisdn ? call.to_msisdn : call.from_msisdn) : null,
+    });
+    if (d.decision === "reject") return reply(w, s, end(d.message ?? "This service is not available right now."));
+    if (d.decision === "warn") {
+      s.pending = { kind: "notice" };
+      return reply(w, s, show(`${d.message ?? "A message from your network."}\n1) Continue`));
     }
-    return reply(w, s, guard(() => advance(w, s!, menu, wallet)));
+    return reply(w, s, opening(s));
   }
 
   if (Date.now() - s.lastAt > menu.sessionTimeoutSec * 1000) {
@@ -64,6 +87,11 @@ export function ussd(w: World, args: { sessionId?: string; msisdn: string; input
   s.lastAt = Date.now();
   const input = args.input.trim();
   const session = s;
+  if (session.pending?.kind === "notice") {
+    // The customer has read a message a plugged-in API asked to be shown before the menu.
+    session.pending = undefined;
+    return reply(w, session, input === "1" ? opening(session) : end("Session ended."));
+  }
   return reply(
     w,
     session,

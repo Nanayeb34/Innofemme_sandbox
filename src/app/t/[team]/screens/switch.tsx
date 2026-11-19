@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ActionButton, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
 import { ApiPartners, type ApiPartner } from "./partners";
+import { Plugins, type PluginView } from "./plugins";
 
 interface SwitchView {
   participants: { participant: string; name: string; kind: string; connected: boolean; position: number; sent: number; received: number; feesBilled: number; settlesVia: string }[];
@@ -14,10 +15,14 @@ interface SwitchView {
   disputes: { id: string; from: string; otherId: string; to: string; amount: number; held: number; returned: number; status: string; resolution: string | null; raisedAt: string; updatedAt: string }[];
   config: { feePerTxn: number; maxAmount: number };
   apiPartners: ApiPartner[];
+  plugins: PluginView["plugins"];
+  pluginPoints: PluginView["pluginPoints"];
+  pluginEvents: PluginView["pluginEvents"];
+  pluginCalls: PluginView["pluginCalls"];
   activity: ActivityRow[];
 }
 
-const TABS = [["participants", "Participants and positions"], ["log", "Message log"], ["settlements", "Settlements"], ["txns", "Routed payments"], ["disputes", "Disputes"], ["api", "API partners"], ["settings", "Settings"]] as const;
+const TABS = [["participants", "Participants and positions"], ["log", "Message log"], ["settlements", "Settlements"], ["txns", "Routed payments"], ["disputes", "Disputes"], ["api", "API partners"], ["plugins", "Plug-ins"], ["settings", "Settings"]] as const;
 
 export default function Switch({ team }: { team: string }) {
   const path = "/s/switch";
@@ -147,6 +152,8 @@ export default function Switch({ team }: { team: string }) {
           />
         </Section>
       )}
+
+      {tab === "plugins" && <Plugins team={team} path={path} institution="The national switch" view={data} onChange={refresh} />}
 
       {tab === "api" && (
         <ApiPartners

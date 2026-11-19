@@ -1,3 +1,4 @@
+import { emit } from "./integrations";
 import { count, tx } from "./db";
 import { getTxn, getWallet, insertTxn, post, walletByMsisdn, type TxnRow, type WalletRow } from "./ledger";
 import { notify } from "./notify";
@@ -108,6 +109,7 @@ export function openTicket(w: World, telco: Telco, input: { msisdn?: string; cat
     note(w, t.id, input.by, `Ticket opened (${input.channel === "ussd" ? "from the customer's phone" : input.channel === "call" ? "on a call to customer care" : "by the back office"}): ${description}${txn ? `. Payment ${shortId(txn.id)} of GHS ${cedis(txn.amount)}.` : ""}`);
     notify(w, telco, "ticket_opened", msisdn, { ticket: t.id, category: CATEGORIES[category] });
     audit(w, telco, "ticket", `Ticket ${t.id} opened for ${msisdn}: ${CATEGORIES[category]}`);
+    emit(w, telco, "complaint.opened", { ticket: t.id, msisdn, network: telco, category, description, channel: input.channel, transactionId: txn?.id ?? null, amount: txn ? txn.amount / 100 : null });
     return t;
   });
 }

@@ -25,50 +25,83 @@ export interface Decision {
 const ALLOW: Decision = { decision: "allow" };
 const STRICT: Answer[] = ["allow", "warn", "delay", "reject"];
 
-export const POINTS: Record<string, { who: "telco" | "bank" | "both"; when: string; answers: Answer[] }> = {
-  "pin.set": { who: "telco", when: "A customer chooses or changes a wallet PIN", answers: ["allow", "reject"] },
-  "wallet.open": { who: "telco", when: "A mobile money wallet is about to be opened", answers: ["allow", "reject"] },
-  "payment.authorize": { who: "telco", when: "A payment from one of this network's wallets is about to go through", answers: ["allow", "warn", "delay", "reject"] },
-  "sim.register": { who: "telco", when: "A SIM is about to be registered to a Ghana Card", answers: ["allow", "reject"] },
-  "sim.swap": { who: "telco", when: "A number is about to be moved to a replacement SIM", answers: ["allow", "reject"] },
-  "sms.deliver": { who: "telco", when: "A text from a person or a business is about to reach one of this network's subscribers", answers: ["allow", "warn", "reject"] },
-  "call.connect": { who: "telco", when: "A call is about to ring one of this network's subscribers", answers: ["allow", "warn", "reject"] },
-  "transfer.authorize": { who: "bank", when: "A transfer from one of this bank's accounts is about to go through", answers: ["allow", "reject"] },
-  events: { who: "both", when: "After something has happened (a payment, a SIM replacement, a new wallet…). For information only: the answer is ignored", answers: [] },
+type Who = "telco" | "bank" | "switch";
+
+export const POINTS: Record<string, { who: Who[]; when: string; answers: Answer[] }> = {
+  "pin.set": { who: ["telco"], when: "A customer chooses or changes a wallet PIN", answers: ["allow", "reject"] },
+  "wallet.open": { who: ["telco"], when: "A mobile money wallet is about to be opened", answers: ["allow", "reject"] },
+  "menu.open": { who: ["telco"], when: "A customer opens the mobile money menu on their phone", answers: ["allow", "warn", "reject"] },
+  "payment.authorize": { who: ["telco"], when: "A payment from one of this network's wallets is about to go through", answers: ["allow", "warn", "delay", "reject"] },
+  "payment.receive": { who: ["telco", "bank"], when: "Money is about to arrive in one of this institution's wallets or accounts", answers: ["allow", "reject"] },
+  "payment.request": { who: ["telco"], when: "A business or an agent asks one of this network's customers to approve a payment", answers: ["allow", "reject"] },
+  "kyc.upgrade": { who: ["telco"], when: "A wallet's KYC level is about to be raised", answers: ["allow", "reject"] },
+  "pin.reset": { who: ["telco"], when: "A wallet PIN is about to be reset at a service point", answers: ["allow", "reject"] },
+  "business.onboard": { who: ["telco"], when: "A mobile money agent or a merchant is about to be signed up", answers: ["allow", "reject"] },
+  "sim.register": { who: ["telco"], when: "A SIM is about to be registered to a Ghana Card", answers: ["allow", "reject"] },
+  "sim.swap": { who: ["telco"], when: "A number is about to be moved to a replacement SIM", answers: ["allow", "reject"] },
+  "sms.deliver": { who: ["telco"], when: "A text from a person or a business is about to reach one of this network's subscribers", answers: ["allow", "warn", "reject"] },
+  "call.connect": { who: ["telco"], when: "A call is about to ring one of this network's subscribers", answers: ["allow", "warn", "reject"] },
+  "transfer.authorize": { who: ["bank"], when: "A transfer from one of this bank's accounts is about to go through", answers: ["allow", "reject"] },
+  "account.open": { who: ["bank"], when: "A bank account is about to be opened", answers: ["allow", "reject"] },
+  "switch.route": { who: ["switch"], when: "A payment between two institutions is about to be passed on", answers: ["allow", "reject"] },
+  events: { who: ["telco", "bank", "switch"], when: "After something has happened. For information only: the answer is ignored", answers: [] },
 };
+
+/** The institution that owns the national switch's plug-ins. */
+export const SWITCH = "switch";
+const kindOf = (institution: string): Who | undefined => (isTelco(institution) ? "telco" : BANK_IDS.includes(institution) ? "bank" : institution === SWITCH ? "switch" : undefined);
 
 const CUSTOMER = { name: "Ama Mensah", ghanaCard: "GHA-123456789-0", dateOfBirth: "1994-03-12", gender: "F", region: "Ashanti" };
 const WALLET = { msisdn: "0241234567", name: "Ama Mensah", network: "mtn", walletType: "person", kycTier: "medium", walletOpenedAt: "2026-11-02T09:14:00.000Z" };
+const OTHER = { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person", kycTier: "minimum", walletOpenedAt: "2026-11-05T16:40:00.000Z" };
+const ACCOUNT = { bank: "gcb", bankName: "GCB Bank", accountNumber: "0401000012", name: "Ama Mensah", accountOpenedAt: "2026-11-03T10:00:00.000Z" };
 const POINT = { id: "sa_1a2b3c", name: "Adum Service Centre", kind: "service_centre", town: "Kumasi" };
 
 /** An example of what an institution sends at each step: used in the API reference and by the console's "Send a test" button. */
 export const SAMPLES: Record<string, Record<string, unknown>> = {
-  "pin.set": { msisdn: "0241234567", pin: "4567", reason: "new_wallet", network: "mtn", customer: CUSTOMER },
+  "pin.set": { msisdn: "0241234567", pin: "2749", reason: "new_wallet", network: "mtn", customer: CUSTOMER },
   "wallet.open": { msisdn: "0241234567", network: "mtn", walletType: "person", walletName: "Ama Mensah", kycTier: "minimum", openedBy: "self-registration (USSD)", customer: CUSTOMER, simRegisteredAt: "2026-11-02T09:02:00.000Z", lastSimSwapAt: null, walletsOnThisGhanaCard: 0 },
+  "menu.open": { msisdn: "0241234567", network: "mtn", hasWallet: true, customer: CUSTOMER, wallet: { kycTier: "medium", walletOpenedAt: "2026-11-02T09:14:00.000Z", status: "active" }, lastSimSwapAt: null, onCallWith: null },
   "payment.authorize": {
     type: "p2p",
     channel: "ussd",
-    amount: 500,
-    fee: 0,
-    reference: "school fees",
-    payer: { ...WALLET, balance: 1250.5, lastSimSwapAt: null, onCallWith: "0209876543", paymentsInLast24Hours: 1, amountSentInLast24Hours: 40 },
-    payee: { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person", kycTier: "minimum", walletOpenedAt: "2026-11-18T16:40:00.000Z" },
-    paymentsToThisPayeeBefore: 0,
+    amount: 50,
+    fee: 0.38,
+    reference: "lunch",
+    payer: { ...WALLET, balance: 1250.5, lastSimSwapAt: null, onCallWith: null, paymentsInLast24Hours: 1, amountSentInLast24Hours: 40 },
+    payee: OTHER,
+    paymentsToThisPayeeBefore: 3,
     afterDelay: false,
   },
+  "payment.receive": {
+    type: "p2p",
+    amount: 50,
+    reference: "lunch",
+    payer: OTHER,
+    payee: { ...WALLET, balance: 1250.5, paymentsReceivedInLast24Hours: 2, differentPayersInLast24Hours: 2, amountReceivedInLast24Hours: 90 },
+    paymentsFromThisPayerBefore: 3,
+  },
+  "payment.request": {
+    kind: "payment_request",
+    amount: 120,
+    message: "Order 1042",
+    requester: { msisdn: "0551112223", name: "Esi Provisions", network: "mtn", walletType: "merchant", kycTier: "enhanced", walletOpenedAt: "2026-11-04T08:00:00.000Z" },
+    customer: WALLET,
+    customerHasPaidThisRequesterBefore: true,
+    requestsFromThisRequesterToday: 4,
+    chargedWithoutAsking: false,
+  },
+  "kyc.upgrade": { msisdn: "0241234567", network: "mtn", from: "minimum", to: "medium", requestedBy: "agent 200001", customer: CUSTOMER, walletOpenedAt: "2026-11-02T09:14:00.000Z", proofOfAddress: null },
+  "pin.reset": { msisdn: "0241234567", network: "mtn", requestedBy: "sa_1a2b3c", customer: CUSTOMER, walletBalance: 1250.5, walletStatus: "locked", lastSimSwapAt: null, pinResetsBefore: 0 },
+  "business.onboard": { type: "merchant", businessName: "Esi Provisions", category: "Groceries", town: "Kumasi", msisdn: "0551112223", network: "mtn", owner: CUSTOMER, businessLinesAlreadyOnThisGhanaCard: 0 },
   "sim.register": { msisdn: "0241234567", network: "mtn", registeredBy: POINT, customer: CUSTOMER, simsAlreadyOnThisGhanaCard: 1, primaryNumber: "0201112223" },
   "sim.swap": { msisdn: "0241234567", network: "mtn", replacedBy: POINT, customer: CUSTOMER, simRegisteredAt: "2026-11-02T09:02:00.000Z", previousSwapAt: null, simStatus: "active", hasWallet: true, walletBalance: 1250.5, swapsOnThisNumberBefore: 0 },
-  "sms.deliver": { from: "0209876543", fromType: "person", fromNetwork: "telecel", to: "0241234567", toNetwork: "mtn", text: "Hello, I sent GHS 500 to your number by mistake. Please send it back.", textsBetweenThemBefore: 0 },
-  "call.connect": { from: "0209876543", fromNetwork: "telecel", callerSimRegisteredAt: "2026-11-18T16:31:00.000Z", to: "0241234567", toNetwork: "mtn", callsBetweenThemBefore: 0, numbersTheCallerHasRungToday: 14 },
-  "transfer.authorize": {
-    type: "bank_to_wallet",
-    amount: 2000,
-    fee: 5,
-    reference: "rent",
-    from: { bank: "gcb", bankName: "GCB Bank", accountNumber: "0401000012", name: "Ama Mensah", accountOpenedAt: "2026-11-03T10:00:00.000Z", balance: 5400 },
-    to: { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person", kycTier: "minimum", walletOpenedAt: "2026-11-18T16:40:00.000Z" },
-  },
-  events: { event: "payment.completed", type: "p2p", channel: "ussd", amount: 500, fee: 0, payer: WALLET, payee: { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel" }, transactionId: "tx_9f8e7d6c5b4a3210", continuedAfterWarning: false },
+  "sms.deliver": { from: "0209876543", fromType: "person", fromNetwork: "telecel", to: "0241234567", toNetwork: "mtn", text: "Hello, are we still meeting tomorrow?", textsBetweenThemBefore: 6 },
+  "call.connect": { from: "0209876543", fromNetwork: "telecel", callerSimRegisteredAt: "2026-11-05T16:31:00.000Z", to: "0241234567", toNetwork: "mtn", callsBetweenThemBefore: 2, numbersTheCallerHasRungToday: 3 },
+  "transfer.authorize": { type: "bank_to_wallet", amount: 200, fee: 1, reference: "rent", from: { ...ACCOUNT, balance: 5400 }, to: OTHER },
+  "account.open": { bank: "gcb", customer: CUSTOMER, accountsAtOtherBanks: 1, walletsOnThisGhanaCard: 1 },
+  "switch.route": { from: "mtn", fromName: "MTN MoMo", to: "telecel", toName: "Telecel Cash", amount: 50, destination: "0209876543", paymentsRoutedBetweenThemToday: 12 },
+  events: { event: "payment.completed", type: "p2p", channel: "ussd", amount: 50, fee: 0.38, payer: WALLET, payee: OTHER, transactionId: "tx_9f8e7d6c5b4a3210", continuedAfterWarning: false },
 };
 
 /** What an institution tells APIs plugged in at "events". */
@@ -77,13 +110,21 @@ export const EVENTS: Record<string, string> = {
   "payment.warning_shown": "A customer was shown a warning from a plugged-in API",
   "payment.cancelled_after_warning": "The customer read the warning and cancelled",
   "wallet.opened": "A wallet was opened",
+  "wallet.locked": "A wallet was locked after too many wrong PINs",
+  "wallet.status_changed": "A wallet was frozen or unfrozen",
+  "kyc.upgraded": "A wallet's KYC level was raised",
   "pin.changed": "A customer changed their wallet PIN",
+  "pin.reset": "A wallet PIN was reset at a service point",
   "sim.registered": "A SIM was registered",
   "sim.swapped": "A number was moved to a replacement SIM",
+  "sim.status_changed": "A number was blocked, unblocked or disconnected",
+  "complaint.opened": "A customer made a complaint to customer care",
   "transfer.completed": "A transfer from one of the bank's accounts went through",
+  "account.opened": "A bank account was opened",
+  "payment.routed": "The national switch passed a payment from one institution to another",
 };
 
-export const pointsFor = (institution: string) => Object.entries(POINTS).filter(([, p]) => p.who === "both" || (p.who === "telco" ? isTelco(institution) : BANK_IDS.includes(institution)));
+export const pointsFor = (institution: string) => Object.entries(POINTS).filter(([, p]) => p.who.includes(kindOf(institution) as Who));
 
 export interface Integration {
   id: string;
@@ -300,8 +341,12 @@ export async function runWithIntegrations<T>(w: World, fn: () => T | Promise<T>)
         return out;
       } catch (e) {
         if (!(e instanceof Ask)) {
-          // An ordinary refusal: what it recorded on the way (a failed payment, a wrong PIN) stands.
+          // An ordinary refusal: what it recorded on the way (a failed payment, a wrong PIN) stands,
+          // and so does anything it reported as having happened.
           if (w.db.isTransaction) w.db.exec("COMMIT");
+          const events = w.outbox;
+          w.outbox = [];
+          if (events.length) void flush(w, events);
           throw e;
         }
         w.db.exec("ROLLBACK");

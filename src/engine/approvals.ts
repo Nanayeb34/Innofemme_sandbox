@@ -1,4 +1,4 @@
-import { Ask, Confirm } from "./integrations";
+import { Ask, Confirm, consult } from "./integrations";
 import { randomUUID } from "node:crypto";
 import { getConfig } from "./config/store";
 import { recipientAnswered } from "./care";
@@ -45,6 +45,33 @@ export function createApproval(
     if (payer.id === payee.id) throw new SimError("An agent cannot cash out from its own agent line");
   }
   const ref = r.ref ?? randomUUID();
+  // The customer's network may have plugged in an API that screens requests before they reach the customer.
+  let blocked: string | undefined;
+  if (payer) {
+    const standing = r.kind === "rtp" && hasPreapproval(w, payee.id, payer.msisdn);
+    const d = consult(w, payer.telco, "payment.request", {
+      kind: r.kind === "cashout" ? "cash_out" : "payment_request",
+      amount: r.amount / 100,
+      message: r.payerMessage ?? null,
+      requester: { msisdn: payee.msisdn, name: payee.display_name, network: payee.telco, walletType: payee.owner_type, kycTier: payee.kyc_tier, walletOpenedAt: new Date(payee.created_at).toISOString() },
+      customer: { msisdn: payer.msisdn, name: payer.display_name, network: payer.telco, walletType: payer.owner_type, kycTier: payer.kyc_tier, walletOpenedAt: new Date(payer.created_at).toISOString() },
+      customerHasPaidThisRequesterBefore: !!w.db.prepare("SELECT 1 FROM txns WHERE from_wallet = ? AND to_wallet = ? AND status = 'success' LIMIT 1").get(payer.id, payee.id),
+      requestsFromThisRequesterToday: Number((w.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE payee_wallet = ? AND created_at >= ?").get(payee.id, w.now - (w.now % 86_400_000)) as { n: number }).n),
+      chargedWithoutAsking: standing,
+    });
+    if (d.decision === "reject") {
+      blocked = d.message ?? "This request was blocked by the customer's network.";
+      // At an agent's counter the agent is told straight away.
+      if (r.kind === "cashout") throw new SimError(blocked);
+    }
+  }
+  if (blocked) {
+    w.db
+      .prepare("INSERT INTO approvals(ref, kind, telco, payee_wallet, payer_msisdn, amount, external_id, payer_message, payee_note, status, reason, callback_url, created_at) VALUES(?,?,?,?,?,?,?,?,?,'FAILED',?,?,?)")
+      .run(ref, r.kind, payee.telco, payee.id, r.payerMsisdn, r.amount, r.externalId ?? null, r.payerMessage ?? null, r.payeeNote ?? null, blocked, r.callbackUrl ?? null, w.now);
+    void callback(w, ref);
+    return getApproval(w, ref)!;
+  }
   w.db
     .prepare("INSERT INTO approvals(ref, kind, telco, payee_wallet, payer_msisdn, amount, external_id, payer_message, payee_note, status, reason, callback_url, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run(ref, r.kind, payee.telco, payee.id, r.payerMsisdn, r.amount, r.externalId ?? null, r.payerMessage ?? null, r.payeeNote ?? null, payer ? "PENDING" : "FAILED", payer ? null : "PAYER_NOT_FOUND", r.callbackUrl ?? null, w.now);
