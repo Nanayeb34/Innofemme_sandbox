@@ -4,13 +4,14 @@ import { BANK_IDS, isTelco } from "@/engine/util";
 import NoAccess from "../no-access";
 import { MomoPoint, SimPoint } from "../screens/agents";
 import Bank from "../screens/bank";
+import Care from "../screens/care";
 import Nia from "../screens/nia";
 import Phone from "../screens/phone";
 import { Bog, Nca } from "../screens/regulators";
 import Switch from "../screens/switch";
 import TelcoConsole from "../screens/telco";
 
-/** One page per institution: /t/{team}/nia, /telco/mtn, /sim-agent/mtn, /momo-agent/mtn, /phone, /bank/gcb, /switch, /bog, /nca */
+/** One page per institution: /t/{team}/nia, /telco/mtn, /care/mtn, /sim-agent/mtn, /momo-agent/mtn, /phone, /bank/gcb, /switch, /bog, /nca */
 export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">) {
   const { team, sys } = await props.params;
   if (!(await canViewTeam(team))) return <NoAccess />;
@@ -24,6 +25,7 @@ export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">)
   }
   if (sys.length === 2 && isTelco(which)) {
     if (system === "telco") return <TelcoConsole team={team} telco={which} />;
+    if (system === "care") return <Care team={team} telco={which} />;
     if (system === "sim-agent") return <SimPoint team={team} telco={which} />;
     if (system === "momo-agent") return <MomoPoint team={team} telco={which} />;
   }

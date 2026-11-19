@@ -1,10 +1,11 @@
 import { approvalView, pendingFor } from "@/engine/approvals";
-import { answerCall, callLog, callSeconds, endCall, pollCall, startCall, type CallRow } from "@/engine/calls";
+import { answerCall, callLog, callSeconds, careEndpoint, careQueue, endCall, pollCall, startCall, type CallRow } from "@/engine/calls";
+import * as care from "@/engine/care";
 import { openAccount, setAccountStatus } from "@/engine/bank";
 import { getConfig } from "@/engine/config/store";
 import { TIERS, type KycTier } from "@/engine/config/schemas";
 import { count } from "@/engine/db";
-import { balanceOf, getTxn, walletByMsisdn } from "@/engine/ledger";
+import { balanceOf, getTxn, getWallet, walletByMsisdn } from "@/engine/ledger";
 import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } from "@/engine/nia";
 import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments";
 import { positions, settle, trustAccount } from "@/engine/switch";
@@ -193,6 +194,8 @@ function telcoSystem(t: Telco): System {
           merchants: sum(w, "SELECT COUNT(*) AS n FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE w.telco = ?", t),
           eMoney: money(sum(w, "SELECT COALESCE(SUM(balance),0) AS n FROM wallets WHERE telco = ?", t)),
           revenue: money(balanceOf(w, `fee:${t}`)),
+          onHold: money(balanceOf(w, `hold:${t}`)),
+          openTickets: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND status NOT IN ('resolved','rejected')", t),
           trustBalance: money(trust?.balance ?? 0),
           trustBank: bankName(TRUST_BANK[t]),
           switchPosition: money(balanceOf(w, `switch:${t}`)),
@@ -399,6 +402,136 @@ function momoAgentSystem(t: Telco): System {
   };
 }
 
+// ---------- customer care (call centre) ----------
+
+function careSystem(t: Telco): System {
+  const brand = TELCO_INFO[t];
+  const by = `${brand.name} customer care`;
+  const label = (c: string) => care.CATEGORIES[c as care.Category] ?? c;
+
+  function ticketRows(w: World, where: string, args: (string | number)[]) {
+    const rows = w.db
+      .prepare(`SELECT k.*, x.amount, w.display_name FROM tickets k LEFT JOIN txns x ON x.id = k.txn_id LEFT JOIN wallets w ON w.msisdn = k.msisdn WHERE ${where} ORDER BY (k.status IN ('resolved','rejected')), k.updated_at DESC LIMIT 200`)
+      .all(...args) as unknown as (care.TicketRow & { amount: number | null; display_name: string | null })[];
+    return rows.map((k) => ({
+      id: k.id, msisdn: k.msisdn, customer: k.display_name ?? "", category: label(k.category), status: k.status, channel: k.channel, role: k.role, linked: k.linked_ticket,
+      amount: k.amount === null ? null : money(k.amount), held: money(k.held), returned: money(k.returned), resolution: k.resolution, openedAt: iso(k.created_at), updatedAt: iso(k.updated_at),
+    }));
+  }
+
+  function ticketDetail(w: World, id: string) {
+    const k = care.getTicket(w, id);
+    if (!k || k.telco !== t) return null;
+    const txn = k.txn_id ? getTxn(w, k.txn_id) : undefined;
+    const recipient = txn?.to_wallet ? getWallet(w, txn.to_wallet) : undefined;
+    const open = k.status !== "resolved" && k.status !== "rejected";
+    const walletDispute = !!txn && ["p2p", "merchant"].includes(txn.type);
+    const ours = k.role === "both" || k.role === "recipient"; // the recipient's wallet is on this network
+    const remaining = txn ? txn.amount - k.returned - k.held : 0;
+    return {
+      ...ticketRows(w, "k.id = ?", [k.id])[0],
+      description: k.description,
+      events: care.ticketEvents(w, k.id).map((e) => ({ ...e, at: iso(e.at) })),
+      txn: txn ? txnFeed(w, "t.id = ?", [txn.id], 1)[0] : null,
+      // Only the recipient's own network can see what is left in the recipient's wallet.
+      recipientBalance: ours && recipient ? money(recipient.balance) : null,
+      waitingForRecipient: sum(w, "SELECT COUNT(*) AS n FROM approvals WHERE kind = 'dispute' AND external_id = ? AND status = 'PENDING'", k.id) > 0,
+      can: {
+        hold: open && walletDispute && ours && remaining > 0 && (recipient?.balance ?? 0) > 0,
+        askRecipient: open && walletDispute && ours && k.status !== "awaiting_recipient",
+        returnFunds: open && walletDispute && ours && k.held > 0,
+        forward: open && walletDispute && k.role === "sender" && !k.linked_ticket,
+        reverseAgent: open && !!txn && ["cashin", "cashout", "float"].includes(txn.type),
+        close: open && k.status !== "with_other_network",
+      },
+    };
+  }
+
+  function customer(w: World, input: string) {
+    const msisdn = normalizeMsisdn(input);
+    const sim = telcoOps.getSim(w, msisdn);
+    if (!sim || sim.telco !== t || sim.status === "in_stock") return { msisdn, found: false as const };
+    const p = sim.person_id ? personById(w, sim.person_id) : undefined;
+    const wallet = walletByMsisdn(w, msisdn);
+    return {
+      msisdn,
+      found: true as const,
+      // What the agent checks the caller's answers against. A call centre cannot take a fingerprint.
+      identity: p ? { name: fullName(p), dob: p.dob, card: p.ghana_card, town: `${p.town}, ${p.region}` } : null,
+      sim: { status: sim.status, registeredAt: iso(sim.registered_at), lastSwapAt: iso(sim.last_swap_at), blockReason: sim.block_reason },
+      wallet: wallet ? { name: wallet.display_name, type: wallet.owner_type, tier: wallet.kyc_tier, status: wallet.status, balance: money(wallet.balance) } : null,
+      txns: wallet ? txnFeed(w, "t.from_wallet = ? OR t.to_wallet = ?", [wallet.id, wallet.id], 15).map((x) => ({ ...x, out: x.from.includes(msisdn) })) : [],
+      tickets: ticketRows(w, "k.telco = ? AND k.msisdn = ?", [t, msisdn]),
+    };
+  }
+
+  return {
+    view(w, q) {
+      return {
+        telco: t,
+        brand: { ...brand, logo: telcoLogo(t) },
+        endpoint: careEndpoint(t),
+        waiting: careQueue(w, t),
+        stats: {
+          open: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND status = 'open'", t),
+          awaitingRecipient: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND status = 'awaiting_recipient'", t),
+          withOtherNetwork: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND status = 'with_other_network'", t),
+          fromOtherNetworks: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND channel = 'network' AND status NOT IN ('resolved','rejected')", t),
+          closed: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND status IN ('resolved','rejected')", t),
+          onHold: money(balanceOf(w, `hold:${t}`)),
+        },
+        tickets: ticketRows(w, "k.telco = ?", [t]),
+        ticket: q.get("ticket") ? ticketDetail(w, q.get("ticket")!) : null,
+        customer: q.get("customer") ? customer(w, q.get("customer")!) : null,
+        categories: Object.entries(care.CATEGORIES),
+      };
+    },
+    actions: {
+      open_ticket(w, b) {
+        if (b.verified !== "yes") throw new SimError("Ask the security questions first, and only go on if the caller answers them correctly.");
+        const k = care.openTicket(w, t, { msisdn: str(b.msisdn), category: str(b.category), description: str(b.description), txnId: str(b.txnId) || undefined, channel: "call", by });
+        return ok(`Ticket ${k.id} opened. The customer has been sent an SMS.`, { ticket: k.id });
+      },
+      note(w, b) {
+        care.addNote(w, t, b.ticket, by, str(b.text));
+        return ok("Note added.");
+      },
+      hold(w, b) {
+        return ok(`GHS ${(care.placeHold(w, t, b.ticket, by) / 100).toFixed(2)} is now on hold.`);
+      },
+      ask_recipient(w, b) {
+        care.requestConsent(w, t, b.ticket, by);
+        return ok("The recipient has been asked by SMS. They answer from their phone, under option 4.");
+      },
+      return_funds(w, b) {
+        const r = care.returnFunds(w, t, b.ticket, by);
+        return ok(r.full ? "The full amount has been returned to the sender." : `GHS ${(r.returned / 100).toFixed(2)} returned. The rest could not be recovered.`);
+      },
+      forward(w, b) {
+        const theirs = care.forwardDispute(w, t, b.ticket, by);
+        return ok(`Sent to ${participantName(theirs.telco)} through the national switch as ${theirs.id}.`);
+      },
+      reverse_agent(w, b) {
+        care.reverseAgentTransaction(w, t, b.ticket, by);
+        return ok("Transaction reversed.");
+      },
+      close(w, b) {
+        care.closeTicket(w, t, b.ticket, by, { outcome: str(b.outcome), resolution: str(b.resolution) });
+        return ok("Ticket closed. The customer has been sent an SMS.");
+      },
+      block_sim(w, b) {
+        telcoOps.setSimStatus(w, t, by, b.msisdn, "blocked", str(b.reason) || "Reported lost or stolen by phone");
+        return ok("Number blocked. To get it back the customer visits a service centre with their Ghana Card.");
+      },
+      freeze_wallet(w, b) {
+        telcoOps.setWalletStatus(w, t, b.msisdn, "frozen", str(b.reason) || "Frozen by customer care");
+        return ok("Wallet frozen. No money can go in or out until the back office unfreezes it.");
+      },
+      txn: txnDetail,
+    },
+  };
+}
+
 // ---------- phone ----------
 
 const phone: System = {
@@ -436,7 +569,7 @@ const phone: System = {
         sms: (w.db.prepare("SELECT id, sender, body, at FROM sms WHERE msisdn = ? ORDER BY id DESC LIMIT 60").all(sim.msisdn) as { id: number; sender: string; body: string; at: number }[]).map((s) => ({ ...s, at: iso(s.at) })),
         approvals: wallet ? pendingFor(w, sim.msisdn).map((a) => ({ ref: a.ref, kind: a.kind, amount: money(a.amount), from: a.display_name })) : [],
         calls: callLog(w, sim.msisdn),
-        recent: wallet ? txnFeed(w, "(t.from_wallet = ? OR t.to_wallet = ?) AND t.status != 'failed'", [wallet.id, wallet.id], 15).map((x) => ({ ...x, out: x.from.includes(sim.msisdn) })) : [],
+        recent: wallet ? txnFeed(w, "(t.from_wallet = ? OR t.to_wallet = ?) AND t.status != 'failed'", [wallet.id, wallet.id], 15).map((x) => ({ ...x, out: x.type === "hold" || x.from.includes(sim.msisdn) })) : [],
       },
     };
   },
@@ -523,6 +656,16 @@ const switchSystem: System = {
       })),
       settlements: (w.db.prepare("SELECT * FROM settlements ORDER BY at DESC LIMIT 20").all() as { id: string; at: number; detail: string }[]).map((s) => ({ id: s.id, at: iso(s.at), lines: (JSON.parse(s.detail) as { name: string; net: number }[]).map((l) => ({ name: l.name, net: money(l.net) })) })),
       txns: txnFeed(w, "t.rail = 'switch'", [], 100),
+      // Disputes one network has raised with another. The switch carries them and, if money comes back, routes it.
+      disputes: (w.db
+        .prepare(
+          `SELECT a.id, a.telco, a.status, a.created_at, a.updated_at, a.resolution, b.id AS other_id, b.telco AS other_telco, b.held, b.returned, x.amount
+           FROM tickets a JOIN tickets b ON b.id = a.linked_ticket JOIN txns x ON x.id = a.txn_id WHERE a.role = 'sender' ORDER BY a.created_at DESC LIMIT 100`,
+        )
+        .all() as Record<string, string | number | null>[]).map((d) => ({
+        id: d.id, from: participantName(String(d.telco)), otherId: d.other_id, to: participantName(String(d.other_telco)), amount: money(d.amount as number), held: money(d.held as number), returned: money(d.returned as number),
+        status: d.status, resolution: d.resolution, raisedAt: iso(d.created_at as number), updatedAt: iso(d.updated_at as number),
+      })),
       config: getConfig(w.db, "switch"),
       activity: auditFeed(w, "switch"),
     };
@@ -555,10 +698,12 @@ const bog: System = {
         const revenue = balanceOf(w, `fee:${t}`);
         const trust = trustAccount(w, t)?.balance ?? 0;
         const position = balanceOf(w, `switch:${t}`);
+        // Customers' money held during a dispute has left their wallets but is still e-money the issuer owes.
+        const held = balanceOf(w, `hold:${t}`);
         return {
-          telco: t, name: TELCO_INFO[t].wallet, trustBank: bankName(TRUST_BANK[t]), customerFunds: money(wallets), issuerFunds: money(revenue), eMoney: money(wallets + revenue), trustBalance: money(trust), unsettled: money(position),
+          telco: t, name: TELCO_INFO[t].wallet, trustBank: bankName(TRUST_BANK[t]), customerFunds: money(wallets), onHold: money(held), issuerFunds: money(revenue), eMoney: money(wallets + held + revenue), trustBalance: money(trust), unsettled: money(position),
           // Every cedi of e-money must be backed: by the trust account, or by money still owed to the issuer through the switch.
-          backed: wallets + revenue === trust - position,
+          backed: wallets + held + revenue === trust - position,
         };
       }),
       banks: BANK_IDS.map((b) => ({
@@ -616,7 +761,7 @@ const nca: System = {
 
 // ---------- registry ----------
 
-export const SYSTEM_PATHS = ["hub", "nia", "telco/{mtn|telecel|at}", "sim-agent/{mtn|telecel|at}", "momo-agent/{mtn|telecel|at}", "phone", `bank/{${BANK_IDS.join("|")}}`, "switch", "bog", "nca"];
+export const SYSTEM_PATHS = ["hub", "nia", "telco/{mtn|telecel|at}", "care/{mtn|telecel|at}", "sim-agent/{mtn|telecel|at}", "momo-agent/{mtn|telecel|at}", "phone", `bank/{${BANK_IDS.join("|")}}`, "switch", "bog", "nca"];
 
 export function resolveSystem(path: string[]): System {
   const [a, b] = path;
@@ -631,6 +776,8 @@ export function resolveSystem(path: string[]): System {
       return nia;
     case "telco":
       return telcoSystem(telco());
+    case "care":
+      return careSystem(telco());
     case "sim-agent":
       return simAgentSystem(telco());
     case "momo-agent":

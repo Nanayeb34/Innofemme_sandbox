@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getConfig } from "./config/store";
-import { getWallet, walletByMsisdn } from "./ledger";
+import { recipientAnswered } from "./care";
+import { checkPin, getWallet, walletByMsisdn } from "./ledger";
 import { notify } from "./notify";
 import { walletPay, type Receipt } from "./payments";
 import { MINUTE, SimError, cedis, toIntl } from "./util";
@@ -13,7 +14,7 @@ import type { World } from "./world";
 
 export interface ApprovalRow {
   ref: string;
-  kind: "cashout" | "rtp";
+  kind: "cashout" | "rtp" | "dispute";
   telco: string;
   payee_wallet: string;
   payer_msisdn: string;
@@ -53,7 +54,8 @@ export function createApproval(
 
 /** Requests nobody answered in time are closed. */
 export function expireApprovals(w: World) {
-  const rows = w.db.prepare("SELECT ref, telco, created_at FROM approvals WHERE status = 'PENDING'").all() as { ref: string; telco: string; created_at: number }[];
+  // A request to return disputed money stays open until the recipient answers or customer care withdraws it.
+  const rows = w.db.prepare("SELECT ref, telco, created_at FROM approvals WHERE status = 'PENDING' AND kind != 'dispute'").all() as { ref: string; telco: string; created_at: number }[];
   for (const r of rows) {
     const minutes = getConfig(w.db, `telco.${r.telco}`).approvalMinutes;
     if (w.now - r.created_at > minutes * MINUTE) rejectApproval(w, r.ref, "EXPIRED");
@@ -64,7 +66,7 @@ export function pendingFor(w: World, msisdn: string) {
   expireApprovals(w);
   return w.db
     .prepare("SELECT a.ref, a.kind, a.amount, a.payer_message, w.display_name FROM approvals a JOIN wallets w ON w.id = a.payee_wallet WHERE a.payer_msisdn = ? AND a.status = 'PENDING' ORDER BY a.created_at DESC LIMIT 5")
-    .all(msisdn) as { ref: string; kind: string; amount: number; payer_message: string | null; display_name: string }[];
+    .all(msisdn) as { ref: string; kind: "cashout" | "rtp" | "dispute"; amount: number; payer_message: string | null; display_name: string }[];
 }
 
 /** The payer approves with their PIN; the money moves. */
@@ -73,6 +75,13 @@ export function approve(w: World, ref: string, pin: string): Receipt {
   const r = getApproval(w, ref);
   if (!r || r.status !== "PENDING") throw new SimError("This request is no longer pending.");
   const payer = walletByMsisdn(w, r.payer_msisdn)!;
+  if (r.kind === "dispute") {
+    // Agreeing to give back money received by mistake.
+    checkPin(w, payer, pin, getConfig(w.db, `telco.${payer.telco}`).pinAttemptsBeforeLock);
+    const message = recipientAnswered(w, r.external_id!, true);
+    w.db.prepare("UPDATE approvals SET status = 'SUCCESSFUL' WHERE ref = ?").run(ref);
+    return { txnId: "", fee: 0, commission: 0, message };
+  }
   try {
     const res = walletPay(w, { type: r.kind === "cashout" ? "cashout" : "merchant", channel: "ussd", from: payer.id, to: r.payee_wallet, amount: r.amount, pin, reference: r.payer_message ?? undefined });
     w.db.prepare("UPDATE approvals SET status = 'SUCCESSFUL', txn_id = ? WHERE ref = ?").run(res.txnId, ref);
@@ -86,6 +95,8 @@ export function approve(w: World, ref: string, pin: string): Receipt {
 }
 
 export function rejectApproval(w: World, ref: string, reason: string) {
+  const r = getApproval(w, ref);
+  if (r?.kind === "dispute" && r.status === "PENDING") recipientAnswered(w, r.external_id!, false);
   w.db.prepare("UPDATE approvals SET status = 'FAILED', reason = ? WHERE ref = ? AND status = 'PENDING'").run(reason, ref);
   void callback(w, ref);
 }

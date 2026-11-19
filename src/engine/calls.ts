@@ -1,6 +1,6 @@
 import { sendSms } from "./notify";
 import { getSim } from "./telco";
-import { SimError, TELCO_INFO, clock, newId, normalizeMsisdn, type Telco } from "./util";
+import { SimError, TELCO_INFO, clock, isTelco, newId, normalizeMsisdn, type Telco } from "./util";
 import type { CallSignal, World } from "./world";
 
 /**
@@ -22,7 +22,21 @@ export interface CallRow {
   ended_at: number | null;
 }
 
+export const CARE_LINE = "100";
+/** A call centre's end of the line: "100:mtn". Phones are addressed by their number. */
+export const careEndpoint = (telco: Telco) => `${CARE_LINE}:${telco}`;
+const careOf = (endpoint: string): Telco | undefined => {
+  const [line, telco] = endpoint.split(":");
+  return line === CARE_LINE && telco && isTelco(telco) ? telco : undefined;
+};
+/** Accepts a phone number in any form, or a call centre's endpoint. */
+const endpointOf = (input: string) => (careOf(String(input)) ? String(input) : normalizeMsisdn(input));
+const isCallee = (c: CallRow, endpoint: string) => (c.to_msisdn === CARE_LINE ? careOf(endpoint) === c.from_telco : c.to_msisdn === endpoint);
+const isParty = (c: CallRow, endpoint: string) => c.from_msisdn === endpoint || isCallee(c, endpoint);
+
 const RING_MS = 30_000;
+/** Callers wait longer in the customer care queue. */
+const CARE_RING_MS = 90_000;
 /** A phone that has stopped checking in for this long has gone away (tab closed, signal lost). */
 const GONE_MS = 15_000;
 const MAX_SDP = 20_000;
@@ -44,7 +58,7 @@ function expire(w: World) {
   for (const c of rows) {
     const s = w.calls.get(c.id);
     if (!s) finish(w, c, c.status === "ringing" ? "missed" : "ended", "Connection lost");
-    else if (c.status === "ringing" && w.now - c.started_at > RING_MS) finish(w, c, "missed", "No answer");
+    else if (c.status === "ringing" && w.now - c.started_at > (c.to_msisdn === CARE_LINE ? CARE_RING_MS : RING_MS)) finish(w, c, "missed", c.to_msisdn === CARE_LINE ? "All customer care agents are busy. Please try again later." : "No answer");
     else if (w.now - s.seen.caller > GONE_MS) finish(w, c, c.status === "ringing" ? "missed" : "ended", "Caller's connection was lost");
     else if (c.status === "active" && w.now - s.seen.callee > GONE_MS) finish(w, c, "ended", "The other phone's connection was lost");
   }
@@ -64,6 +78,7 @@ export function startCall(w: World, req: { from: string; to: string; device: str
   const from = getSim(w, normalizeMsisdn(req.from));
   if (!from || from.status !== "active") throw new SimError("No network service. This SIM is not active.");
   const dialled = normalizeMsisdn(req.to);
+  if (dialled === CARE_LINE) return callCare(w, from.msisdn, from.telco, req);
   if (!/^0\d{9}$/.test(dialled)) throw new SimError(/^\d{3,5}$/.test(dialled) ? `Short number ${dialled} is not in service yet.` : "The number you have dialled is not valid.");
   if (dialled === from.msisdn) throw new SimError("You cannot call your own number.");
   if (typeof req.offer !== "string" || !req.offer || req.offer.length > MAX_SDP) throw new SimError("The call could not be set up on this phone.");
@@ -91,6 +106,34 @@ export function startCall(w: World, req: { from: string; to: string; device: str
   return { id };
 }
 
+/** A call to customer care joins the queue for the caller's own network. Any agent who is on line can take it. */
+function callCare(w: World, from: string, telco: Telco, req: { device: string; offer: string }): { id: string } {
+  if (typeof req.offer !== "string" || !req.offer || req.offer.length > MAX_SDP) throw new SimError("The call could not be set up on this phone.");
+  expire(w);
+  if (liveCallOf(w, from)) throw new SimError("You are already on a call.");
+  const base = { from_msisdn: from, to_msisdn: CARE_LINE, from_telco: telco, to_telco: telco };
+  if (w.now - (w.presence.get(careEndpoint(telco)) ?? 0) > GONE_MS) {
+    const reason = `${TELCO_INFO[telco].name} customer care is closed. No agent is on line right now.`;
+    record(w, { ...base, status: "failed", reason });
+    throw new SimError(reason);
+  }
+  const id = record(w, { ...base, status: "ringing", reason: null });
+  w.calls.set(id, { offer: req.offer, candidates: { caller: [], callee: [] }, seen: { caller: w.now, callee: w.now }, callerDevice: req.device });
+  return { id };
+}
+
+/** The call a care agent's screen should show: the one it is on, else the caller who has waited longest. */
+function careCall(w: World, telco: Telco, device: string): CallRow | undefined {
+  const rows = w.db.prepare("SELECT * FROM calls WHERE status IN ('ringing','active') AND to_msisdn = ? AND from_telco = ? ORDER BY started_at, rowid").all(CARE_LINE, telco) as unknown as CallRow[];
+  return rows.find((c) => w.calls.get(c.id)?.calleeDevice === device) ?? rows.find((c) => c.status === "ringing" && !w.calls.get(c.id)?.calleeDevice);
+}
+
+/** How many callers are waiting for a customer care agent. */
+export function careQueue(w: World, telco: Telco): number {
+  expire(w);
+  return Number((w.db.prepare("SELECT COUNT(*) AS n FROM calls WHERE status = 'ringing' AND to_msisdn = ? AND from_telco = ?").get(CARE_LINE, telco) as { n: number }).n);
+}
+
 export interface CallState {
   id: string;
   role: "caller" | "callee";
@@ -113,11 +156,12 @@ export interface CallState {
  * paths, and learns of an incoming call or of changes to the call it is on.
  */
 export function pollCall(w: World, req: { msisdn: string; device: string; callId?: string; have?: number; candidates?: unknown[] }): { call: CallState | null; elsewhere?: boolean } {
-  const msisdn = normalizeMsisdn(req.msisdn);
+  const msisdn = endpointOf(req.msisdn);
+  const care = careOf(msisdn);
   w.presence.set(msisdn, w.now);
   expire(w);
-  const c = (req.callId ? getCall(w, req.callId) : undefined) ?? liveCallOf(w, msisdn);
-  if (!c || (c.from_msisdn !== msisdn && c.to_msisdn !== msisdn)) return { call: null };
+  const c = (req.callId ? getCall(w, req.callId) : undefined) ?? (care ? careCall(w, care, req.device) : liveCallOf(w, msisdn));
+  if (!c || !isParty(c, msisdn)) return { call: null };
   const role = c.from_msisdn === msisdn ? "caller" : "callee";
   const s = w.calls.get(c.id);
 
@@ -139,7 +183,7 @@ export function pollCall(w: World, req: { msisdn: string; device: string; callId
       id: c.id,
       role,
       peer,
-      peerNetwork: peerTelco ? TELCO_INFO[peerTelco].name : "",
+      peerNetwork: peerTelco ? (peer === CARE_LINE ? `${TELCO_INFO[peerTelco].name} customer care` : TELCO_INFO[peerTelco].name) : "",
       status: c.status,
       reason: c.reason,
       startedAt: c.started_at,
@@ -156,7 +200,7 @@ export function answerCall(w: World, req: { callId: string; msisdn: string; devi
   expire(w);
   const c = getCall(w, req.callId);
   const s = c ? w.calls.get(c.id) : undefined;
-  if (!c || !s || c.status !== "ringing" || c.to_msisdn !== normalizeMsisdn(req.msisdn)) throw new SimError("This call is no longer ringing.");
+  if (!c || !s || c.status !== "ringing" || !isCallee(c, endpointOf(req.msisdn))) throw new SimError("This call is no longer ringing.");
   if (typeof req.answer !== "string" || !req.answer || req.answer.length > MAX_SDP) throw new SimError("The call could not be answered on this phone.");
   s.answer = req.answer;
   s.calleeDevice = req.device;
@@ -167,10 +211,10 @@ export function answerCall(w: World, req: { callId: string; msisdn: string; devi
 /** Either phone ends the call: hanging up, declining, or giving up before it is answered. */
 export function endCall(w: World, req: { callId: string; msisdn: string; reason?: string }) {
   const c = getCall(w, req.callId);
-  const msisdn = normalizeMsisdn(req.msisdn);
-  if (!c || !live(c) || (c.from_msisdn !== msisdn && c.to_msisdn !== msisdn)) return;
+  const msisdn = endpointOf(req.msisdn);
+  if (!c || !live(c) || !isParty(c, msisdn)) return;
   if (c.status === "active") finish(w, c, "ended", req.reason ?? "Call ended");
-  else if (c.to_msisdn === msisdn) finish(w, c, "declined", "Call declined");
+  else if (isCallee(c, msisdn)) finish(w, c, "declined", "Call declined");
   else finish(w, c, "missed", "Caller hung up before it was answered");
 }
 

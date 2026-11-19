@@ -45,7 +45,7 @@ export const ConditionSchema: z.ZodType<Condition> = z.lazy(() =>
 
 // ---------- USSD menu ----------
 
-export const USSD_ACTIONS = ["send_money", "pay_merchant", "to_bank", "check_balance", "mini_statement", "approvals", "change_pin"] as const;
+export const USSD_ACTIONS = ["send_money", "pay_merchant", "to_bank", "check_balance", "mini_statement", "approvals", "change_pin", "report_problem"] as const;
 export const INPUT_KINDS = ["msisdn", "amount", "text", "pin", "till", "account"] as const;
 
 const NodeId = z.string().min(1).max(60);
@@ -128,6 +128,10 @@ export const NOTIFICATION_EVENTS = {
   merchant_payment: "Payer, after paying a merchant",
   approval_prompt: "Payer, when an agent or merchant asks them to approve a payment",
   reversal: "Both sides, when a payment is reversed",
+  ticket_opened: "Customer, when customer care opens a ticket for them",
+  ticket_closed: "Customer, when their ticket is resolved or rejected",
+  dispute_hold: "Recipient, when money they received is put on hold during a dispute",
+  dispute_consent: "Recipient, when asked to return money sent to them by mistake",
 } as const;
 export type NotificationEvent = keyof typeof NOTIFICATION_EVENTS;
 const EVENT_NAMES = Object.keys(NOTIFICATION_EVENTS) as [NotificationEvent, ...NotificationEvent[]];
@@ -141,7 +145,8 @@ export const TelcoSchema = z
     fees: TelcoFees,
     /** What the telco pays its agents for each deposit and withdrawal they handle, as amount bands. */
     agentCommission: z.object({ cashin: FeeSchema, cashout: FeeSchema }).strict(),
-    notifications: z.record(z.enum(EVENT_NAMES), z.object({ enabled: z.boolean(), template: z.string().min(1).max(320) }).strict()),
+    /** One SMS per event. An event left out uses the network's standard wording. */
+    notifications: z.partialRecord(z.enum(EVENT_NAMES), z.object({ enabled: z.boolean(), template: z.string().min(1).max(320) }).strict()),
     pinAttemptsBeforeLock: z.number().int().min(1).max(10),
     /** How long a customer has to approve a cash-out or payment request. */
     approvalMinutes: z.number().int().min(1).max(60),

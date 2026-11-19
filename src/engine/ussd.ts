@@ -1,4 +1,5 @@
-import { approve, pendingFor, rejectApproval } from "./approvals";
+import { approve, getApproval, pendingFor, rejectApproval } from "./approvals";
+import { openTicket } from "./care";
 import { getConfig } from "./config/store";
 import type { Condition, FactName, Menu, MenuNode } from "./config/schemas";
 import { accountByNumber, checkPin, feeFor, getWallet, walletByMsisdn, type WalletRow } from "./ledger";
@@ -293,17 +294,27 @@ function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow):
         .prepare("SELECT from_wallet, amount, created_at, status, type FROM txns WHERE (from_wallet = ? OR to_wallet = ?) AND status IN ('success','reversed') ORDER BY created_at DESC LIMIT 4")
         .all(wallet.id, wallet.id) as { from_wallet: string; amount: number; created_at: number; status: string; type: string }[];
       if (!rows.length) return end("No recent transactions.");
-      return end(rows.map((r) => `${clock(r.created_at)} ${r.from_wallet === wallet.id ? "-" : "+"}${cedis(r.amount)}${r.status !== "success" ? ` (${r.status})` : ""}`).join("\n"));
+      return end(rows.map((r) => `${clock(r.created_at)} ${r.from_wallet === wallet.id || r.type === "hold" ? "-" : "+"}${cedis(r.amount)}${r.status !== "success" ? ` (${r.status})` : ""}`).join("\n"));
     }
     case "approvals": {
       const list = pendingFor(w, wallet.msisdn);
       if (!list.length) return end("You have no pending approvals.");
       s.pending = { kind: "approvals", data: { step: "pick", refs: list.map((l) => l.ref) } };
-      return show(["Pending approvals", ...list.map((l, i) => `${i + 1}) ${l.kind === "cashout" ? "Cash out" : "Pay"} GHS ${cedis(l.amount)} ${l.kind === "cashout" ? "at" : "to"} ${l.display_name}`)].join("\n"));
+      const line = (l: (typeof list)[number]) =>
+        l.kind === "dispute" ? `Return GHS ${cedis(l.amount)} to ${l.display_name} (sent by mistake)` : `${l.kind === "cashout" ? "Cash out" : "Pay"} GHS ${cedis(l.amount)} ${l.kind === "cashout" ? "at" : "to"} ${l.display_name}`;
+      return show(["Pending approvals", ...list.map((l, i) => `${i + 1}) ${line(l)}`)].join("\n"));
     }
     case "change_pin":
       s.pending = { kind: "change_pin", data: { step: "old" } };
       return show("Enter your current PIN");
+    case "report_problem": {
+      const rows = w.db
+        .prepare("SELECT t.id, t.amount, t.type, COALESCE(x.display_name, '') AS name FROM txns t LEFT JOIN wallets x ON x.id = t.to_wallet WHERE t.from_wallet = ? AND t.status = 'success' AND t.type IN ('p2p','merchant','cashout') ORDER BY t.created_at DESC, t.rowid DESC LIMIT 3")
+        .all(wallet.id) as { id: string; amount: number; type: string; name: string }[];
+      if (!rows.length) return end(`You have no recent payments to report. For anything else, call ${TELCO_INFO[wallet.telco].careLine}.`);
+      s.pending = { kind: "report", data: { step: "pick", ids: rows.map((r) => r.id), types: rows.map((r) => r.type) } };
+      return show(["Which payment is the problem?", ...rows.map((r, i) => `${i + 1}) GHS ${cedis(r.amount)} ${r.type === "cashout" ? "cash out at" : "to"} ${r.name}`)].join("\n"));
+    }
   }
   return end("Unknown action.");
 }
@@ -311,7 +322,22 @@ function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow):
 function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: string): Screen {
   const p = s.pending!;
   s.pending = undefined;
-  const d = p.data as { step: string; refs?: string[]; ref?: string; pin?: string };
+  const d = p.data as { step: string; refs?: string[]; ref?: string; pin?: string; ids?: string[]; types?: string[]; id?: string; agent?: boolean };
+
+  if (p.kind === "report") {
+    if (d.step === "pick") {
+      const i = Number(input) - 1;
+      const id = d.ids?.[i];
+      if (!id) return end("Invalid option");
+      const agent = d.types?.[i] === "cashout";
+      s.pending = { kind: "report", data: { step: "why", id, agent } };
+      return show(agent ? "What went wrong?\n1) The agent did not give me my cash\n2) I did not make this withdrawal" : "What went wrong?\n1) I sent it to the wrong number\n2) I did not make this payment");
+    }
+    if (input !== "1" && input !== "2") return end("Invalid option");
+    const category = input === "2" ? "unauthorised" : d.agent ? "agent_complaint" : "wrong_transfer";
+    const t = openTicket(w, wallet.telco, { msisdn: wallet.msisdn, category, txnId: d.id, channel: "ussd", by: "the customer, from their phone" });
+    return end(`Your complaint has been received. Ticket ${t.id}. Customer care will update you by SMS. Call ${TELCO_INFO[wallet.telco].careLine} for help.`);
+  }
 
   if (p.kind === "change_pin") {
     if (d.step === "old") {
@@ -333,12 +359,13 @@ function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: strin
     const ref = d.refs?.[Number(input) - 1];
     if (!ref) return end("Invalid option");
     s.pending = { kind: "approvals", data: { step: "decide", ref } };
-    return show("1) Approve (money leaves your wallet)\n2) Reject");
+    return show(getApproval(w, ref)?.kind === "dispute" ? "1) Agree to return the money\n2) Refuse" : "1) Approve (money leaves your wallet)\n2) Reject");
   }
   if (d.step === "decide") {
     if (input !== "1") {
+      const dispute = getApproval(w, d.ref!)?.kind === "dispute";
       rejectApproval(w, d.ref!, "Rejected by payer");
-      return end("Request rejected.");
+      return end(dispute ? "You have refused. Customer care will review the claim." : "Request rejected.");
     }
     s.pending = { kind: "approvals", data: { step: "pin", ref: d.ref } };
     return show("Enter PIN to approve");

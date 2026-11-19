@@ -266,7 +266,7 @@ function useRingTone(role: "caller" | "callee" | null) {
   }, [role]);
 }
 
-function useElapsed(since: number | null) {
+export function useElapsed(since: number | null) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!since) return;

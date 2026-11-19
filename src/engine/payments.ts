@@ -1,6 +1,6 @@
 import { getConfig } from "./config/store";
 import type { FeeKind } from "./config/schemas";
-import { tx } from "./db";
+import { count, tx } from "./db";
 import { accountByNumber, checkPin, feeFor, getAccount, getTxn, getWallet, insertTxn, post, walletByMsisdn, type AccountRow, type TxnRow, type WalletRow } from "./ledger";
 import { notify } from "./notify";
 import { commit, positionEntries, route } from "./switch";
@@ -288,6 +288,7 @@ export function reverse(w: World, telco: Telco, txnId: string): Receipt {
   if (!t) throw new SimError("Transaction not found");
   if (t.from_party !== telco) throw new SimError("Only the sending network can reverse this transaction");
   if (t.status !== "success") throw new SimError(`Transaction is ${t.status}; it cannot be reversed`);
+  if (count(w.db, "SELECT COUNT(*) AS n FROM tickets WHERE txn_id = ? AND (status NOT IN ('resolved','rejected') OR returned > 0 OR held > 0)", t.id)) throw new SimError("This payment has a dispute in customer care. Settle it there.");
   if (!["p2p", "merchant", "cashin", "cashout", "float"].includes(t.type)) throw new SimError("Only wallet-to-wallet payments can be reversed here. Bank transfers are disputed through the bank.");
   const original = w.db.prepare("SELECT account, amount FROM postings WHERE txn_id = ?").all(t.id) as { account: string; amount: number }[];
   for (const p of original) {

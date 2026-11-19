@@ -10,11 +10,12 @@ interface SwitchView {
   log: { id: number; txn_id: string | null; step: string; from: string; to: string; detail: string; at: string }[];
   settlements: { id: string; at: string; lines: { name: string; net: number }[] }[];
   txns: TxnRow[];
+  disputes: { id: string; from: string; otherId: string; to: string; amount: number; held: number; returned: number; status: string; resolution: string | null; raisedAt: string; updatedAt: string }[];
   config: { feePerTxn: number; maxAmount: number };
   activity: ActivityRow[];
 }
 
-const TABS = [["participants", "Participants and positions"], ["log", "Message log"], ["settlements", "Settlements"], ["txns", "Routed payments"], ["settings", "Settings"]] as const;
+const TABS = [["participants", "Participants and positions"], ["log", "Message log"], ["settlements", "Settlements"], ["txns", "Routed payments"], ["disputes", "Disputes"], ["settings", "Settings"]] as const;
 
 export default function Switch({ team }: { team: string }) {
   const path = "/s/switch";
@@ -124,6 +125,24 @@ export default function Switch({ team }: { team: string }) {
       {tab === "txns" && (
         <Section title="Routed payments" hint="Click a row to see its ledger postings and the switch messages behind it.">
           <TxnTable team={team} rows={data.txns} empty="Nothing has gone through the switch yet." />
+        </Section>
+      )}
+
+      {tab === "disputes" && (
+        <Section title="Disputes between networks" hint="When a customer disputes a payment to another network, their network raises it here and the recipient's network decides. If money comes back, it is routed through the switch like any other payment.">
+          <Table
+            rows={data.disputes}
+            empty="No network has raised a dispute with another yet."
+            cols={[
+              { label: "Raised", cell: (d) => <span className="whitespace-nowrap text-gray-500">{when(d.raisedAt)}</span> },
+              { label: "Raised by", cell: (d) => (<>{d.from}<div className="font-mono text-[11px] text-gray-500">{d.id}</div></>) },
+              { label: "Decided by", cell: (d) => (<>{d.to}<div className="font-mono text-[11px] text-gray-500">{d.otherId}</div></>) },
+              { label: "Disputed", right: true, cell: (d) => ghs(d.amount) },
+              { label: "On hold", right: true, cell: (d) => (d.held ? ghs(d.held) : "–") },
+              { label: "Returned", right: true, cell: (d) => (d.returned ? ghs(d.returned) : "–") },
+              { label: "Status", cell: (d) => (<><Status value={d.status} />{d.resolution && <div className="mt-0.5 max-w-[260px] text-[11px] text-gray-500">{d.resolution}</div>}</>) },
+            ]}
+          />
         </Section>
       )}
 

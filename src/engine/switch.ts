@@ -27,6 +27,12 @@ export function route(w: World, txnId: string, from: string, to: string, amount:
   switchLog(w, txnId, "quote", from, to, `amount ${cedis(amount)}; switch fee ${cfg.feePerTxn.toFixed(2)} billed to ${participantName(from)}`);
 }
 
+/** For messages that carry no money (a dispute): both institutions must be connected. */
+export function requireLink(w: World, from: string, to: string) {
+  const cfg = getConfig(w.db, "switch");
+  for (const p of [from, to]) if (!cfg.participants[p]?.connected) throw new SimError(`${participantName(p)} is disconnected from the national switch`);
+}
+
 /** Step 3: the payment is final. The sender now owes the receiver through the switch until settlement. */
 export function commit(w: World, txnId: string, from: string, to: string, amount: number) {
   switchLog(w, txnId, "commit", from, to, `${cedis(amount)} cleared; ${participantName(from)} owes ${participantName(to)}`);

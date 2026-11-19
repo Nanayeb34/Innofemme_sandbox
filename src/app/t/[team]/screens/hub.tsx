@@ -83,6 +83,9 @@ export default function Hub({ team, logos }: { team: string; logos: Record<strin
                     <Link href={`${base}/telco/${id}`} className="btn btn-dark justify-center">
                       {name} back office
                     </Link>
+                    <Link href={`${base}/care/${id}`} className="btn justify-center">
+                      Customer care
+                    </Link>
                     <Link href={`${base}/sim-agent/${id}`} className="btn justify-center">
                       SIM registration point
                     </Link>

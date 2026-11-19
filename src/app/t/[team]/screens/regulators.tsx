@@ -13,7 +13,7 @@ interface Tier {
 }
 interface BogView {
   config: { kycTiers: Record<string, Tier> };
-  issuers: { telco: string; name: string; trustBank: string; customerFunds: number; issuerFunds: number; eMoney: number; trustBalance: number; unsettled: number; backed: boolean }[];
+  issuers: { telco: string; name: string; trustBank: string; customerFunds: number; onHold: number; issuerFunds: number; eMoney: number; trustBalance: number; unsettled: number; backed: boolean }[];
   banks: { bank: string; name: string; deposits: number; vaultCash: number; settlementAccount: number; unsettled: number }[];
   wallets: { tier: string; count: number }[];
   ledgerBalanced: boolean;
@@ -56,6 +56,7 @@ export function Bog({ team }: { team: string }) {
           cols={[
             { label: "Issuer", cell: (i) => <span className="font-medium text-gray-900">{i.name}</span> },
             { label: "Wallet balances", right: true, cell: (i) => ghs(i.customerFunds) },
+            { label: "On hold in disputes", right: true, cell: (i) => (i.onHold ? ghs(i.onHold) : "–") },
             { label: "Issuer's own e-money", right: true, cell: (i) => ghs(i.issuerFunds) },
             { label: "Trust account", right: true, cell: (i) => (<>{ghs(i.trustBalance)}<div className="text-[11px] text-gray-500">{i.trustBank}</div></>) },
             { label: "Waiting to settle", right: true, cell: (i) => (i.unsettled === 0 ? "–" : i.unsettled > 0 ? `owes ${ghs(i.unsettled)}` : `is owed ${ghs(-i.unsettled)}`) },

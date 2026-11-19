@@ -211,10 +211,41 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS calls_from ON calls(from_msisdn, started_at);
 CREATE INDEX IF NOT EXISTS calls_to ON calls(to_msisdn, started_at);
 
+-- ===== Customer care =====
+-- Complaints and disputes handled by a telco's call centre.
+CREATE TABLE IF NOT EXISTS tickets (
+  id TEXT PRIMARY KEY,               -- e.g. MTN-000012
+  telco TEXT NOT NULL,
+  msisdn TEXT NOT NULL,              -- the customer on this network the ticket is about
+  category TEXT NOT NULL,            -- wrong_transfer | unauthorised | agent_complaint | sim_network | wallet_access | other
+  description TEXT NOT NULL,
+  channel TEXT NOT NULL,             -- call | ussd | back_office | network (raised by another network through the switch)
+  status TEXT NOT NULL,              -- open | awaiting_recipient | with_other_network | resolved | rejected
+  txn_id TEXT,                       -- the disputed payment, if any
+  role TEXT,                         -- this network's side of the disputed payment: sender | recipient | both
+  linked_ticket TEXT,                -- the other network's ticket for the same dispute
+  held INTEGER NOT NULL DEFAULT 0,   -- recipient's funds currently on hold, pesewas
+  returned INTEGER NOT NULL DEFAULT 0, -- already given back to the sender, pesewas
+  resolution TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tickets_telco ON tickets(telco, status);
+CREATE INDEX IF NOT EXISTS tickets_txn ON tickets(txn_id);
+
+CREATE TABLE IF NOT EXISTS ticket_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  by TEXT NOT NULL,
+  note TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ticket_events_ticket ON ticket_events(ticket_id);
+
 -- Payment requests waiting for the payer's approval: agent cash-outs and merchant Request to Pay.
 CREATE TABLE IF NOT EXISTS approvals (
   ref TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,                -- cashout | rtp
+  kind TEXT NOT NULL,                -- cashout | rtp | dispute (external_id holds the ticket)
   telco TEXT NOT NULL,
   payee_wallet TEXT NOT NULL,
   payer_msisdn TEXT NOT NULL,

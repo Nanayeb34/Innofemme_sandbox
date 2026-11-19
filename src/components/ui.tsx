@@ -98,7 +98,8 @@ export function Badge({ children, tone = "gray" }: { children: ReactNode; tone?:
 const STATUS_TONE: Record<string, keyof typeof TONES> = {
   active: "green", success: "green", SUCCESSFUL: "green", MATCH: "green", commit: "green", connected: "green",
   blocked: "red", failed: "red", FAILED: "red", frozen: "red", locked: "red", suspended: "red", deactivated: "red", reject: "red", disconnected: "red", NOT_FOUND: "red", BIOMETRIC_MISMATCH: "red", CARD_SUSPENDED: "red",
-  PENDING: "amber", reversed: "amber", missed: "amber", declined: "amber", busy: "amber", ringing: "blue", in_stock: "blue", settlement: "blue",
+  PENDING: "amber", reversed: "amber", missed: "amber", declined: "amber", busy: "amber", ringing: "blue",
+  open: "amber", awaiting_recipient: "amber", with_other_network: "blue", resolved: "green", rejected: "red", dispute: "blue", in_stock: "blue", settlement: "blue",
 };
 export function Status({ value }: { value: string }) {
   return <Badge tone={STATUS_TONE[value] ?? "gray"}>{value.replace(/_/g, " ").toLowerCase()}</Badge>;
@@ -276,7 +277,7 @@ export interface TxnRow {
 
 const TYPE_LABEL: Record<string, string> = {
   p2p: "Transfer", merchant: "Merchant payment", cashin: "Cash-in", cashout: "Cash-out", float: "Agent float", wallet_to_bank: "Wallet → bank", bank_to_wallet: "Bank → wallet",
-  bank_transfer: "Bank transfer", deposit: "Cash deposit", withdrawal: "Cash withdrawal", reversal: "Reversal", settlement: "Settlement",
+  bank_transfer: "Bank transfer", deposit: "Cash deposit", withdrawal: "Cash withdrawal", reversal: "Reversal", settlement: "Settlement", hold: "Funds put on hold", hold_release: "Hold released",
 };
 
 interface TxnDetail {

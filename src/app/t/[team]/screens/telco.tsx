@@ -9,7 +9,7 @@ import { ghs, when } from "@/lib/client";
 interface TelcoView {
   telco: string;
   brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null };
-  stats: { simsInStock: number; simsActive: number; simsBlocked: number; wallets: number; agents: number; merchants: number; eMoney: number; revenue: number; trustBalance: number; trustBank: string; switchPosition: number };
+  stats: { simsInStock: number; simsActive: number; simsBlocked: number; wallets: number; agents: number; merchants: number; eMoney: number; revenue: number; onHold: number; openTickets: number; trustBalance: number; trustBank: string; switchPosition: number };
   stock: { msisdn: string; iccid: string }[];
   sims: { msisdn: string; iccid: string; status: string; owner: string; card: string; registeredAt: string; registeredBy: string; lastSwapAt: string | null; blockReason: string | null; hasWallet: boolean }[];
   simAgents: { id: string; name: string; kind: string; town: string; status: string; owner: string; registered: number }[];
@@ -52,7 +52,7 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
       <Stats>
         <Stat label="Active SIMs" value={s.simsActive} sub={`${s.simsInStock} blank in stock · ${s.simsBlocked} blocked`} />
         <Stat label="Customer wallets" value={s.wallets} sub={`${s.agents} agent(s) · ${s.merchants} merchant(s)`} />
-        <Stat label="E-money in wallets" value={ghs(s.eMoney)} />
+        <Stat label="E-money in wallets" value={ghs(s.eMoney)} sub={s.onHold ? `${ghs(s.onHold)} more on hold in disputes` : undefined} />
         <Stat label={`Trust account (${s.trustBank})`} value={ghs(s.trustBalance)} sub="backs the e-money" />
         <Stat label="Switch position" value={ghs(Math.abs(s.switchPosition))} sub={s.switchPosition > 0 ? "owed to others" : s.switchPosition < 0 ? "owed to us, unsettled" : "settled"} />
         <Stat label="Fee income" value={ghs(s.revenue)} sub="after agent commission" />
@@ -71,6 +71,9 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
               </li>
             </ol>
             <div className="mt-3 flex flex-wrap gap-2">
+              <Link href={`/t/${team}/care/${telco}`} className="btn">
+                Open customer care{s.openTickets ? ` (${s.openTickets} open)` : ""}
+              </Link>
               <Link href={`/t/${team}/sim-agent/${telco}`} className="btn">
                 Open a SIM registration point
               </Link>
@@ -315,7 +318,7 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
       )}
 
       {tab === "txns" && (
-        <Section title="Transactions" hint="Every payment that touched this network, including refused ones. Click a row to see its ledger postings. A wallet-to-wallet payment sent from this network can be reversed.">
+        <Section title="Transactions" hint="Every payment that touched this network, including refused ones. Click a row to see its ledger postings. A wallet-to-wallet payment sent from this network can be reversed here; a payment a customer disputes is handled in customer care.">
           <TxnTable
             team={team}
             rows={data.txns}

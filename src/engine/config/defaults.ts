@@ -72,6 +72,7 @@ function buildMenu(shortcode: string, l: Labels): Menu {
           { key: "1", label: "Check Balance", next: "balance_pin" },
           { key: "2", label: "Mini Statement", next: "statement_pin" },
           { key: "3", label: "Change PIN", next: "change_pin" },
+          { key: "4", label: "Report a Problem", next: "report_problem" },
         ],
       },
       balance_pin: { type: "input", text: "Enter PIN", var: "pin", kind: "pin", next: "do_balance" },
@@ -79,6 +80,7 @@ function buildMenu(shortcode: string, l: Labels): Menu {
 
       approvals: { type: "action", action: "approvals" },
       change_pin: { type: "action", action: "change_pin" },
+      report_problem: { type: "action", action: "report_problem" },
       do_send: { type: "action", action: "send_money" },
       do_bank: { type: "action", action: "to_bank" },
       do_merchant: { type: "action", action: "pay_merchant" },
@@ -115,7 +117,7 @@ const telecelFees = {
   to_bank: mtnFees.to_bank,
 };
 
-function notifications(telco: Telco): TelcoConfig["notifications"] {
+export function notifications(telco: Telco): Required<TelcoConfig["notifications"]> {
   const brand = TELCO_INFO[telco];
   const on = (template: string) => ({ enabled: true, template });
   return {
@@ -133,6 +135,10 @@ function notifications(telco: Telco): TelcoConfig["notifications"] {
     merchant_payment: on("You paid GHS {{amount}} to {{counterparty_name}}. Balance: GHS {{balance}}. Trans ID: {{txn_id}}"),
     approval_prompt: on(`{{counterparty_name}} is requesting GHS {{amount}} from your wallet ({{reason}}). Dial ${brand.shortcode} and choose option 4 to approve or reject. Approving SENDS money from your wallet.`),
     reversal: on("Transaction {{txn_id}} of GHS {{amount}} has been reversed. Balance: GHS {{balance}}."),
+    ticket_opened: on(`${brand.name} customer care has opened ticket {{ticket}} for you: {{category}}. We will update you by SMS. Call ${brand.careLine} for help.`),
+    ticket_closed: on("Ticket {{ticket}} is closed: {{outcome}}."),
+    dispute_hold: on(`GHS {{amount}} you received from {{counterparty}} is on hold while a wrong-transfer claim is checked. Ticket {{ticket}}. Call ${brand.careLine} for help.`),
+    dispute_consent: on(`{{counterparty_name}} {{counterparty}} says GHS {{amount}} was sent to you by mistake. Dial ${brand.shortcode}, choose option 4, and agree to return it or refuse. Ticket {{ticket}}.`),
   };
 }
 

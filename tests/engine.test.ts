@@ -305,6 +305,145 @@ describe("voice calls", () => {
   });
 });
 
+describe("customer care", () => {
+  it("handles tickets and disputes: hold, consent, return, across networks, and calls to 100", async () => {
+    const care = await import("../src/engine/care");
+    const calls = await import("../src/engine/calls");
+    const w = await resetWorld("team-02");
+    const people = [person(w, "Abena", "Darko"), person(w, "Kwesi", "Ofori", "1986-06-06"), person(w, "Naa", "Lartey", "1993-09-09"), person(w, "Yaw", "Kumi", "1975-01-01")];
+    telco.generateSims(w, "mtn", 4);
+    telco.generateSims(w, "at", 2);
+    const mtnPoint = telco.onboardSimAgent(w, "mtn", { card: people[3].ghana_card, name: "Point", kind: "service_centre", town: "Accra" }).id;
+    const atPoint = telco.onboardSimAgent(w, "at", { card: people[3].ghana_card, name: "Point", kind: "service_centre", town: "Accra" }).id;
+    const reg = (t: "mtn" | "at", point: string, p: Person) => telco.registerSim(w, t, point, { card: p.ghana_card, fingerprint: p.fingerprint }).sim.msisdn;
+    const [a, b] = [reg("mtn", mtnPoint, people[0]), reg("mtn", mtnPoint, people[1])];
+    const c = reg("at", atPoint, people[2]);
+    const agentLine = reg("mtn", mtnPoint, people[3]);
+    dial(w, a, "*170#", "1", "1111", "1111");
+    dial(w, b, "*170#", "1", "2222", "2222");
+    dial(w, c, "*110#", "1", "3333", "3333");
+    const agent = telco.onboardMomoAgent(w, "mtn", { msisdn: agentLine, name: "Kumi MoMo", town: "Accra", pin: "4444" }).code;
+    pay.bankToWallet(w, { bank: "gcb", msisdn: a, amount: 100000 });
+    pay.bankToWallet(w, { bank: "gcb", msisdn: agentLine, amount: 100000 });
+    const bal = (m: string) => walletByMsisdn(w, m)!.balance;
+    const send = (from: string, to: string, ghs: number) => pay.walletPay(w, { type: "p2p", channel: "ussd", from: `w_${from}`, to: `w_${to}`, amount: ghs * 100 });
+    const backed = () => (resolveSystem(["bog"]).view(w, new URLSearchParams()) as { issuers: { backed: boolean }[] }).issuers.every((i) => i.backed);
+    const by = "care";
+
+    // 1. Same network. The customer reports it from the phone; care holds the money and sends it back, fee included.
+    const start = bal(a);
+    const t1 = send(a, b, 100);
+    expect(bal(a)).toBe(start - 10075);
+    expect(dial(w, a, "*170#", "6", "4", "1", "1").text).toMatch(/Ticket MTN-000001/);
+    expect(lastSms(w, a)).toMatch(/opened ticket MTN-000001/);
+    expect(() => pay.reverse(w, "mtn", t1.txnId)).toThrow(/dispute in customer care/);
+    expect(() => care.returnFunds(w, "mtn", "MTN-000001", by)).toThrow(/Nothing is on hold/);
+    expect(care.placeHold(w, "mtn", "MTN-000001", by)).toBe(10000);
+    expect(bal(b)).toBe(0);
+    expect(lastSms(w, b)).toMatch(/on hold while a wrong-transfer claim is checked/);
+    expect(backed()).toBe(true);
+    expect(() => care.closeTicket(w, "mtn", "MTN-000001", by, { outcome: "resolved", resolution: "x" })).toThrow(/still on hold/);
+    expect(care.returnFunds(w, "mtn", "MTN-000001", by)).toEqual({ returned: 10000, full: true });
+    expect(bal(a)).toBe(start);
+    expect(care.getTicket(w, "MTN-000001")!.status).toBe("resolved");
+    expect(lastSms(w, a)).toMatch(/Ticket MTN-000001 is closed: Money returned to the sender in full/);
+    expect(() => care.openTicket(w, "mtn", { msisdn: a, category: "wrong_transfer", txnId: t1.txnId, channel: "call", by })).toThrow(/is reversed/);
+
+    // 2. The recipient has already spent part of it: only what is left can be recovered.
+    const t2 = send(a, b, 100);
+    send(b, a, 60);
+    const k2 = care.openTicket(w, "mtn", { msisdn: a, category: "wrong_transfer", txnId: t2.txnId, channel: "call", by });
+    expect(care.placeHold(w, "mtn", k2.id, by)).toBe(3955); // GHS 100 less the 60 sent on and its 0.45 fee
+    expect(care.returnFunds(w, "mtn", k2.id, by)).toEqual({ returned: 3955, full: false });
+    expect(care.getTicket(w, k2.id)!.status).toBe("open");
+    care.closeTicket(w, "mtn", k2.id, by, { outcome: "resolved", resolution: "GHS 39.55 recovered; the rest was spent" });
+
+    // 3. The recipient is asked on their phone. Refusing hands it back to care; agreeing returns the money.
+    pay.bankToWallet(w, { bank: "gcb", msisdn: b, amount: 20000 });
+    const t3 = send(a, b, 50);
+    const k3 = care.openTicket(w, "mtn", { msisdn: a, category: "wrong_transfer", txnId: t3.txnId, channel: "call", by });
+    care.requestConsent(w, "mtn", k3.id, by);
+    expect(care.getTicket(w, k3.id)!.status).toBe("awaiting_recipient");
+    expect(dial(w, b, "*170#", "4").text).toMatch(/Return GHS 50.00 to Abena Darko \(sent by mistake\)/);
+    expect(dial(w, b, "*170#", "4", "1", "2").text).toMatch(/You have refused/);
+    expect(care.getTicket(w, k3.id)!.status).toBe("open");
+    care.requestConsent(w, "mtn", k3.id, by);
+    const before = bal(a);
+    expect(dial(w, b, "*170#", "4", "1", "1", "2222").text).toMatch(/GHS 50.00 has been returned to the sender/);
+    expect(bal(a)).toBe(before + 5000 + 38);
+    expect(care.getTicket(w, k3.id)!.status).toBe("resolved");
+    expect(dial(w, b, "*170#", "4").text).toMatch(/no pending approvals/);
+
+    // 4. Another network. Only the recipient's network can touch the money, so the dispute goes through the switch.
+    const t4 = send(a, c, 80);
+    const k4 = care.openTicket(w, "mtn", { msisdn: a, category: "wrong_transfer", txnId: t4.txnId, channel: "call", by });
+    expect(() => care.placeHold(w, "mtn", k4.id, by)).toThrow(/Send the dispute to that network/);
+    const theirs = care.forwardDispute(w, "mtn", k4.id, by);
+    expect(theirs).toMatchObject({ id: "AT-000001", telco: "at", role: "recipient", msisdn: c, linked_ticket: k4.id });
+    expect(care.getTicket(w, k4.id)!.status).toBe("with_other_network");
+    expect(() => care.closeTicket(w, "mtn", k4.id, by, { outcome: "rejected", resolution: "x" })).toThrow(/with the other network/);
+    expect(() => care.placeHold(w, "mtn", theirs.id, by)).toThrow(/not found on this network/);
+    care.placeHold(w, "at", theirs.id, by);
+    const beforeCross = bal(a);
+    const owed = balanceOf(w, "switch:mtn");
+    expect(care.returnFunds(w, "at", theirs.id, by).full).toBe(true);
+    expect(bal(a)).toBe(beforeCross + 8000 + 60);
+    expect(balanceOf(w, "switch:mtn")).toBe(owed - 8000); // the money came back through the switch
+    expect(care.getTicket(w, k4.id)).toMatchObject({ status: "resolved", resolution: "Money returned to the sender in full" });
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM switch_log WHERE step = 'dispute'")).toBe(1);
+    expect(backed()).toBe(true);
+
+    // 5. The other network rejects the claim: the hold is released and the sender is told.
+    const t5 = send(a, c, 30);
+    const k5 = care.openTicket(w, "mtn", { msisdn: a, category: "unauthorised", txnId: t5.txnId, channel: "call", by });
+    const theirs5 = care.forwardDispute(w, "mtn", k5.id, by);
+    care.placeHold(w, "at", theirs5.id, by);
+    const cBefore = bal(c);
+    care.closeTicket(w, "at", theirs5.id, by, { outcome: "rejected", resolution: "The recipient showed the payment was for goods" });
+    expect(bal(c)).toBe(cBefore + 3000);
+    expect(care.getTicket(w, k5.id)!.status).toBe("rejected");
+    expect(lastSms(w, a)).toMatch(/is closed: rejected. The recipient showed/);
+
+    // 6. A cash-out the customer disputes is reversed in full, including the agent's till and commission.
+    telco.adjustTill(w, "mtn", agent, 50000);
+    telco.agentRequestCashOut(w, "mtn", agent, { msisdn: a, amount: 100, card: people[0].ghana_card });
+    const beforeOut = bal(a);
+    dial(w, a, "*170#", "4", "1", "1", "1111");
+    expect(bal(a)).toBe(beforeOut - 10100);
+    expect(dial(w, a, "*170#", "6", "4", "1", "1").text).toMatch(/Ticket MTN-/);
+    const k6 = (w.db.prepare("SELECT id FROM tickets WHERE category = 'agent_complaint'").get() as { id: string }).id;
+    care.reverseAgentTransaction(w, "mtn", k6, by);
+    expect(bal(a)).toBe(beforeOut);
+    expect(telco.momoAgent(w, "mtn", agent).cash).toBe(50000);
+
+    // 7. Calling 100 reaches the caller's own network's care line, when an agent is on line.
+    expect(() => calls.startCall(w, { from: a, to: "100", device: "A", offer: "o" })).toThrow(/customer care is closed/);
+    const mtnCare = calls.careEndpoint("mtn");
+    calls.pollCall(w, { msisdn: mtnCare, device: "agent-1" });
+    const first = calls.startCall(w, { from: a, to: "100", device: "A", offer: "o1" }).id;
+    const second = calls.startCall(w, { from: b, to: "100", device: "B", offer: "o2" }).id;
+    expect(calls.careQueue(w, "mtn")).toBe(2);
+    expect(calls.pollCall(w, { msisdn: mtnCare, device: "agent-1" }).call).toMatchObject({ id: first, role: "callee", peer: a, offer: "o1" });
+    calls.answerCall(w, { callId: first, msisdn: mtnCare, device: "agent-1", answer: "ans" });
+    expect(calls.pollCall(w, { msisdn: a, device: "A", callId: first }).call).toMatchObject({ status: "active", peer: "100", peerNetwork: "MTN customer care" });
+    // A second agent gets the next caller in the queue; the first stays on their own call.
+    expect(calls.pollCall(w, { msisdn: mtnCare, device: "agent-2" }).call!.id).toBe(second);
+    expect(calls.pollCall(w, { msisdn: mtnCare, device: "agent-1" }).call!.id).toBe(first);
+    calls.endCall(w, { callId: first, msisdn: mtnCare });
+    expect(calls.pollCall(w, { msisdn: a, device: "A", callId: first }).call!.status).toBe("ended");
+    // An AT customer's 100 goes to AT, where nobody is on line.
+    expect(() => calls.startCall(w, { from: c, to: "100", device: "C", offer: "o" })).toThrow(/AT customer care is closed/);
+
+    // The care console's own view of all this.
+    type CareView = { tickets: { id: string }[]; ticket: { can: Record<string, boolean>; events: unknown[] } | null; customer: { found: boolean; identity: { name: string } } | null };
+    const v = resolveSystem(["care", "mtn"]).view(w, new URLSearchParams({ ticket: k4.id, customer: a })) as CareView;
+    expect(v.tickets.length).toBe(6);
+    expect(v.ticket!.can.close).toBe(false);
+    expect(v.customer).toMatchObject({ found: true, identity: { name: "Abena Darko" } });
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)")).toBe(0);
+  });
+});
+
 describe("fees", () => {
   const fee = (t: "mtn" | "telecel" | "at", kind: "p2p_onnet" | "p2p_offnet" | "cashout" | "merchant" | "to_bank", amount: number) => feeFor(defaultTelco(t).fees[kind], amount * 100) / 100;
 
