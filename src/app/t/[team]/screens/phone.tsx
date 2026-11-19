@@ -39,7 +39,7 @@ type Tab = "dial" | "calls" | "sms" | "wallet";
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
 const NETWORK: Record<string, string> = { mtn: "MTN", telecel: "Telecel", at: "AT" };
 
-export default function Phone({ team }: { team: string }) {
+export default function Phone({ team, role }: { team: string; role: string }) {
   const [msisdn, setMsisdn] = useState("");
   const { data, error, refresh } = useView<PhoneView>(team, `/s/phone?msisdn=${msisdn}`, 2500);
   const [tab, setTab] = useState<Tab>("dial");
@@ -94,9 +94,11 @@ export default function Phone({ team }: { team: string }) {
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{teamName(team)} · Phone</div>
-        <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
-          ← All systems
-        </Link>
+        {role === "team" && (
+          <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
+            ← All systems
+          </Link>
+        )}
       </div>
 
       {!data ? (
@@ -104,8 +106,9 @@ export default function Phone({ team }: { team: string }) {
       ) : lines.length === 0 ? (
         <div className="card p-5 text-sm text-gray-700">
           <p className="font-semibold text-gray-900">There are no phones yet.</p>
-          <p className="mt-1">A phone appears here once someone has a registered SIM card. To get one:</p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5">
+          <p className="mt-1">A phone appears here once someone has a registered SIM card.</p>
+          {role !== "team" && <p className="mt-2">Ask your team to register a SIM for you, then come back to this page.</p>}
+          <ol className={`mt-2 list-decimal space-y-1 pl-5 ${role === "team" ? "" : "hidden"}`}>
             <li>
               <Link className="underline" href={`/t/${team}/nia`}>
                 NIA

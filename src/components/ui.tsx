@@ -25,7 +25,14 @@ export function useView<T>(team: string, path: string, everyMs = 3000) {
   return { data, error, refresh };
 }
 
-export function Shell({ team, title, subtitle, color = "#111827", textOn = "#ffffff", mark, right, children }: { team: string; title: string; subtitle: string; color?: string; textOn?: string; mark?: ReactNode; right?: ReactNode; children: ReactNode }) {
+export function Shell({
+  team, title, subtitle, color = "#111827", textOn = "#ffffff", mark, right, back, children,
+}: {
+  team: string; title: string; subtitle: string; color?: string; textOn?: string; mark?: ReactNode; right?: ReactNode;
+  /** Where the header's back link goes. Defaults to the list of all systems. */
+  back?: { href: string; label: string };
+  children: ReactNode;
+}) {
   return (
     <div className="flex min-h-full flex-1 flex-col">
       <header style={{ background: color, color: textOn }}>
@@ -38,8 +45,8 @@ export function Shell({ team, title, subtitle, color = "#111827", textOn = "#fff
             <h1 className="truncate text-lg font-semibold leading-tight">{title}</h1>
           </div>
           {right}
-          <Link href={`/t/${team}`} className="rounded-lg border border-current/30 px-3 py-1.5 text-sm font-medium hover:bg-black/10">
-            ← All systems
+          <Link href={back?.href ?? `/t/${team}`} className="rounded-lg border border-current/30 px-3 py-1.5 text-sm font-medium hover:bg-black/10">
+            ← {back?.label ?? "All systems"}
           </Link>
         </div>
       </header>
@@ -287,9 +294,9 @@ interface TxnDetail {
 }
 
 /** Transactions; click one to see the ledger postings and switch messages behind it. */
-export function TxnTable({ team, rows, empty = "No transactions yet.", action }: { team: string; rows: TxnRow[]; empty?: string; action?: (t: TxnRow) => ReactNode }) {
+export function TxnTable({ team, rows, empty = "No transactions yet.", action, path = "/s/hub" }: { team: string; rows: TxnRow[]; empty?: string; action?: (t: TxnRow) => ReactNode; path?: string }) {
   const [detail, setDetail] = useState<TxnDetail | null>(null);
-  const open = async (t: TxnRow) => setDetail(await api<TxnDetail>(team, "/s/hub", { body: { action: "txn", txnId: t.id } }));
+  const open = async (t: TxnRow) => setDetail(await api<TxnDetail>(team, path, { body: { action: "txn", txnId: t.id } }));
   const cols: Col<TxnRow>[] = [
     { label: "Time", cell: (t) => <span className="whitespace-nowrap text-gray-500">{when(t.at)}</span> },
     { label: "Type", cell: (t) => <span className="whitespace-nowrap">{TYPE_LABEL[t.type] ?? t.type}</span> },

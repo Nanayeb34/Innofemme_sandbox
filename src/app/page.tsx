@@ -3,14 +3,16 @@ import { InnofemmeLogo } from "@/components/brand";
 import { TelcoMark } from "@/components/telco-mark";
 import { telcoLogos } from "@/server/logos";
 import { cookies } from "next/headers";
-import { registry } from "@/engine/worlds";
+import { registry, roleHome, roleOfKey } from "@/engine/worlds";
 import { teamCookie } from "@/server/http";
 
 export default async function Home() {
   const logos = telcoLogos();
   // Teams this browser has already joined by scanning their QR card.
   const jar = await cookies();
-  const joined = registry().teams.filter((t) => jar.get(teamCookie(t.id))?.value === t.key);
+  const joined = registry()
+    .teams.map((t) => ({ ...t, role: roleOfKey(t, jar.get(teamCookie(t.id))?.value) }))
+    .filter((t) => t.role);
   return (
     <main className="flex flex-1 flex-col">
       <section className="flex flex-1 items-center bg-gradient-to-b from-[#f3effa] to-[var(--background)]">
@@ -38,12 +40,14 @@ export default async function Home() {
                 <div key={t.id} className="card p-5">
                   <div className="font-semibold text-gray-900">{t.name}</div>
                   <div className="mt-3 flex justify-center gap-2">
-                    <Link href={`/t/${t.id}`} className="btn btn-dark">
-                      Open your systems
+                    <Link href={roleHome(t.id, t.role!)} className="btn btn-dark">
+                      {t.role === "team" ? "Open your systems" : t.role === "customer" ? "Open the phone" : "Open the agent screens"}
                     </Link>
-                    <Link href={`/t/${t.id}/phone`} className="btn">
-                      Open a phone
-                    </Link>
+                    {t.role === "team" && (
+                      <Link href={`/t/${t.id}/phone`} className="btn">
+                        Open a phone
+                      </Link>
+                    )}
                   </div>
                 </div>
               ))}

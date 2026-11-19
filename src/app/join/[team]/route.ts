@@ -1,14 +1,21 @@
 import { NextResponse } from "next/server";
-import { teamById } from "@/engine/worlds";
+import { cookies } from "next/headers";
+import { roleHome, roleOfKey, teamById } from "@/engine/worlds";
 import { publicOrigin, teamCookie } from "@/server/http";
 
-/** The QR code target: stores the team key in a cookie, then opens the team's list of systems. */
+/**
+ * The QR code target. The key in the link says what it opens: the team's systems, only the customer
+ * phone, or only the agent screens. It is stored in a cookie, then the browser goes to that starting page.
+ */
 export async function GET(req: Request, ctx: RouteContext<"/join/[team]">) {
   const { team } = await ctx.params;
-  const url = new URL(req.url);
   const t = teamById(team);
-  if (!t || url.searchParams.get("k") !== t.key) return new NextResponse("This QR code is not valid. Ask an organiser for your team's code.", { status: 401 });
-  const res = NextResponse.redirect(new URL(`/t/${team}`, publicOrigin(req)));
-  res.cookies.set(teamCookie(team), t.key, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 14 });
+  const key = new URL(req.url).searchParams.get("k");
+  const role = t ? roleOfKey(t, key) : undefined;
+  if (!t || !role || !key) return new NextResponse("This QR code is not valid. Ask an organiser for your team's code.", { status: 401 });
+  const res = NextResponse.redirect(new URL(roleHome(team, role), publicOrigin(req)));
+  // A browser that already holds the team's own key keeps it: scanning a phone code must not lock a teammate out of the consoles.
+  const held = roleOfKey(t, (await cookies()).get(teamCookie(team))?.value);
+  if (held !== "team") res.cookies.set(teamCookie(team), key, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 14 });
   return res;
 }

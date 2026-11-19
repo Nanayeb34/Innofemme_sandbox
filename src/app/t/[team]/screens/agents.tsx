@@ -71,7 +71,10 @@ interface SimPointView {
 
 const SIM_TABS = [["register", "Register a new SIM"], ["swap", "Replace a SIM"], ["fix", "Troubleshooting"], ["log", "Work done here"]] as const;
 
-export function SimPoint({ team, telco }: { team: string; telco: string }) {
+/** A phone that scanned the agent code goes back to the agent menu; a team laptop goes back to all systems. */
+const backFor = (team: string, role: string) => (role === "team" ? undefined : { href: `/t/${team}/agent`, label: "Agent menu" });
+
+export function SimPoint({ team, telco, role }: { team: string; telco: string; role: string }) {
   const [agent, setAgent] = useChosen(`sim-agent:${team}:${telco}`);
   const path = `/s/sim-agent/${telco}`;
   const { data, error, refresh } = useView<SimPointView>(team, `${path}?agent=${encodeURIComponent(agent)}`);
@@ -84,15 +87,22 @@ export function SimPoint({ team, telco }: { team: string; telco: string }) {
   const owner = [{ name: "msisdn", label: `${b.name} number`, placeholder: "024 000 0000" }, ...ID_FIELDS];
 
   return (
-    <Shell team={team} title={`${b.name} SIM registration point`} subtitle="SIM registration and troubleshooting" color={b.color} textOn={TEXT_ON[telco]} mark={<TelcoMark telco={telco} logo={b.logo} height={34} />} right={<NetworkSwitch team={team} kind="sim-agent" telco={telco} />}>
+    <Shell team={team} title={`${b.name} SIM registration point`} subtitle="SIM registration and troubleshooting" color={b.color} textOn={TEXT_ON[telco]} mark={<TelcoMark telco={telco} logo={b.logo} height={34} />} right={<NetworkSwitch team={team} kind="sim-agent" telco={telco} />} back={backFor(team, role)}>
       {!me ? (
         <Section title="No registration point on this network yet">
           <p className="text-sm text-gray-700">
-            {b.name} has not authorised a service centre or SIM registration agent. Go to the{" "}
-            <Link className="underline" href={`/t/${team}/telco/${telco}`}>
-              {b.name} back office
-            </Link>{" "}
-            → SIM registration points, and authorise one.
+            {b.name} has not authorised a service centre or SIM registration agent.{" "}
+            {role === "team" ? (
+              <>
+                Go to the{" "}
+                <Link className="underline" href={`/t/${team}/telco/${telco}`}>
+                  {b.name} back office
+                </Link>{" "}
+                → SIM registration points, and authorise one.
+              </>
+            ) : (
+              <>Ask your team to authorise one in the {b.name} back office, then come back.</>
+            )}
           </p>
         </Section>
       ) : (
@@ -188,7 +198,7 @@ interface MomoPointView {
 
 const MOMO_TABS = [["cashin", "Cash-in (deposit)"], ["cashout", "Cash-out (withdrawal)"], ["register", "Register a customer"], ["float", "Float and till"], ["txns", "Transactions"]] as const;
 
-export function MomoPoint({ team, telco }: { team: string; telco: string }) {
+export function MomoPoint({ team, telco, role }: { team: string; telco: string; role: string }) {
   const [code, setCode] = useChosen(`momo-agent:${team}:${telco}`);
   const path = `/s/momo-agent/${telco}`;
   const { data, error, refresh } = useView<MomoPointView>(team, `${path}?agent=${encodeURIComponent(code)}`);
@@ -202,15 +212,21 @@ export function MomoPoint({ team, telco }: { team: string; telco: string }) {
   const done = refresh;
 
   return (
-    <Shell team={team} title={`${b.wallet} agent`} subtitle="Mobile money agent" color={b.color} textOn={TEXT_ON[telco]} mark={<TelcoMark telco={telco} logo={b.logo} height={34} />} right={<NetworkSwitch team={team} kind="momo-agent" telco={telco} />}>
+    <Shell team={team} title={`${b.wallet} agent`} subtitle="Mobile money agent" color={b.color} textOn={TEXT_ON[telco]} mark={<TelcoMark telco={telco} logo={b.logo} height={34} />} right={<NetworkSwitch team={team} kind="momo-agent" telco={telco} />} back={backFor(team, role)}>
       {!me ? (
         <Section title="No mobile money agent on this network yet">
           <p className="text-sm text-gray-700">
-            Register a SIM for the business at a SIM registration point, then go to the{" "}
-            <Link className="underline" href={`/t/${team}/telco/${telco}`}>
-              {b.name} back office
-            </Link>{" "}
-            → Mobile money agents, and onboard it.
+            {role === "team" ? (
+              <>
+                Register a SIM for the business at a SIM registration point, then go to the{" "}
+                <Link className="underline" href={`/t/${team}/telco/${telco}`}>
+                  {b.name} back office
+                </Link>{" "}
+                → Mobile money agents, and onboard it.
+              </>
+            ) : (
+              <>Ask your team to onboard a mobile money agent in the {b.name} back office, then come back.</>
+            )}
           </p>
         </Section>
       ) : (
@@ -229,9 +245,13 @@ export function MomoPoint({ team, telco }: { team: string; telco: string }) {
               {me.float === 0 && (
                 <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   You have no float. Buy some at a{" "}
-                  <Link className="underline" href={`/t/${team}/bank/gcb`}>
-                    bank
-                  </Link>
+                  {role === "team" ? (
+                    <Link className="underline" href={`/t/${team}/bank/gcb`}>
+                      bank
+                    </Link>
+                  ) : (
+                    "bank"
+                  )}
                   : the bank sends money to your agent line {me.msisdn}.
                 </p>
               )}
@@ -290,9 +310,13 @@ export function MomoPoint({ team, telco }: { team: string; telco: string }) {
           {tab === "float" && (
             <>
               <Section title="Buying float" hint="Float is e-money you buy with real money. Take cash or your bank balance to a bank and ask it to send money to your agent line. Other agents can also send you float.">
-                <Link href={`/t/${team}/bank/gcb`} className="btn">
-                  Go to a bank
-                </Link>
+                {role === "team" ? (
+                  <Link href={`/t/${team}/bank/gcb`} className="btn">
+                    Go to a bank
+                  </Link>
+                ) : (
+                  <p className="text-sm text-gray-600">Your team runs the bank consoles. Give them your agent line: {me.msisdn}.</p>
+                )}
               </Section>
               <Section title="Send float to another agent" hint="Agents on the same network rebalance each other. No fee.">
                 <ActionForm team={team} path={path} action="send_float" submit="Send float" extra={extra} onDone={done} fields={[{ name: "toCode", label: "Receiving agent number", type: "select", options: data.agents.filter((a) => a.code !== me.code).map((a) => [a.code, `${a.name} (${a.code})`] as const) }, { name: "amount", label: "Amount (GHS)", type: "number" }, pin]} disabled={data.agents.length < 2 ? "There is no other agent on this network yet." : undefined} />
@@ -305,7 +329,7 @@ export function MomoPoint({ team, telco }: { team: string; telco: string }) {
 
           {tab === "txns" && (
             <Section title="Transactions on the agent line">
-              <TxnTable team={team} rows={me.txns} />
+              <TxnTable team={team} rows={me.txns} path={path} />
             </Section>
           )}
         </>

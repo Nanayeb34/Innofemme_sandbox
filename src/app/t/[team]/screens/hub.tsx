@@ -17,7 +17,15 @@ const BANKS: [string, string][] = [["gcb", "GCB Bank"], ["ecobank", "Ecobank Gha
 const TELCOS: [string, string, string][] = [["mtn", "MTN", "MTN MoMo"], ["telecel", "Telecel", "Telecel Cash"], ["at", "AT", "AT Money"]];
 const STEP_LINK: Record<string, string> = { nia: "nia", telco: "telco/mtn", "sim-agent": "sim-agent/mtn", "momo-agent": "momo-agent/mtn", bank: "bank/gcb", phone: "phone", switch: "switch" };
 
-export default function Hub({ team, logos }: { team: string; logos: Record<string, string | null> }) {
+interface PhoneCode {
+  role: string;
+  title: string;
+  hint: string;
+  url: string;
+  qr: string;
+}
+
+export default function Hub({ team, logos, phones }: { team: string; logos: Record<string, string | null>; phones: PhoneCode[] }) {
   const { data, error, refresh } = useView<HubView>(team, "/s/hub", 4000);
   const base = `/t/${team}`;
   const next = data?.steps.find((s) => !s.done);
@@ -62,6 +70,8 @@ export default function Hub({ team, logos }: { team: string; logos: Record<strin
                 ))}
               </ol>
             </section>
+
+            {phones.length > 0 && <PhoneCodes phones={phones} />}
 
             <Group title="Identity and regulators">
               <Tile href={`${base}/nia`} color="#0b6b3a" title="NIA" sub="Ghana Card register" stat={`${data.counts.persons} card(s) issued`} />
@@ -123,6 +133,39 @@ export default function Hub({ team, logos }: { team: string; logos: Record<strin
         )}
       </main>
     </div>
+  );
+}
+
+/** The codes people scan with their own phones. Each opens one screen only, never the consoles. */
+function PhoneCodes({ phones }: { phones: PhoneCode[] }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  return (
+    <section className="card mb-5 p-4">
+      <h2 className="font-semibold text-gray-900">Scan to use your own phone</h2>
+      <p className="mt-0.5 max-w-3xl text-sm text-gray-600">
+        Point a phone camera at a code. The customer code opens only the phone simulator; the agent code opens only the agent screens. Neither can reach the consoles on this page, so they are safe to show on a projector.
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        {phones.map((p) => (
+          <div key={p.role} className="flex items-center gap-4 rounded-lg border border-gray-200 p-3">
+            <div className="w-[150px] shrink-0" dangerouslySetInnerHTML={{ __html: p.qr }} />
+            <div className="min-w-0">
+              <div className="font-semibold text-gray-900">{p.title}</div>
+              <div className="text-sm text-gray-600">{p.hint}</div>
+              <button
+                className="mt-2 text-xs underline"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(p.url);
+                  setCopied(p.role);
+                }}
+              >
+                {copied === p.role ? "Link copied" : "Copy link instead"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

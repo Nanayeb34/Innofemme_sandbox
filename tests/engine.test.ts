@@ -444,6 +444,22 @@ describe("customer care", () => {
   });
 });
 
+describe("access links", () => {
+  it("gives each team three different keys, and each key only its own role", async () => {
+    const { registry, roleKey, roleOfKey, roleHome } = await import("../src/engine/worlds");
+    const [one, two] = registry().teams;
+    const keys = (["team", "customer", "agent"] as const).map((r) => roleKey(one, r));
+    expect(new Set(keys).size).toBe(3);
+    expect(keys.map((k) => roleOfKey(one, k))).toEqual(["team", "customer", "agent"]);
+    // The same code is printed every time, and one team's phone code is no use in another team's world.
+    expect(roleKey(one, "customer")).toBe(keys[1]);
+    expect(roleOfKey(two, keys[1])).toBeUndefined();
+    expect(roleOfKey(one, "nope")).toBeUndefined();
+    expect(roleOfKey(one, undefined)).toBeUndefined();
+    expect([roleHome("team-01", "team"), roleHome("team-01", "customer"), roleHome("team-01", "agent")]).toEqual(["/t/team-01", "/t/team-01/phone", "/t/team-01/agent"]);
+  });
+});
+
 describe("fees", () => {
   const fee = (t: "mtn" | "telecel" | "at", kind: "p2p_onnet" | "p2p_offnet" | "cashout" | "merchant" | "to_bank", amount: number) => feeFor(defaultTelco(t).fees[kind], amount * 100) / 100;
 

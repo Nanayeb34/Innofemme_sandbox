@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { DATA_DIR, SCHEMA_VERSION, SNAPSHOTS_DIR, WORLDS_DIR, getMeta, openDb, setMeta, tx } from "./db";
 import { seedConfig } from "./config/store";
 import { seedTrustAccounts } from "./bank";
@@ -44,6 +44,27 @@ export function registry(): Registry {
   // ORGANISER_KEY, when set, always wins over the key stored at first start.
   return { ...reg, organiserKey: process.env.ORGANISER_KEY || reg.organiserKey };
 }
+
+/**
+ * Who a link lets you be. "team" opens every system. "customer" opens only the phone, and "agent"
+ * only the agent screens: these are for the QR codes people scan with their own phones.
+ */
+export type Role = "team" | "customer" | "agent";
+export const PHONE_ROLES = ["customer", "agent"] as const;
+
+/** The key for one role. Phone keys are derived from the team key, so they need no storage and cannot be turned back into it. */
+export function roleKey(team: Team, role: Role): string {
+  return role === "team" ? team.key : createHmac("sha256", team.key).update(`phone:${role}`).digest("base64url").slice(0, 12);
+}
+
+export function roleOfKey(team: Team, key: string | undefined | null): Role | undefined {
+  if (!key) return undefined;
+  const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return (["team", ...PHONE_ROLES] as Role[]).find((r) => same(key, roleKey(team, r)));
+}
+
+/** Where each role starts. */
+export const roleHome = (teamId: string, role: Role) => (role === "customer" ? `/t/${teamId}/phone` : role === "agent" ? `/t/${teamId}/agent` : `/t/${teamId}`);
 
 export const worldIds = () => [...registry().teams.map((t) => t.id), ORGANISER_WORLD];
 export const teamById = (id: string) => registry().teams.find((t) => t.id === id);

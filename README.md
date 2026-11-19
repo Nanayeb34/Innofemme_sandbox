@@ -13,7 +13,17 @@ pnpm dev                     # http://localhost:3000
 pnpm sandbox:info            # prints the organiser access key and every team's join link
 ```
 
-Go to `/organiser`, sign in with the organiser access key, then **Print team QR cards**. A team's QR code opens its list of systems at `/t/{team}`. World files live in `~/.momo-sandbox` unless `SANDBOX_DATA_DIR` is set.
+Go to `/organiser`, sign in with the organiser access key, then **Print team QR cards**. World files live in `~/.momo-sandbox` unless `SANDBOX_DATA_DIR` is set.
+
+Each team has three QR codes, and each opens something different:
+
+| Code | Opens | For |
+| --- | --- | --- |
+| Team systems | Every console, at `/t/{team}` | The team's laptops. Keep it within the team. |
+| Customer phone | Only the phone simulator | Anyone playing a customer, on their own phone. |
+| Agent phone | Only the agent screens: mobile money agent and SIM registration, for any network | Anyone playing an agent, on their own phone. |
+
+The two phone codes are also shown on the team's own systems page, so a team can put them on a screen for people to scan. A phone code cannot reach the consoles or the settings, in the browser or through the API.
 
 **Telco logos.** Put the official files from the partners in `public/brand/telcos/` as `mtn.svg`, `telecel.svg` and `at.svg` (PNG also works). Until then, brand-coloured wordmarks are shown.
 
