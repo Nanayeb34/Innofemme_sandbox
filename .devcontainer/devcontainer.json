@@ -1,0 +1,24 @@
+// GitHub Codespaces: open this branch in a Codespace and the sandbox builds, starts, and prints
+// each team's links in the terminal. Nothing to install. See "Test it in GitHub Codespaces" in the README.
+{
+  "name": "Mobile Money Sandbox",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "features": {
+    // Used once at start-up to make the app's address reachable from phones.
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Mobile Money Sandbox", "onAutoForward": "silent" }
+  },
+  "containerEnv": {
+    // Team worlds live beside the repository, so they survive a rebuild of the Codespace and never end up in git.
+    "SANDBOX_DATA_DIR": "/workspaces/.momo-sandbox-data",
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+    "NEXT_TELEMETRY_DISABLED": "1"
+  },
+  // Once, when the Codespace is created: install and build.
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  // Every time you open the Codespace: start the app if it is not running, and show the links.
+  "postAttachCommand": "bash .devcontainer/start.sh"
+}

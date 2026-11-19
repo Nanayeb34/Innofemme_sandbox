@@ -33,6 +33,23 @@ pnpm sandbox:smoke   # builds a small world in a throwaway directory and prints 
 pnpm typecheck && pnpm lint
 ```
 
+## Test it in GitHub Codespaces
+
+A Codespace is a computer in your browser. Opening one on this repository installs, builds and starts the sandbox for you, with an HTTPS address that phones can open (needed for the QR codes and for voice calls).
+
+1. On the repository's GitHub page, choose the branch, then **Code → Codespaces → Create codespace**.
+2. Wait for the terminal to print the organiser key and each team's link (a few minutes the first time).
+3. Open a team link on a laptop. Its page shows the customer and agent phone QR codes.
+
+Things to know:
+
+- **The address must be public.** The start script tries to make port 3000 public. If the terminal says it could not, open the **Ports** tab, right-click port 3000, and choose **Port Visibility → Public**.
+- **First visit.** GitHub shows each new visitor a one-time notice that they are opening someone's Codespace. They continue past it.
+- **It sleeps.** A Codespace stops after 30 minutes without activity in the Codespace itself; phones using the app do not count. Raise the limit under GitHub **Settings → Codespaces → Default idle timeout**, or keep the Codespace tab in use. Reopening it starts the sandbox again with the same worlds.
+- **The address belongs to that Codespace.** A new Codespace has a new address and so new QR codes.
+
+To restart by hand: `bash .devcontainer/start.sh`. This is for testing; for the event use the server under Deploying.
+
 ## The systems
 
 | Where | Who it is | What you do there |
