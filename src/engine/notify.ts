@@ -16,6 +16,24 @@ export function notify(w: World, telco: Telco, event: NotificationEvent, msisdn:
   sendSms(w, msisdn, TELCO_INFO[telco].wallet.replace(/\s/g, ""), render(n.template, vars));
 }
 
-export function sendSms(w: World, msisdn: string, sender: string, body: string) {
+/** How many 160-character messages a text is sent as. */
+export const smsParts = (body: string) => Math.max(1, Math.ceil(body.length / 160));
+
+export interface SmsMeta {
+  kind: "person" | "network" | "app";
+  fromTelco?: string | null;
+}
+
+/** Records a text in the networks' message log, whether or not it could be delivered. */
+export function logSms(w: World, to: string, sender: string, body: string, meta: SmsMeta, failure?: string) {
+  const sim = w.db.prepare("SELECT telco FROM sims WHERE msisdn = ?").get(to) as { telco: string } | undefined;
+  w.db
+    .prepare("INSERT INTO sms_log(at, kind, sender, from_telco, to_msisdn, to_telco, body, parts, status, reason) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run(w.now, meta.kind, sender, meta.fromTelco ?? sim?.telco ?? null, to, sim?.telco ?? null, body, smsParts(body), failure ? "failed" : "delivered", failure ?? null);
+}
+
+/** Puts a text in a phone's inbox and on the networks' message log. Texts from the network itself are the default. */
+export function sendSms(w: World, msisdn: string, sender: string, body: string, meta: SmsMeta = { kind: "network" }) {
   w.db.prepare("INSERT INTO sms(msisdn, sender, body, at) VALUES(?,?,?,?)").run(msisdn, sender, body, w.now);
+  logSms(w, msisdn, sender, body, meta);
 }

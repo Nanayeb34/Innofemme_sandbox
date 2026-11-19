@@ -95,7 +95,21 @@ curl ${base}/momo/mtn/collection/v1_0/requesttopay/$REF -H "Authorization: Beare
 # also: POST disbursement/v1_0/transfer, GET …/account/balance, GET …/accountholder/msisdn/{number}/active`}</Code>
         </Section>
 
-        <Section title="5. Save points">
+        <Section title="5. Text messages">
+          <p>
+            A business sends a text to a customer from its own software at <code className="break-all">{base}/sms/&#123;mtn|telecel|at&#125;</code>. As with the merchant API, you act as a merchant that network has onboarded (<code>X-Merchant-Id</code>). The text arrives under the merchant&apos;s registered name, shortened to 11 letters and digits, and the customer cannot reply to it. Texts are at most 480 characters.
+          </p>
+          <Code>{`curl -X POST ${base}/sms/mtn ${auth} -H "X-Merchant-Id: 100001" ${json} -d '{"to":"0241234567","text":"Your order is ready."}'
+# → {"status":"delivered","parts":1,"senderId":"AmasProvisi","to":"0241234567"}   (or "failed" with a reason)
+curl ${base}/sms/mtn ${auth} -H "X-Merchant-Id: 100001"      # what this merchant has sent
+
+# A person's phone can also be driven from code
+curl -X POST ${base}/s/phone ${auth} ${json} -d '{"action":"sms_send","msisdn":"024…","to":"027…","text":"Hello"}'
+curl "${base}/s/phone?msisdn=024…&thread=027…" ${auth}       # that phone's conversations, and one thread
+curl ${base}/s/telco/mtn ${auth}                             # includes the network's SMS records under "sms"`}</Code>
+        </Section>
+
+        <Section title="6. Save points">
           <Code>{`curl -X POST ${base}/snapshots ${auth} ${json} -d '{"label":"Before changing fees"}'
 curl ${base}/snapshots ${auth}
 curl -X POST ${base}/snapshots/{id} ${auth}          # roll back

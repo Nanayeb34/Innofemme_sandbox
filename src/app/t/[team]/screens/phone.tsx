@@ -28,6 +28,8 @@ interface PhoneState {
   sms: { id: number; sender: string; body: string; at: string }[];
   approvals: { ref: string; kind: string; amount: number; from: string }[];
   calls: CallLogRow[];
+  conversations: { with: string; canReply: boolean; lastBody: string; lastAt: string; lastOut: boolean; count: number }[];
+  thread: { with: string; canReply: boolean; messages: { id: string; at: string; out: boolean; body: string; failed: string | null }[] } | null;
   recent: { id: string; at: string; type: string; amount: number; status: string; from: string; to: string; out: boolean }[];
 }
 interface PhoneView {
@@ -41,7 +43,9 @@ const NETWORK: Record<string, string> = { mtn: "MTN", telecel: "Telecel", at: "A
 
 export default function Phone({ team, role }: { team: string; role: string }) {
   const [msisdn, setMsisdn] = useState("");
-  const { data, error, refresh } = useView<PhoneView>(team, `/s/phone?msisdn=${msisdn}`, 2500);
+  // The conversation open on the Messages tab: a number, or a sender name such as MTNMoMo.
+  const [thread, setThread] = useState("");
+  const { data, error, refresh } = useView<PhoneView>(team, `/s/phone?msisdn=${msisdn}&thread=${encodeURIComponent(thread)}`, 2500);
   const [tab, setTab] = useState<Tab>("dial");
   const [seen, setSeen] = useState<Record<string, number>>({});
 
@@ -62,6 +66,7 @@ export default function Phone({ team, role }: { team: string; role: string }) {
 
   const pick = (m: string) => {
     setMsisdn(m);
+    setThread("");
     setTab("dial");
     try {
       localStorage.setItem(`phone:${team}`, m);
@@ -162,7 +167,7 @@ export default function Phone({ team, role }: { team: string; role: string }) {
               ) : tab === "calls" ? (
                 <CallLog rows={state.calls} calls={calls} onCall={(n) => void calls.start(n)} />
               ) : tab === "sms" ? (
-                <Messages state={state} />
+                <Messages key={state.msisdn} team={team} state={state} thread={thread} setThread={setThread} onSent={refresh} />
               ) : (
                 <Wallet state={state} />
               )}
@@ -307,20 +312,144 @@ function Dialer({ team, state, calls, onDone }: { team: string; state: PhoneStat
   );
 }
 
-function Messages({ state }: { state: PhoneState }) {
-  if (!state.sms.length) return <p className="p-6 text-center text-sm text-gray-500">No messages.</p>;
+const SMS_LIMIT = 480;
+const smsParts = (text: string) => Math.max(1, Math.ceil(text.length / 160));
+
+/** The Messages app: conversations, one open thread, and writing a new text. */
+function Messages({ team, state, thread, setThread, onSent }: { team: string; state: PhoneState; thread: string; setThread: (t: string) => void; onSent: () => void }) {
+  const [composing, setComposing] = useState(false);
+  const [to, setTo] = useState("");
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const bottom = useRef<HTMLDivElement>(null);
+  const open = state.thread && state.thread.with === thread ? state.thread : null;
+  const count = open?.messages.length ?? 0;
+
+  // Keep the newest message in view.
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [count, thread]);
+
+  const send = async (number: string) => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ to: string; delivered: boolean; reason?: string }>(team, "/s/phone", { body: { action: "sms_send", msisdn: state.msisdn, to: number, text } });
+      setText("");
+      setTo("");
+      setComposing(false);
+      setThread(r.to);
+      onSent();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const box = (number: string, placeholder: string) => (
+    <form
+      className="border-t border-gray-200 bg-white p-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send(number);
+      }}
+    >
+      {error && <p className="mb-1 px-1 text-xs text-red-600">{error}</p>}
+      <div className="flex items-end gap-2">
+        <textarea value={text} onChange={(e) => setText(e.target.value.slice(0, SMS_LIMIT))} rows={2} placeholder={placeholder} aria-label="Message" className="min-w-0 flex-1 resize-none rounded-2xl border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-900" />
+        <button disabled={busy || !text.trim() || !number} className="rounded-full bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+          {busy ? "…" : "Send"}
+        </button>
+      </div>
+      <p className="mt-1 px-1 text-[10px] text-gray-400">
+        {text.length}/{SMS_LIMIT} · {smsParts(text)} message{smsParts(text) > 1 ? "s" : ""}
+      </p>
+    </form>
+  );
+
+  if (composing) {
+    return (
+      <div className="absolute inset-0 flex flex-col bg-white">
+        <div className="flex items-center gap-2 border-b border-gray-200 px-3 py-2">
+          <button onClick={() => setComposing(false)} className="text-sm text-blue-700" aria-label="Back to messages">
+            ‹ Messages
+          </button>
+          <span className="text-sm font-semibold text-gray-900">New message</span>
+        </div>
+        <label className="block border-b border-gray-100 px-4 py-3 text-sm">
+          <span className="text-xs text-gray-500">To</span>
+          <input value={to} onChange={(e) => setTo(e.target.value)} inputMode="tel" placeholder="Mobile number, any network" aria-label="Send to" className="mt-0.5 w-full border-b border-gray-300 py-1 text-base outline-none focus:border-gray-900" />
+        </label>
+        <div className="flex-1" />
+        {box(to.trim(), "Write a message")}
+      </div>
+    );
+  }
+
+  if (thread) {
+    return (
+      <div className="absolute inset-0 flex flex-col bg-white">
+        <div className="flex items-center gap-2 border-b border-gray-200 px-3 py-2">
+          <button onClick={() => setThread("")} className="text-sm text-blue-700" aria-label="Back to messages">
+            ‹ Messages
+          </button>
+          <span className="truncate text-sm font-semibold text-gray-900">{thread}</span>
+        </div>
+        <div className="flex-1 space-y-2 overflow-y-auto bg-gray-50 px-3 py-3">
+          {!open ? (
+            <p className="text-center text-sm text-gray-400">Loading…</p>
+          ) : (
+            open.messages.map((m) => (
+              <div key={m.id} className={`flex ${m.out ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-snug ${m.out ? (m.failed ? "bg-red-100 text-red-900" : "bg-green-600 text-white") : "bg-white text-gray-900 shadow-sm"}`}>
+                  <p className="whitespace-pre-wrap break-words">{m.body}</p>
+                  <p className={`mt-0.5 text-[10px] ${m.out && !m.failed ? "text-green-100" : "text-gray-400"}`}>
+                    {when(m.at)}
+                    {m.failed ? ` · Not delivered: ${m.failed}` : ""}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+          <div ref={bottom} />
+        </div>
+        {open && (open.canReply ? box(thread, "Reply") : <p className="border-t border-gray-200 bg-white px-4 py-3 text-center text-xs text-gray-500">You cannot reply to this sender.</p>)}
+      </div>
+    );
+  }
+
   return (
-    <ul className="divide-y divide-gray-100">
-      {state.sms.map((s) => (
-        <li key={s.id} className="px-4 py-3">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-sm font-semibold text-gray-900">{s.sender}</span>
-            <span className="text-[11px] text-gray-400">{when(s.at)}</span>
-          </div>
-          <p className="mt-0.5 text-sm leading-snug text-gray-700">{s.body}</p>
-        </li>
-      ))}
-    </ul>
+    <div>
+      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-2">
+        <span className="text-sm font-semibold text-gray-900">Messages</span>
+        <button onClick={() => { setError(null); setComposing(true); }} className="rounded-full bg-green-600 px-3 py-1 text-xs font-semibold text-white">
+          New message
+        </button>
+      </div>
+      {state.conversations.length === 0 ? (
+        <p className="p-6 text-center text-sm text-gray-500">No messages yet.</p>
+      ) : (
+        <ul className="divide-y divide-gray-100">
+          {state.conversations.map((c) => (
+            <li key={c.with}>
+              <button onClick={() => { setError(null); setThread(c.with); }} className="block w-full px-4 py-3 text-left hover:bg-gray-50">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-sm font-semibold text-gray-900">{c.with}</span>
+                  <span className="shrink-0 text-[11px] text-gray-400">{when(c.lastAt)}</span>
+                </div>
+                <p className="mt-0.5 line-clamp-2 text-sm leading-snug text-gray-600">
+                  {c.lastOut ? "You: " : ""}
+                  {c.lastBody}
+                </p>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

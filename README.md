@@ -59,7 +59,7 @@ To restart by hand: `bash .devcontainer/start.sh`. This is for testing; for the 
 | `/t/{team}/care/{telco}` | A telco's customer care (call centre) | Answer calls to 100, check the caller against their record, open and work tickets, hold and return disputed money, send disputes to other networks, block a lost SIM. |
 | `/t/{team}/sim-agent/{telco}` | SIM registration point (service centre or registration agent) | Register a new SIM with Ghana Card and fingerprint, replace a SIM, block and unblock, reset a wallet PIN, enhanced KYC. No cash. |
 | `/t/{team}/momo-agent/{telco}` | Mobile money agent | Cash-in, cash-out (the customer approves on their phone), register customers on medium KYC, move float, count the till. |
-| `/t/{team}/phone` | Any registered SIM | Dial the wallet short code (`*170#` MTN, `*110#` Telecel and AT), `*400#`, `*402*1#`; voice calls to other phones; SMS inbox; wallet. |
+| `/t/{team}/phone` | Any registered SIM | Dial the wallet short code (`*170#` MTN, `*110#` Telecel and AT), `*400#`, `*402*1#`; voice calls and text messages to other phones; wallet. |
 | `/t/{team}/bank/{gcb,ecobank,fidelity,calbank,absa,stanbic}` | A bank | Open accounts against the Ghana Card, cash deposits and withdrawals, transfers to banks and wallets, agent float, the telcos' trust accounts. |
 | `/t/{team}/switch` | The national switch (GhIPSS in real life) | Connect and disconnect participants, watch the message log, see each participant's position, run net settlement, follow disputes between networks. |
 | `/t/{team}/bog` | Bank of Ghana | KYC tier limits for all networks; check that every telco's e-money is backed by its trust account. |
@@ -78,6 +78,7 @@ src/engine/            all simulation logic, no web code
   approvals.ts         cash-out requests and Request to Pay, approved on the payer's phone
   care.ts              customer care tickets and the dispute process (hold, consent, return)
   calls.ts             voice calls: ringing, busy, switched off, the 100 queue, call records
+  sms.ts               text messages between people and from businesses' apps; conversations and records
   ussd.ts              USSD session engine over each telco's editable menu tree
   bank.ts              bank accounts and the telcos' trust accounts
   switch.ts            routing (lookup, quote, commit), positions and net settlement
@@ -110,6 +111,16 @@ A dispute over a wallet-to-wallet payment is worked where the money now is, on t
 When the recipient is on another network, the sender's network cannot touch the money. It sends the dispute through the national switch; the recipient's network gets a ticket of its own and decides, and the sender's ticket follows along. Returned money travels back through the switch. A disputed cash-out is reversed in full, including the agent's till and commission.
 
 Care cannot reset a PIN or replace a SIM: those need the customer in person at a service centre. Worlds created before this feature keep their old USSD menu; add a `report_problem` action node to the menu in the telco's settings, or reset the world.
+
+## Text messages
+
+Every phone has a Messages app with conversations. There are three kinds of text, and each network keeps a record of all of them in its back office (SMS tab):
+
+- **Person to person.** Write to any number on any network and reply in the thread. A blocked SIM cannot send, and a text to a number that is not in service, or is blocked, is recorded as not delivered. A phone that is not open still receives its texts: they wait in the inbox.
+- **From the network.** The texts a telco sends about its own services (registration, payments, approvals, tickets). Their wording is editable in the telco's settings. Nobody can reply to them.
+- **From a business's app.** `POST /api/w/{team}/sms/{telco}` with `{ to, text }` and `X-Merchant-Id`. The text arrives under the merchant's registered name, shortened to 11 letters and digits, with no reply.
+
+A text is at most 480 characters and is counted in 160-character parts. Texts are free: there is no airtime yet.
 
 ## Voice calls
 

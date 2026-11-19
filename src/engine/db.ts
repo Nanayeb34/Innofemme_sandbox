@@ -195,6 +195,24 @@ CREATE TABLE IF NOT EXISTS sms (
 );
 CREATE INDEX IF NOT EXISTS sms_msisdn ON sms(msisdn, id);
 
+-- The telcos' record of every text message: between people, from the network, and from businesses' apps.
+-- The sms table above is each phone's inbox; this is what was sent, delivered or not.
+CREATE TABLE IF NOT EXISTS sms_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,                -- person | network | app
+  sender TEXT NOT NULL,              -- a phone number, or a sender name such as MTNMoMo
+  from_telco TEXT,
+  to_msisdn TEXT NOT NULL,
+  to_telco TEXT,
+  body TEXT NOT NULL,
+  parts INTEGER NOT NULL DEFAULT 1,  -- how many 160-character messages it was sent as
+  status TEXT NOT NULL,              -- delivered | failed
+  reason TEXT
+);
+CREATE INDEX IF NOT EXISTS sms_log_sender ON sms_log(sender, id);
+CREATE INDEX IF NOT EXISTS sms_log_to ON sms_log(to_msisdn, id);
+
 -- Voice calls between phones (the telcos' call records). The audio itself goes phone to phone.
 CREATE TABLE IF NOT EXISTS calls (
   id TEXT PRIMARY KEY,

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { randomBytes, randomUUID } from "node:crypto";
 import { HttpError, authWorld, handle } from "@/server/http";
+import { merchantFor } from "@/server/merchant";
 import { teamById } from "@/engine/worlds";
 import { approvalView, createApproval, getApproval } from "@/engine/approvals";
-import { getWallet, walletByMsisdn, type WalletRow } from "@/engine/ledger";
+import { walletByMsisdn } from "@/engine/ledger";
 import { walletPay } from "@/engine/payments";
 import { withLock, type World } from "@/engine/world";
 import { SimError, TELCOS, cedis, normalizeMsisdn, toIntl, type Telco } from "@/engine/util";
@@ -38,15 +39,7 @@ async function authed(req: Request, team: string): Promise<World> {
 
 const momoError = (status: number, code: string, message: string) => NextResponse.json({ code, message }, { status });
 
-/** The merchant wallet the caller is acting for. */
-function merchant(w: World, req: Request, telco: Telco): WalletRow {
-  const till = req.headers.get("x-merchant-id");
-  const row = (till
-    ? w.db.prepare("SELECT m.wallet_id FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE m.till = ? AND w.telco = ?").get(till, telco)
-    : w.db.prepare("SELECT m.wallet_id FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE w.telco = ? ORDER BY m.created_at LIMIT 1").get(telco)) as { wallet_id: string } | undefined;
-  if (!row) throw new HttpError(404, till ? `No merchant ${till} on this network` : "This network has no merchants yet. Onboard one in the telco console, then send its merchant ID in X-Merchant-Id.");
-  return getWallet(w, row.wallet_id)!;
-}
+const merchant = merchantFor;
 
 async function json(req: Request) {
   try {

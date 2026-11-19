@@ -18,6 +18,7 @@ interface TelcoView {
   merchants: { till: string; name: string; category: string; town: string; msisdn: string; balance: number }[];
   txns: TxnRow[];
   calls: { id: string; at: string; from: string; to: string; fromNetwork: string; toNetwork: string; status: string; reason: string | null; seconds: number }[];
+  sms: { id: number; at: string; kind: string; from: string; fromNetwork: string; to: string; toNetwork: string; body: string; parts: number; status: string; reason: string | null }[];
   simEvents: { id: number; msisdn: string; at: string; kind: string; by: string; detail: string }[];
   activity: ActivityRow[];
   config: {
@@ -35,7 +36,7 @@ interface TelcoView {
 }
 
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
-const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["settings", "Settings"]] as const;
+const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["settings", "Settings"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 export default function TelcoConsole({ team, telco }: { team: string; telco: string }) {
@@ -344,6 +345,24 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
               { label: "To", cell: (c) => (<><span className="font-mono text-xs">{c.to}</span><div className="text-[11px] text-gray-500">{c.toNetwork || "unknown"}</div></>) },
               { label: "Duration", right: true, cell: (c) => (c.seconds ? `${Math.floor(c.seconds / 60)}m ${c.seconds % 60}s` : "–") },
               { label: "Outcome", cell: (c) => (<><Status value={c.status === "ended" ? "success" : c.status} />{c.reason && c.status !== "ended" && <div className="mt-0.5 max-w-[260px] text-[11px] text-gray-500">{c.reason}</div>}</>) },
+            ]}
+          />
+        </Section>
+      )}
+
+      {tab === "sms" && (
+        <Section title="SMS records" hint="Every text sent from or to a number on this network: between people, from the network itself, and from businesses' apps. Texts that could not be delivered are kept too.">
+          <Table
+            rows={data.sms}
+            empty="No texts yet."
+            cols={[
+              { label: "Time", cell: (m) => <span className="whitespace-nowrap text-gray-500">{when(m.at)}</span> },
+              { label: "From", cell: (m) => (<><span className="font-mono text-xs">{m.from}</span><div className="text-[11px] text-gray-500">{m.fromNetwork}</div></>) },
+              { label: "To", cell: (m) => (<><span className="font-mono text-xs">{m.to}</span><div className="text-[11px] text-gray-500">{m.toNetwork || "unknown"}</div></>) },
+              { label: "Type", cell: (m) => <Badge tone={m.kind === "person" ? "gray" : "blue"}>{m.kind === "person" ? "person to person" : m.kind === "app" ? "business app" : "from the network"}</Badge> },
+              { label: "Text", cell: (m) => <span className="block max-w-[340px] break-words text-gray-800">{m.body}</span> },
+              { label: "Parts", right: true, cell: (m) => m.parts },
+              { label: "Status", cell: (m) => (<><Status value={m.status === "delivered" ? "success" : "failed"} />{m.reason && <div className="mt-0.5 max-w-[200px] text-[11px] text-gray-500">{m.reason}</div>}</>) },
             ]}
           />
         </Section>

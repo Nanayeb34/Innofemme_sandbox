@@ -444,6 +444,70 @@ describe("customer care", () => {
   });
 });
 
+describe("text messages", () => {
+  it("delivers person-to-person and business texts, keeps threads, and records everything", async () => {
+    const sms = await import("../src/engine/sms");
+    const w = await resetWorld("team-02");
+    const [a, b, c] = [person(w, "Adwoa", "Bonsu"), person(w, "Kwabena", "Osei", "1984-04-04"), person(w, "Dzifa", "Agbeko", "1996-06-06")];
+    telco.generateSims(w, "mtn", 4);
+    telco.generateSims(w, "telecel", 2);
+    const mtn = telco.onboardSimAgent(w, "mtn", { card: a.ghana_card, name: "Point", kind: "service_centre", town: "Ho" }).id;
+    const tel = telco.onboardSimAgent(w, "telecel", { card: a.ghana_card, name: "Point", kind: "service_centre", town: "Ho" }).id;
+    const na = telco.registerSim(w, "mtn", mtn, { card: a.ghana_card, fingerprint: a.fingerprint }).sim.msisdn;
+    const nb = telco.registerSim(w, "telecel", tel, { card: b.ghana_card, fingerprint: b.fingerprint }).sim.msisdn;
+    const shopLine = telco.registerSim(w, "mtn", mtn, { card: c.ghana_card, fingerprint: c.fingerprint }).sim.msisdn;
+
+    // Across networks, and it waits in the inbox whether or not the phone is open.
+    expect(sms.sendText(w, { from: na, to: nb, text: "Hello Kwabena" })).toMatchObject({ delivered: true, parts: 1, to: nb });
+    expect(lastSms(w, nb)).toBe("Hello Kwabena");
+    sms.sendText(w, { from: nb, to: na, text: "Hi Adwoa, got it" });
+    expect(sms.sendText(w, { from: na, to: nb, text: "x".repeat(161) }).parts).toBe(2);
+    expect(() => sms.sendText(w, { from: na, to: nb, text: "x".repeat(481) })).toThrow(/too long/);
+    expect(() => sms.sendText(w, { from: na, to: nb, text: "   " })).toThrow(/Message is required/);
+    expect(() => sms.sendText(w, { from: na, to: "12345", text: "hi" })).toThrow(/not a valid mobile number/);
+
+    // Not delivered: an unknown number and a blocked one. The sender still sees the attempt.
+    expect(sms.sendText(w, { from: na, to: "0200000000", text: "anyone?" })).toMatchObject({ delivered: false, reason: "Number not in service" });
+    telco.setSimStatus(w, "telecel", tel, nb, "blocked", "lost");
+    expect(sms.sendText(w, { from: na, to: nb, text: "are you there" }).delivered).toBe(false);
+    expect(() => sms.sendText(w, { from: nb, to: na, text: "hi" })).toThrow(/No network service/);
+    telco.setSimStatus(w, "telecel", tel, nb, "active");
+
+    // The conversation as each phone sees it.
+    const mine = sms.thread(w, na, nb);
+    expect(mine.canReply).toBe(true);
+    expect(mine.messages.map((m) => `${m.out ? ">" : "<"}${m.failed ? "!" : ""}${m.body.slice(0, 5)}`)).toEqual([">Hello", "<Hi Ad", ">xxxxx", ">!are y"]);
+    expect(sms.thread(w, nb, na).messages.map((m) => m.out)).toEqual([false, true, false]);
+    const list = sms.conversations(w, na);
+    expect(list[0]).toMatchObject({ with: nb, canReply: true, lastOut: true });
+    // The network's own texts (here, the welcome at SIM registration) are a conversation too, but nobody can reply to a sender name.
+    expect(list.find((x) => x.with === "MTNMoMo")).toMatchObject({ canReply: false, lastOut: false });
+
+    // A business texts a customer from its software, under its registered sender name.
+    telco.onboardMerchant(w, "mtn", { msisdn: shopLine, name: "Dzifa's Provisions & Co", town: "Ho", pin: "9999" });
+    const shop = walletByMsisdn(w, shopLine)!;
+    expect(sms.senderIdOf(shop)).toBe("DzifasProvi");
+    expect(sms.sendAppSms(w, shop, { to: nb, text: "Your order is ready" })).toMatchObject({ delivered: true, senderId: "DzifasProvi" });
+    expect(sms.thread(w, nb, "DzifasProvi")).toMatchObject({ canReply: false, messages: [{ body: "Your order is ready", out: false }] });
+    dial(w, na, "*170#", "1", "1234", "1234"); // an ordinary customer wallet cannot send as a business
+    expect(() => sms.sendAppSms(w, walletByMsisdn(w, na)!, { to: nb, text: "x" })).toThrow(/Only an onboarded merchant/);
+    expect(sms.appSmsSent(w, shop)).toMatchObject([{ to: nb, text: "Your order is ready", status: "delivered" }]);
+
+    // Each network's records cover what left it and what arrived on it.
+    const mtnLog = sms.smsRecords(w, "mtn");
+    expect(mtnLog.filter((r) => r.kind === "person").length).toBe(5);
+    expect(mtnLog.filter((r) => r.kind === "app").length).toBe(1);
+    expect(mtnLog.some((r) => r.kind === "network" && r.from === "MTNMoMo")).toBe(true);
+    expect(mtnLog.find((r) => r.body === "anyone?")).toMatchObject({ status: "failed", reason: "Number not in service", toNetwork: "" });
+    const telLog = sms.smsRecords(w, "telecel");
+    expect(telLog.find((r) => r.body === "Hello Kwabena")).toMatchObject({ fromNetwork: "MTN", toNetwork: "Telecel", status: "delivered" });
+    // The phone's own view carries the conversations and an open thread.
+    const view = resolveSystem(["phone"]).view(w, new URLSearchParams({ msisdn: na, thread: nb })) as { phone: { conversations: unknown[]; thread: { messages: unknown[] } } };
+    expect(view.phone.thread.messages.length).toBe(4);
+    expect(view.phone.conversations.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("access links", () => {
   it("gives each team three different keys, and each key only its own role", async () => {
     const { registry, roleKey, roleOfKey, roleHome } = await import("../src/engine/worlds");

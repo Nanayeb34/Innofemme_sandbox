@@ -92,6 +92,10 @@ function open(id: string): World {
     removeFile(file);
     db = openDb(file);
   }
+  // A world from before the message log existed: copy its inboxes in, so conversations keep their history.
+  db.exec(`INSERT INTO sms_log(at, kind, sender, from_telco, to_msisdn, to_telco, body, parts, status)
+    SELECT s.at, 'network', s.sender, x.telco, s.msisdn, x.telco, s.body, 1, 'delivered' FROM sms s LEFT JOIN sims x ON x.msisdn = s.msisdn
+    WHERE NOT EXISTS (SELECT 1 FROM sms_log) ORDER BY s.id`);
   const w = makeWorld(id, db);
   if (getMeta(db, "schema") === undefined) {
     tx(db, () => {

@@ -8,6 +8,7 @@ import { count } from "@/engine/db";
 import { balanceOf, getTxn, getWallet, walletByMsisdn } from "@/engine/ledger";
 import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } from "@/engine/nia";
 import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments";
+import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
 import { LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE, ussd } from "@/engine/ussd";
@@ -215,6 +216,7 @@ function telcoSystem(t: Telco): System {
         calls: (w.db.prepare("SELECT * FROM calls WHERE from_telco = ? OR to_telco = ? ORDER BY started_at DESC, rowid DESC LIMIT 150").all(t, t) as unknown as CallRow[]).map((c) => ({
           id: c.id, at: iso(c.started_at), from: c.from_msisdn, to: c.to_msisdn, fromNetwork: TELCO_INFO[c.from_telco].name, toNetwork: c.to_telco ? TELCO_INFO[c.to_telco].name : "", status: c.status, reason: c.reason, seconds: callSeconds(c),
         })),
+        sms: smsRecords(w, t),
         simEvents: (w.db.prepare("SELECT e.* FROM sim_events e JOIN sims s ON s.msisdn = e.msisdn WHERE s.telco = ? ORDER BY e.id DESC LIMIT 80").all(t) as { id: number; msisdn: string; at: number; kind: string; by: string; detail: string }[]).map((e) => ({ ...e, at: iso(e.at) })),
         activity: auditFeed(w, t),
         config: getConfig(w.db, `telco.${t}`),
@@ -569,6 +571,8 @@ const phone: System = {
         sms: (w.db.prepare("SELECT id, sender, body, at FROM sms WHERE msisdn = ? ORDER BY id DESC LIMIT 60").all(sim.msisdn) as { id: number; sender: string; body: string; at: number }[]).map((s) => ({ ...s, at: iso(s.at) })),
         approvals: wallet ? pendingFor(w, sim.msisdn).map((a) => ({ ref: a.ref, kind: a.kind, amount: money(a.amount), from: a.display_name })) : [],
         calls: callLog(w, sim.msisdn),
+        conversations: conversations(w, sim.msisdn),
+        thread: q.get("thread") ? thread(w, sim.msisdn, q.get("thread")!) : null,
         recent: wallet ? txnFeed(w, "(t.from_wallet = ? OR t.to_wallet = ?) AND t.status != 'failed'", [wallet.id, wallet.id], 15).map((x) => ({ ...x, out: x.type === "hold" || x.from.includes(sim.msisdn) })) : [],
       },
     };
@@ -577,6 +581,10 @@ const phone: System = {
     ussd(w, b) {
       if (typeof b.input !== "string") throw new SimError("input is required");
       return ussd(w, { sessionId: str(b.sessionId), msisdn: normalizeMsisdn(String(need(str(b.msisdn), "msisdn"))), input: b.input.slice(0, 182) });
+    },
+    sms_send(w, b) {
+      const r = sendText(w, { from: String(need(str(b.msisdn), "msisdn")), to: str(b.to), text: b.text });
+      return { ok: true, ...r, message: r.delivered ? "Sent." : `Not delivered: ${r.reason}` };
     },
     // Voice calls. The phone checks in about once a second with call_poll.
     call_start: (w, b) => startCall(w, { from: String(need(str(b.msisdn), "msisdn")), to: String(need(str(b.to), "Number to call")), device: String(need(str(b.device), "device")), offer: String(b.offer ?? "") }),
