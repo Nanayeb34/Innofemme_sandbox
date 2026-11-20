@@ -28,7 +28,7 @@ const CONTENTS: { title: string; items: [id: string, label: string][] }[] = [
   {
     title: "Reference",
     items: [
-      ["credentials", "1. Partner credentials"], ["momo", "2. Mobile money API"], ["network", "3. Network API"], ["bank", "4. Bank API"], ["switch", "5. National switch API"], ["nia", "6. NIA verification"],
+      ["credentials", "1. Partner credentials"], ["momo", "2. Mobile money API (all networks)"], ["network", "3. Network API (all networks)"], ["bank", "4. Bank API"], ["switch", "5. National switch API"], ["nia", "6. NIA verification"],
       ["plugins", "7. Plug-in points"], ["console", "8. Console API"], ["phones", "9. Phones"], ["settings", "10. Settings"], ["savepoints", "11. Save points"], ["dataset", "12. Simulated data"], ["fraud", "13. Fraud API"],
     ],
   },
@@ -142,7 +142,7 @@ export async function DocsContent({ team }: { team?: string }) {
               <div className="card p-4">
                 <h3 className="font-semibold text-gray-900">An application of your own</h3>
                 <p className="mt-1">
-                  You build an app or a service that stands outside the institutions and uses what they give an outside company: their partner APIs, with credentials each institution issues to you.
+                  You build an app or a service that stands outside the institutions and uses what they give an outside company: their partner APIs, with credentials each institution issues to you. All three networks (MTN, Telecel and AT), every bank, the national switch and NIA have one.
                 </p>
                 <p className="mt-2 text-xs text-gray-600">
                   Read <a className="underline" href="#credentials">sections 1 to 6</a>. Start from <a className="underline" href="#kit-app">the application kit</a>.
@@ -372,39 +372,48 @@ ngrok http 4010`}</Code>
             <p>Send them on every call with HTTP Basic, or swap them once for a bearer token at the institution&apos;s token endpoint.</p>
             <Code>{`CLIENT_ID=…   API_KEY=…                               # from the institution's API partners tab
 
-  curl ${base}/network/mtn/v1/subscribers/0241234567 ${partner}          # Basic on each call
-  TOKEN=$(curl -s -X POST ${base}/network/mtn/token ${partner} | jq -r .access_token)
-  curl ${base}/network/mtn/v1/subscribers/0241234567 -H "Authorization: Bearer $TOKEN"`}</Code>
+curl ${base}/network/mtn/v1/subscribers/0241234567 ${partner}          # Basic on each call
+curl ${base}/network/telecel/v1/subscribers/0201234567 ${partner}      # the same on Telecel, with Telecel's credentials
+curl ${base}/network/at/v1/subscribers/0261234567 ${partner}           # and on AT, with AT's
+TOKEN=$(curl -s -X POST ${base}/network/mtn/token ${partner} | jq -r .access_token)
+curl ${base}/network/mtn/v1/subscribers/0241234567 -H "Authorization: Bearer $TOKEN"`}</Code>
           </Section>
 
-          <Section title="2. Mobile money API (MTN MoMo Open API shape)" id="momo">
+          <Section title="2. Mobile money API: MTN MoMo, Telecel Cash and AT Money" id="momo">
             <p>
-              At <code className="break-all">{base}/momo/&#123;mtn|telecel|at&#125;</code>. Collection takes money from customers; disbursement and remittance pay it out. Each request carries your own <code>X-Reference-Id</code>, returns <code>202</code>, and is finished later: ask for its status, or receive it at your callback address. Telecel and AT use the same shape until their own specifications arrive.
+              <b>Every network has this API</b>, at its own address. The calls are the same on all three; only the network&apos;s name in the address changes, and each network issues its own credentials (its back office → <b>API partners</b>).
+            </p>
+            <NetworkAddresses base={base} api="momo" />
+            <p>
+              The examples below use <code>mtn</code>: put <code>telecel</code> or <code>at</code> in its place for the others. Telecel and AT do not publish their own API documents, so all three follow the layout of MTN&apos;s published MoMo API.
+            </p>
+            <p>
+              Collection takes money from customers; disbursement and remittance pay it out. Each request carries your own <code>X-Reference-Id</code>, returns <code>202</code>, and is finished later: ask for its status, or receive it at your callback address.
             </p>
             <Code>{`TOKEN=$(curl -s -X POST ${base}/momo/mtn/collection/token/ ${partner} | jq -r .access_token)
-  B="-H \\"Authorization: Bearer $TOKEN\\""
+B="-H \\"Authorization: Bearer $TOKEN\\""
 
-  # Collection
-  POST collection/v1_0/requesttopay            {amount, currency, externalId, payer:{partyIdType:"MSISDN", partyId}, payerMessage, payeeNote}
-  GET  collection/v1_0/requesttopay/{ref}      → status PENDING | SUCCESSFUL | FAILED
-  POST collection/v1_0/requesttopay/{ref}/deliverynotification   {notificationMessage}   a text to the payer after a successful payment
-  POST collection/v1_0/requesttowithdraw       same body; GET …/requesttowithdraw/{ref}
-  POST collection/v2_0/preapproval             {payer, payerCurrency, payerMessage, validityTime}   permission to charge without asking each time
-  GET  collection/v2_0/preapproval/{ref}       DELETE to cancel it
-  GET  collection/v1_0/account/balance
-  GET  collection/v1_0/accountholder/msisdn/{number}/active
-  GET  collection/v1_0/accountholder/msisdn/{number}/basicuserinfo      the name on the wallet
+# Collection
+POST collection/v1_0/requesttopay            {amount, currency, externalId, payer:{partyIdType:"MSISDN", partyId}, payerMessage, payeeNote}
+GET  collection/v1_0/requesttopay/{ref}      → status PENDING | SUCCESSFUL | FAILED
+POST collection/v1_0/requesttopay/{ref}/deliverynotification   {notificationMessage}   a text to the payer after a successful payment
+POST collection/v1_0/requesttowithdraw       same body; GET …/requesttowithdraw/{ref}
+POST collection/v2_0/preapproval             {payer, payerCurrency, payerMessage, validityTime}   permission to charge without asking each time
+GET  collection/v2_0/preapproval/{ref}       DELETE to cancel it
+GET  collection/v1_0/account/balance
+GET  collection/v1_0/accountholder/msisdn/{number}/active
+GET  collection/v1_0/accountholder/msisdn/{number}/basicuserinfo      the name on the wallet
 
-  # A customer's full profile, with their consent
-  POST collection/v1_0/bc-authorize            form: scope=profile&login_hint=ID:{number}/MSISDN  → auth_req_id
-  POST collection/oauth2/token/                form: grant_type=urn:openid:params:grant-type:ciba&auth_req_id=…  (authorization_pending until they agree)
-  GET  collection/oauth2/v1_0/userinfo         with that token: name, date of birth, sex, town, KYC tier
+# A customer's full profile, with their consent
+POST collection/v1_0/bc-authorize            form: scope=profile&login_hint=ID:{number}/MSISDN  → auth_req_id
+POST collection/oauth2/token/                form: grant_type=urn:openid:params:grant-type:ciba&auth_req_id=…  (authorization_pending until they agree)
+GET  collection/oauth2/v1_0/userinfo         with that token: name, date of birth, sex, town, KYC tier
 
-  # Disbursement (remittance/v1_0/transfer works the same way)
-  POST disbursement/v1_0/transfer              {amount, currency, externalId, payee:{partyIdType:"MSISDN", partyId}, payerMessage, payeeNote}
-  POST disbursement/v2_0/deposit               same body
-  POST disbursement/v1_0/refund                {amount, currency, referenceIdToRefund}   gives back all or part of a payment you collected, with no fee
-  GET  disbursement/v1_0/{transfer|deposit|refund}/{ref}`}</Code>
+# Disbursement (remittance/v1_0/transfer works the same way)
+POST disbursement/v1_0/transfer              {amount, currency, externalId, payee:{partyIdType:"MSISDN", partyId}, payerMessage, payeeNote}
+POST disbursement/v2_0/deposit               same body
+POST disbursement/v1_0/refund                {amount, currency, referenceIdToRefund}   gives back all or part of a payment you collected, with no fee
+GET  disbursement/v1_0/{transfer|deposit|refund}/{ref}`}</Code>
             <p>
               A request to pay, a pre-approval and a profile request all appear on the customer&apos;s phone, where they agree with their PIN or refuse. Each network keeps them in its own place on its menu:{" "}
               {approvals.map((a, i) => (
@@ -421,16 +430,20 @@ ngrok http 4010`}</Code>
 
           <Section title="3. Network API: texts, subscriber checks, USSD" id="network">
             <p>
-              At <code className="break-all">{base}/network/&#123;mtn|telecel|at&#125;</code>. A network answers only for its own numbers.
+              <b>Every network has this API too</b>, at its own address, with the same credentials as its mobile money API. A network answers only for its own numbers, so ask the network the number belongs to.
+            </p>
+            <NetworkAddresses base={base} api="network" />
+            <p>
+              The example uses <code>mtn</code>: put <code>telecel</code> or <code>at</code> in its place for the others.
             </p>
             <Code>{`POST v1/sms/messages            {to, text}                       a text under your registered sender name (first 11 letters and digits of the company name)
-  GET  v1/sms/messages                                             what you have sent
-  GET  v1/subscribers/{number}                                     the name the SIM is registered to, its status, and whether it has a wallet
-  POST v1/sim-swap/check          {phoneNumber, maxAge}            was the SIM replaced in the last maxAge hours? → {swapped}
-  POST v1/sim-swap/retrieve-date  {phoneNumber}                    → {latestSimChange}
-  POST v1/kyc-match               {phoneNumber, name, givenName, familyName, birthdate, idDocument, gender}   → "true" | "false" per field sent
+GET  v1/sms/messages                                             what you have sent
+GET  v1/subscribers/{number}                                     the name the SIM is registered to, its status, and whether it has a wallet
+POST v1/sim-swap/check          {phoneNumber, maxAge}            was the SIM replaced in the last maxAge hours? → {swapped}
+POST v1/sim-swap/retrieve-date  {phoneNumber}                    → {latestSimChange}
+POST v1/kyc-match               {phoneNumber, name, givenName, familyName, birthdate, idDocument, gender}   → "true" | "false" per field sent
 
-  curl -X POST ${base}/network/mtn/v1/sim-swap/check ${partner} ${json} -d '{"phoneNumber":"0241234567","maxAge":240}'`}</Code>
+curl -X POST ${base}/network/mtn/v1/sim-swap/check ${partner} ${json} -d '{"phoneNumber":"0241234567","maxAge":240}'`}</Code>
             <p>
               Subscriber details and texts are what networks give licensed partners in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries; we could not confirm them for Ghana, so treat them as what a network could offer.
             </p>
@@ -438,13 +451,13 @@ ngrok http 4010`}</Code>
               <b>Your own USSD service.</b> The NCA console allocates a short code to you with the address of your application, and each network switches it on (back office → API partners). When a subscriber dials the code, the network sends every step to your address as JSON and shows your answer.
             </p>
             <Code>{`# The network POSTs to your address:
-  {"sessionId":"ussd_…","serviceCode":"*714#","msisdn":"0241234567","network":"mtn","newSession":true,"input":"","text":""}
-  # "input" is what the subscriber just typed; "text" is everything typed so far, joined with *
+{"sessionId":"ussd_…","serviceCode":"*714#","msisdn":"0241234567","network":"mtn","newSession":true,"input":"","text":""}
+# "input" is what the subscriber just typed; "text" is everything typed so far, joined with *
 
-  # Answer with JSON …
-  {"message":"Welcome\\n1) Check order\\n2) Exit","continueSession":true}
-  # … or plain text starting with CON (more to come) or END (finished)
-  CON Welcome\\n1) Check order\\n2) Exit`}</Code>
+# Answer with JSON …
+{"message":"Welcome\\n1) Check order\\n2) Exit","continueSession":true}
+# … or plain text starting with CON (more to come) or END (finished)
+CON Welcome\\n1) Check order\\n2) Exit`}</Code>
             <p>Your application must answer within 3 seconds, or the subscriber is told the service is not responding.</p>
           </Section>
 
@@ -453,11 +466,11 @@ ngrok http 4010`}</Code>
               At <code className="break-all">{base}/bank/&#123;{BANK_IDS.join("|")}&#125;</code>. Every call acts on the account the bank tied to your credentials.
             </p>
             <Code>{`GET  v1/account                                                  account number, name and balance
-  GET  v1/account/transactions?limit=50                            statement, newest first
-  POST v1/name-enquiry        {accountNumber}                      the name on an account at any bank
-  POST v1/transfers           {toAccountNumber, amount, narration} to any bank account (another bank goes through the switch)
-  POST v1/wallet-transfers    {msisdn, amount, narration}          to a mobile money wallet on any network
-  GET  v1/transfers/{id}                                           status of a transfer you made`}</Code>
+GET  v1/account/transactions?limit=50                            statement, newest first
+POST v1/name-enquiry        {accountNumber}                      the name on an account at any bank
+POST v1/transfers           {toAccountNumber, amount, narration} to any bank account (another bank goes through the switch)
+POST v1/wallet-transfers    {msisdn, amount, narration}          to a mobile money wallet on any network
+GET  v1/transfers/{id}                                           status of a transfer you made`}</Code>
           </Section>
 
           <Section title="5. National switch API (GhIPSS)" id="switch">
@@ -465,8 +478,8 @@ ngrok http 4010`}</Code>
               At <code className="break-all">{base}/ghipss</code>, for licensed institutions. Payments are not sent here directly: send them through your bank or network, which routes them through the switch.
             </p>
             <Code>{`GET  v1/participants                                             banks and networks on the switch, and whether each is connected
-  POST v1/name-enquiry        {accountNumber} or {msisdn}          which institution holds it, and the name on it
-  GET  v1/transactions/{id}                                        status of a routed payment, with the switch's messages`}</Code>
+POST v1/name-enquiry        {accountNumber} or {msisdn}          which institution holds it, and the name on it
+GET  v1/transactions/{id}                                        status of a routed payment, with the switch's messages`}</Code>
           </Section>
 
           <Section title="6. NIA identity verification" id="nia">
@@ -474,7 +487,7 @@ ngrok http 4010`}</Code>
               At <code className="break-all">{base}/nia</code>, for certified institutions. Every request is on NIA&apos;s log.
             </p>
             <Code>{`POST v1/verify   {cardNumber}                         → {valid}                     is this a valid Ghana Card?
-  POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch, person}   a biometric check; the holder's details come back only on a match`}</Code>
+POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch, person}   a biometric check; the holder's details come back only on a match`}</Code>
           </Section>
 
           <Section title="7. Plug-in points: your API inside an institution's system" id="plugins">
@@ -484,13 +497,13 @@ ngrok http 4010`}</Code>
               happens, waits for your answer (2 seconds by default), and acts on it. The same tab shows every question it asked and what you answered, and has a <b>Send a test</b> button.
             </p>
             <Code>{`# What you receive
-  { "point": "pin.set", "institution": "mtn", "world": "${worldName}", "at": "2026-11-26T10:15:00.000Z", "data": { … } }
+{ "point": "pin.set", "institution": "mtn", "world": "${worldName}", "at": "2026-11-26T10:15:00.000Z", "data": { … } }
 
-  # What you answer (status 200, JSON)
-  { "decision": "allow" }
-  { "decision": "reject", "message": "Shown to the customer. Keep it short: a phone screen holds about 150 characters." }
-  { "decision": "warn",   "message": "Shown first. The customer then chooses 1) Continue or 2) Cancel." }
-  { "decision": "delay",  "minutes": 10, "message": "The payment is refused now and can be tried again after the pause." }`}</Code>
+# What you answer (status 200, JSON)
+{ "decision": "allow" }
+{ "decision": "reject", "message": "Shown to the customer. Keep it short: a phone screen holds about 150 characters." }
+{ "decision": "warn",   "message": "Shown first. The customer then chooses 1) Continue or 2) Cancel." }
+{ "decision": "delay",  "minutes": 10, "message": "The payment is refused now and can be tried again after the pause." }`}</Code>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[560px] text-left text-xs">
                 <thead>
@@ -553,33 +566,33 @@ ngrok http 4010`}</Code>
               <code>GET {"{base}"}/s/{"{system}"}</code> returns what that institution&apos;s console shows. <code>POST</code> with <code>{"{ action, ...fields }"}</code> does something there. Systems: {SYSTEM_PATHS.map((p) => <code key={p} className="mr-1 break-all">{p}</code>)}
             </p>
             <Code>{`# NIA issues a Ghana Card
-  curl -X POST ${base}/s/nia ${auth} ${json} -d '{"action":"enrol","firstNames":"Ama","surname":"Owusu","dob":"1994-03-12","gender":"F","region":"Ashanti","town":"Kumasi"}'
+curl -X POST ${base}/s/nia ${auth} ${json} -d '{"action":"enrol","firstNames":"Ama","surname":"Owusu","dob":"1994-03-12","gender":"F","region":"Ashanti","town":"Kumasi"}'
 
-  # MTN adds SIM stock and authorises a service centre
-  curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"add_sims","count":10}'
-  curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"onboard_sim_agent","kind":"service_centre","name":"Adum Service Centre","town":"Kumasi","card":"GHA-…"}'
+# MTN adds SIM stock and authorises a service centre
+curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"add_sims","count":10}'
+curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"onboard_sim_agent","kind":"service_centre","name":"Adum Service Centre","town":"Kumasi","card":"GHA-…"}'
 
-  # The service centre registers a SIM (card + fingerprint are checked with NIA)
-  curl -X POST ${base}/s/sim-agent/mtn ${auth} ${json} -d '{"action":"register","agent":"MTN-SC-0001","card":"GHA-…","fingerprint":"FP-…"}'
+# The service centre registers a SIM (card + fingerprint are checked with NIA)
+curl -X POST ${base}/s/sim-agent/mtn ${auth} ${json} -d '{"action":"register","agent":"MTN-SC-0001","card":"GHA-…","fingerprint":"FP-…"}'
 
-  # MTN gives a company API access (the answer carries its client ID and API key)
-  curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"api_partner_create","name":"PayLink Ghana","till":"100001"}'
+# MTN gives a company API access (the answer carries its client ID and API key)
+curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"api_partner_create","name":"PayLink Ghana","till":"100001"}'
 
-  # A customer ready to use: a person, a registered number, a wallet with GHS 500. The answer carries the number and the wallet PIN.
-  curl -X POST ${base}/s/hub ${auth} ${json} -d '{"action":"test_customer","network":"mtn"}'
+# A customer ready to use: a person, a registered number, a wallet with GHS 500. The answer carries the number and the wallet PIN.
+curl -X POST ${base}/s/hub ${auth} ${json} -d '{"action":"test_customer","network":"mtn"}'
 
-  # Read any console
-  curl ${base}/s/telco/mtn ${auth}
-  curl ${base}/s/switch ${auth}`}</Code>
+# Read any console
+curl ${base}/s/telco/mtn ${auth}
+curl ${base}/s/switch ${auth}`}</Code>
             <p>Send an unknown action to a system and the error lists the actions it supports.</p>
           </Section>
 
           <Section title="9. Phones" id="phones">
             <p>Drive any registered SIM. Start a USSD session by sending the short code; pass the returned <code>sessionId</code> with each reply.</p>
             <Code>{`curl -X POST ${base}/ussd ${auth} ${json} -d '{"msisdn":"024…","input":"*170#"}'
-  curl -X POST ${base}/ussd ${auth} ${json} -d '{"msisdn":"024…","sessionId":"ussd_…","input":"1"}'
-  curl -X POST ${base}/s/phone ${auth} ${json} -d '{"action":"sms_send","msisdn":"024…","to":"027…","text":"Hello"}'
-  curl "${base}/s/phone?msisdn=024…&thread=027…" ${auth}       # that phone's conversations, and one thread`}</Code>
+curl -X POST ${base}/ussd ${auth} ${json} -d '{"msisdn":"024…","sessionId":"ussd_…","input":"1"}'
+curl -X POST ${base}/s/phone ${auth} ${json} -d '{"action":"sms_send","msisdn":"024…","to":"027…","text":"Hello"}'
+curl "${base}/s/phone?msisdn=024…&thread=027…" ${auth}       # that phone's conversations, and one thread`}</Code>
           </Section>
 
           <Section title="10. Settings" id="settings">
@@ -587,19 +600,19 @@ ngrok http 4010`}</Code>
               Each institution owns one settings document: {SURFACE_NAMES.map((s) => <code key={s} className="mr-1 break-all">{s}</code>)}. Read it, replace it, or patch it with JSON Patch (<code>add</code>, <code>replace</code>, <code>remove</code>). Every change is validated, recorded and can be undone.
             </p>
             <Code>{`curl ${base}/config/telco.mtn ${auth}
-  curl -X PATCH ${base}/config/bog ${auth} ${json} -d '{
-    "summary": "Raise the minimum-KYC daily limit",
-    "operations": [{"op":"replace","path":"/kycTiers/minimum/daily","value":5000}]
-  }'
-  curl ${base}/history ${auth}                       # changes, newest first
-  curl -X POST ${base}/history/{changeId} ${auth}     # undo`}</Code>
+curl -X PATCH ${base}/config/bog ${auth} ${json} -d '{
+  "summary": "Raise the minimum-KYC daily limit",
+  "operations": [{"op":"replace","path":"/kycTiers/minimum/daily","value":5000}]
+}'
+curl ${base}/history ${auth}                       # changes, newest first
+curl -X POST ${base}/history/{changeId} ${auth}     # undo`}</Code>
           </Section>
 
           <Section title="11. Save points" id="savepoints">
             <Code>{`curl -X POST ${base}/snapshots ${auth} ${json} -d '{"label":"Before changing fees"}'
-  curl ${base}/snapshots ${auth}
-  curl -X POST ${base}/snapshots/{id} ${auth}          # roll back
-  curl -X POST ${base}/world ${auth} ${json} -d '{"action":"reset"}'   # wipe to an empty country`}</Code>
+curl ${base}/snapshots ${auth}
+curl -X POST ${base}/snapshots/{id} ${auth}          # roll back
+curl -X POST ${base}/world ${auth} ${json} -d '{"action":"reset"}'   # wipe to an empty country`}</Code>
           </Section>
 
           <Section title="12. Simulated data" id="dataset">
@@ -608,9 +621,9 @@ ngrok http 4010`}</Code>
               ten kinds. Load it from your team&apos;s home page, or here. It replaces what is in the world; what was there is kept as a save point.
             </p>
             <Code>{`curl -X POST ${base}/world ${auth} ${json} -d '{"action":"simulate"}'     # load it (up to a minute the first time)
-  curl ${base}/dataset ${auth}                                              # what it holds, the kinds of fraud, and the files
-  curl ${base}/dataset/transactions.csv ${auth} -o transactions.csv          # every transaction, with is_fraud, fraud_scenario, fraud_role, fraud_case
-  curl "${base}/dataset/transactions.csv?answers=0" ${auth} -o blind.csv     # the same without those four columns`}</Code>
+curl ${base}/dataset ${auth}                                              # what it holds, the kinds of fraud, and the files
+curl ${base}/dataset/transactions.csv ${auth} -o transactions.csv          # every transaction, with is_fraud, fraud_scenario, fraud_role, fraud_case
+curl "${base}/dataset/transactions.csv?answers=0" ${auth} -o blind.csv     # the same without those four columns`}</Code>
             <p className="break-words">
               Files: {Object.entries(DATASET_FILES).map(([name, f]) => (
                 <span key={name} className="mr-2">
@@ -648,17 +661,17 @@ ngrok http 4010`}</Code>
             </ul>
             <Code>{`curl ${base}/fraud-simulator ${auth}                                          # the kinds of fraud, connected applications, whether a run is going
 
-  # start a run against the APIs plugged into the institutions
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":"sim_swap","incidents":20}'
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":["reversal_scam","fake_promo"],"incidents":40,"ordinary":40}'
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":"all","incidents":55}'
+# start a run against the APIs plugged into the institutions
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":"sim_swap","incidents":20}'
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":["reversal_scam","fake_promo"],"incidents":40,"ordinary":40}'
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":"all","incidents":55}'
 
-  # a standalone application connects itself, then is sent incidents of the kinds it named
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"connect","name":"Swap Alert","url":"https://my-app.example.com/fraud","kinds":["sim_swap"]}'
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"application":"Swap Alert","incidents":20}'
+# a standalone application connects itself, then is sent incidents of the kinds it named
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"connect","name":"Swap Alert","url":"https://my-app.example.com/fraud","kinds":["sim_swap"]}'
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"application":"Swap Alert","incidents":20}'
 
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"stop"}'           # stop the run in progress
-  curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect","id":"app_…"}'`}</Code>
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"stop"}'           # stop the run in progress
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect","id":"app_…"}'`}</Code>
             <p>
               A run starts in the background and the call returns at once. <b>The results are not returned by this API and are never sent to your service</b>: nothing your service receives says which requests were fraud. How many incidents it stopped, at which step, and how much
               honest activity it stopped by mistake, are shown in your team&apos;s console, on the{" "}
@@ -726,6 +739,34 @@ ngrok http 4010`}</Code>
         </main>
       </div>
     </>
+  );
+}
+
+/** The address of one kind of API on each of the three networks, so nobody has to work it out from a pattern. */
+function NetworkAddresses({ base, api }: { base: string; api: "momo" | "network" }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[480px] text-left text-xs">
+        <thead>
+          <tr className="border-b border-gray-200 text-[11px] uppercase tracking-wide text-gray-500">
+            <th className="px-2 py-2 font-medium">Network</th>
+            <th className="px-2 py-2 font-medium">Wallet</th>
+            <th className="px-2 py-2 font-medium">Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          {TELCOS.map((t) => (
+            <tr key={t} className="border-b border-gray-100">
+              <td className="px-2 py-2 font-medium text-gray-900">{TELCO_INFO[t].name}</td>
+              <td className="px-2 py-2">{TELCO_INFO[t].wallet}</td>
+              <td className="break-all px-2 py-2 font-mono">
+                {base}/{api}/{t}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
