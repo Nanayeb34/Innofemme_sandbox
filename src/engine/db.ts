@@ -363,6 +363,49 @@ CREATE TABLE IF NOT EXISTS dataset (
 );
 CREATE INDEX IF NOT EXISTS dataset_seq ON dataset(seq);
 
+-- ===== Fraud simulator =====
+-- A standalone application connected to the fraud simulator: it is sent fraud incidents directly.
+CREATE TABLE IF NOT EXISTS fraud_apps (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  kinds TEXT NOT NULL,               -- JSON list of the kinds of fraud it is built to stop
+  created_at INTEGER NOT NULL
+);
+
+-- One run of the fraud simulator.
+CREATE TABLE IF NOT EXISTS fraud_runs (
+  id TEXT PRIMARY KEY,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  status TEXT NOT NULL,              -- running | finished | stopped
+  kinds TEXT NOT NULL,               -- JSON list of the kinds of fraud asked for
+  target TEXT NOT NULL,              -- "plugins", or the name of the application tested
+  planned INTEGER NOT NULL,          -- fraud incidents asked for
+  ordinary INTEGER NOT NULL,         -- pieces of ordinary activity asked for
+  seed INTEGER NOT NULL,
+  note TEXT
+);
+
+-- What happened to each incident (and each piece of ordinary activity) in a run.
+CREATE TABLE IF NOT EXISTS fraud_incidents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,                -- fraud | ordinary
+  scenario TEXT NOT NULL,
+  who TEXT,                          -- the victim, or the customer
+  outcome TEXT NOT NULL,             -- fraud: stopped | contained | through | void. ordinary: fine | slowed | blocked | void
+  stopped_at TEXT,                   -- the step (plug-in point) where it was stopped
+  stopped_by TEXT,                   -- the API or application that stopped it
+  answer TEXT,                       -- what it answered
+  at_risk INTEGER NOT NULL DEFAULT 0,
+  lost INTEGER NOT NULL DEFAULT 0,
+  summary TEXT NOT NULL,
+  trail TEXT NOT NULL                -- JSON: the steps, in order
+);
+CREATE INDEX IF NOT EXISTS fraud_incidents_run ON fraud_incidents(run_id, id);
+
 -- ===== Plug-in points =====
 -- An outside company's API that an institution has plugged into one of its own steps. The institution
 -- calls it at that step and acts on the answer.

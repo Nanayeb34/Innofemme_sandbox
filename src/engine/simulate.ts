@@ -73,7 +73,7 @@ export interface SimSummary {
 
 // ---------- random numbers ----------
 
-class Rng {
+export class Rng {
   private s: number;
   constructor(seed: number) {
     this.s = seed >>> 0 || 1;
@@ -119,11 +119,11 @@ class Rng {
 
 // ---------- the people and places the country is made of ----------
 
-const FIRST_F = ["Akosua", "Ama", "Adwoa", "Abena", "Akua", "Yaa", "Afua", "Efua", "Esi", "Adjoa", "Gifty", "Comfort", "Patience", "Felicia", "Joyce", "Mercy", "Grace", "Linda", "Esther", "Naa", "Dzifa", "Enyonam", "Yayra", "Amina", "Mariama", "Zainab", "Rukaya", "Priscilla", "Vida", "Mavis"];
-const FIRST_M = ["Kwame", "Kwaku", "Kofi", "Kwabena", "Kwasi", "Yaw", "Kojo", "Emmanuel", "Prince", "Evans", "Michael", "Daniel", "Isaac", "Samuel", "Richard", "Nii", "Selorm", "Elikem", "Edem", "Mawuli", "Senyo", "Abdul", "Fuseini", "Ibrahim", "Alhassan", "Rashid", "Sumaila", "Ebenezer", "Kelvin", "Bright"];
+export const FIRST_F = ["Akosua", "Ama", "Adwoa", "Abena", "Akua", "Yaa", "Afua", "Efua", "Esi", "Adjoa", "Gifty", "Comfort", "Patience", "Felicia", "Joyce", "Mercy", "Grace", "Linda", "Esther", "Naa", "Dzifa", "Enyonam", "Yayra", "Amina", "Mariama", "Zainab", "Rukaya", "Priscilla", "Vida", "Mavis"];
+export const FIRST_M = ["Kwame", "Kwaku", "Kofi", "Kwabena", "Kwasi", "Yaw", "Kojo", "Emmanuel", "Prince", "Evans", "Michael", "Daniel", "Isaac", "Samuel", "Richard", "Nii", "Selorm", "Elikem", "Edem", "Mawuli", "Senyo", "Abdul", "Fuseini", "Ibrahim", "Alhassan", "Rashid", "Sumaila", "Ebenezer", "Kelvin", "Bright"];
 const SECOND = ["Nana", "Adoma", "Serwaa", "Boakye", "Kwadwo", "Ohemaa", "Papa", "Maame", "Sena", "Delali", "Awuni", "Laryea", "Baaba", "Kuukua", "Fiifi", "Nhyira"];
-const SURNAMES = ["Mensah", "Owusu", "Boateng", "Asante", "Osei", "Agyeman", "Appiah", "Acheampong", "Darko", "Addo", "Amoah", "Ofori", "Adjei", "Kumi", "Quaye", "Tetteh", "Lartey", "Nartey", "Agbeko", "Dogbe", "Amedzro", "Kpodo", "Abubakar", "Mahama", "Issah", "Iddrisu", "Sulemana", "Yakubu", "Annan", "Quansah", "Aidoo", "Arthur", "Eshun", "Sarpong", "Gyamfi", "Frimpong", "Antwi", "Bonsu", "Okai", "Ankrah"];
-const PLACES: { region: string; towns: string[]; weight: number }[] = [
+export const SURNAMES = ["Mensah", "Owusu", "Boateng", "Asante", "Osei", "Agyeman", "Appiah", "Acheampong", "Darko", "Addo", "Amoah", "Ofori", "Adjei", "Kumi", "Quaye", "Tetteh", "Lartey", "Nartey", "Agbeko", "Dogbe", "Amedzro", "Kpodo", "Abubakar", "Mahama", "Issah", "Iddrisu", "Sulemana", "Yakubu", "Annan", "Quansah", "Aidoo", "Arthur", "Eshun", "Sarpong", "Gyamfi", "Frimpong", "Antwi", "Bonsu", "Okai", "Ankrah"];
+export const PLACES: { region: string; towns: string[]; weight: number }[] = [
   { region: "Greater Accra", towns: ["Accra", "Madina", "Tema", "Teshie", "Dansoman", "Adenta", "Kaneshie", "Nima"], weight: 30 },
   { region: "Ashanti", towns: ["Kumasi", "Ayeduase", "Ejisu", "Obuasi", "Konongo", "Suame", "Bantama"], weight: 24 },
   { region: "Central", towns: ["Cape Coast", "Kasoa", "Winneba"], weight: 8 },

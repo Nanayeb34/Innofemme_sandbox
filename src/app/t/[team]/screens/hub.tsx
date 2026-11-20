@@ -11,6 +11,7 @@ interface HubView {
   counts: Record<string, number>;
   steps: { system: string; title: string; detail: string; done: boolean }[];
   activity: ActivityRow[];
+  fraud: { incidents: number; stopped: number; contained: number } | null;
 }
 
 const BANKS: [string, string][] = [["gcb", "GCB Bank"], ["ecobank", "Ecobank Ghana"], ["fidelity", "Fidelity Bank"], ["calbank", "CalBank"], ["absa", "Absa Bank Ghana"], ["stanbic", "Stanbic Bank"]];
@@ -72,6 +73,16 @@ export default function Hub({ team, logos, phones }: { team: string; logos: Reco
             </section>
 
             {phones.length > 0 && <PhoneCodes phones={phones} />}
+
+            <Group title="Testing what you have built">
+              <Tile
+                href={`${base}/fraud`}
+                color="#7f1d1d"
+                title="Fraud console"
+                sub="Send fraud incidents at your API or application, and see how many it stops"
+                stat={data.fraud ? `Fraud API results: ${data.fraud.stopped + data.fraud.contained} of ${data.fraud.incidents} stopped in the last run` : "Fraud API results: nothing run yet"}
+              />
+            </Group>
 
             <Group title="Identity and regulators">
               <Tile href={`${base}/nia`} color="#0b6b3a" title="NIA" sub="Ghana Card register" stat={`${data.counts.persons} card(s) issued`} />

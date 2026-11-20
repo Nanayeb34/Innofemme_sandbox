@@ -38,6 +38,10 @@ export interface World {
   presence: Map<string, number>;
   /** Set only while simulated history is being written: the moment being written, in place of the real time. */
   clock?: number;
+  /** Set by the fraud simulator while it plays a step: told each answer a plugged-in API gave. */
+  watch?: (seen: { key: string; institution: string; point: string; decision: string; message?: string; by?: string }) => void;
+  /** Set by the fraud simulator while it tests a standalone application: every step asks this one address, and no plugged-in API. */
+  direct?: { id: string; name: string; url: string };
   /** Payments an outside API asked to delay: when each may be tried again. */
   cooldowns: Map<string, number>;
   /** Answers from plugged-in APIs for the request being handled now. See integrations.ts. */

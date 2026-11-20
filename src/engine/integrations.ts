@@ -20,6 +20,8 @@ export interface Decision {
   message?: string;
   /** For "delay": how long before the payment may be tried again. */
   minutes?: number;
+  /** The API whose answer this is. */
+  by?: string;
 }
 
 const ALLOW: Decision = { decision: "allow" };
@@ -186,8 +188,11 @@ export function removeIntegration(w: World, institution: string, id: unknown) {
   audit(w, institution, "integration", `Unplugged "${i.name}"`);
 }
 
-const active = (w: World, institution: string, point: string) =>
-  w.db.prepare("SELECT * FROM integrations WHERE institution = ? AND point = ? AND enabled = 1 ORDER BY created_at").all(institution, point) as unknown as Integration[];
+const active = (w: World, institution: string, point: string): Integration[] =>
+  w.direct
+    ? // An application under test by the fraud simulator stands in for every plugged-in API, at every step.
+      [{ id: w.direct.id, institution, point, name: w.direct.name, url: w.direct.url, enabled: 1, fail_open: 1, timeout_ms: 3000, calls: 0, created_at: 0 }]
+    : (w.db.prepare("SELECT * FROM integrations WHERE institution = ? AND point = ? AND enabled = 1 ORDER BY created_at").all(institution, point) as unknown as Integration[]);
 
 export function listIntegrations(w: World, institution: string) {
   const rows = w.db.prepare("SELECT * FROM integrations WHERE institution = ? ORDER BY created_at").all(institution) as unknown as Integration[];
@@ -225,13 +230,18 @@ export function consult(w: World, institution: string, point: string, payload: u
   if (!active(w, institution, point).length) return ALLOW;
   const key = `${institution}|${point}|${JSON.stringify(payload)}`;
   const known = w.answers.get(key) as Decision | undefined;
-  if (known) return known;
+  if (known) {
+    w.watch?.({ key, institution, point, decision: known.decision, message: known.message, by: known.by });
+    return known;
+  }
   // Nothing is in a position to wait for an answer (a script calling the simulation directly): carry on.
   if (!w.asking) return ALLOW;
   throw new Ask(institution, point, payload, key);
 }
 
 function record(w: World, i: Integration, point: string, request: unknown, decision: string, message: string | undefined, ms: number) {
+  // An application under test by the fraud simulator is not one of the institution's own plug-ins; the simulator keeps its own record.
+  if (i.id.startsWith("app_")) return;
   w.db
     .prepare("INSERT INTO integration_calls(at, integration_id, institution, point, request, decision, message, ms) VALUES(?,?,?,?,?,?,?,?)")
     .run(w.now, i.id, i.institution, point, JSON.stringify(request).slice(0, 2000), decision, message?.slice(0, 300) ?? null, ms);
@@ -285,7 +295,7 @@ export async function testIntegration(w: World, institution: string, id: unknown
 
 /** Fetches the answer a step is waiting for. When several APIs are plugged into one step, the strictest answer wins. */
 async function settle(w: World, a: Ask) {
-  const answers = await Promise.all(active(w, a.institution, a.point).map((i) => ask(w, i, a.point, a.payload)));
+  const answers = await Promise.all(active(w, a.institution, a.point).map(async (i) => ({ ...(await ask(w, i, a.point, a.payload)), by: i.name })));
   const strictest = answers.reduce((x, y) => (STRICT.indexOf(y.decision) > STRICT.indexOf(x.decision) ? y : x), ALLOW);
   w.answers.set(a.key, strictest);
 }
@@ -296,8 +306,10 @@ export function emit(w: World, institution: string, event: string, data: unknown
 }
 
 async function flush(w: World, events: World["outbox"], only?: Integration[], queued = true) {
-  for (const e of events) {
-    for (const i of only ?? active(w, e.institution, "events")) {
+  // Who is told is settled now, before anything is sent: by the time the sending is done the world may be serving someone else.
+  const told = events.map((e) => [e, only ?? active(w, e.institution, "events")] as const);
+  for (const [e, to] of told) {
+    for (const i of to) {
       const started = Date.now();
       const payload = { event: e.event, ...(e.data as object) };
       let outcome: [string, string];
@@ -325,7 +337,7 @@ const copy = <K, V>(m: Map<K, V>) => new Map([...m].map(([k, v]) => [k, structur
 export async function runWithIntegrations<T>(w: World, fn: () => T | Promise<T>): Promise<T> {
   if (w.asking) return fn(); // already inside one
   // With nothing plugged in anywhere there is nothing to wait for.
-  if (!count(w.db, "SELECT COUNT(*) AS n FROM integrations WHERE enabled = 1")) return fn();
+  if (!w.direct && !count(w.db, "SELECT COUNT(*) AS n FROM integrations WHERE enabled = 1")) return fn();
   w.asking = true;
   try {
     for (let attempt = 0; attempt < 8; attempt++) {

@@ -6,6 +6,7 @@ import { SYSTEM_PATHS } from "@/server/systems";
 import { teamById } from "@/engine/worlds";
 import { SURFACE_NAMES } from "@/engine/config/schemas";
 import { DATASET_FILES } from "@/engine/dataset";
+import { FRAUD_KINDS } from "@/engine/fraudsim";
 import { EVENTS, POINTS, SAMPLES } from "@/engine/integrations";
 import { SCENARIOS } from "@/engine/simulate";
 import { BANK_IDS } from "@/engine/util";
@@ -28,7 +29,7 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
           ← All systems
         </Link>
         <h1 className="mt-2 text-2xl font-semibold text-gray-900">API for coders</h1>
-        <p className="mt-1 text-gray-600">There are three kinds of API here, and they are for different jobs.</p>
+        <p className="mt-1 text-gray-600">There are four kinds of API here, and they are for different jobs.</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-700">
           <li>
             <b>Partner APIs</b> (sections 1 to 6) are what an institution gives an outside company, such as a licensed payments or messaging business. You call them with credentials that institution issued, not with your team key. Build a third-party product on these.
@@ -36,6 +37,9 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
           <li>
             <b>Plug-in points</b> (section 7) work the other way round: <em>you</em> build an API, and a network or bank plugs it into one of its own steps. It asks your API every time that step happens and does what you answer. Build this when your product is something an institution would
             add to its own system.
+          </li>
+          <li>
+            <b>Fraud API</b> (section 13) tests what you have built: it plays fraud incidents through the sandbox, or sends them straight to your application, and your team&apos;s console shows how many were stopped.
           </li>
           <li>
             <b>Console API</b> (sections 8 to 12) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
@@ -308,6 +312,55 @@ curl "${base}/dataset/transactions.csv?answers=0" ${auth} -o blind.csv     # the
             ))}
           </ul>
           <p>The data is in the live world too: every console shows it, every simulated person&apos;s phone can be opened, and whatever you do next is added on top.</p>
+        </Section>
+
+        <Section title="13. Fraud API: test what you have built" id="fraud">
+          <p>
+            The fraud simulator plays fraud incidents of the kind you choose, live, through the sandbox: the fraudster gets a line, reaches the victim, the money leaves, moves on and is withdrawn. At each step your service is asked, and what it answers decides whether the
+            incident goes on. Honest activity is played alongside. It needs people to act as victims, so load the simulated country first (section 12).
+          </p>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              <b>If you built an API and plugged it into an institution</b> (section 7): just start a run. Your API is asked at its own step, as it is for any other activity.
+            </li>
+            <li>
+              <b>If you built a standalone application</b>: connect it with its address and the kinds of fraud it is built to stop. During a run it is sent <em>every</em> step of each incident, in the same format a plugged-in API receives (section 7), and answers{" "}
+              <code>allow</code>, <code>warn</code>, <code>delay</code> or <code>reject</code>. It should answer <code>allow</code> to steps it has no view on.
+            </li>
+          </ul>
+          <Code>{`curl ${base}/fraud-simulator ${auth}                                          # the kinds of fraud, connected applications, whether a run is going
+
+# start a run against the APIs plugged into the institutions
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":"sim_swap","incidents":20}'
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":["reversal_scam","fake_promo"],"incidents":40,"ordinary":40}'
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"kinds":"all","incidents":55}'
+
+# a standalone application connects itself, then is sent incidents of the kinds it named
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"connect","name":"Swap Alert","url":"https://my-app.example.com/fraud","kinds":["sim_swap"]}'
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"application":"Swap Alert","incidents":20}'
+
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"stop"}'           # stop the run in progress
+curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect","id":"app_…"}'`}</Code>
+          <p>
+            A run starts in the background and the call returns at once. <b>The results are not returned by this API and are never sent to your service</b>: nothing your service receives says which requests were fraud. How many incidents it stopped, at which step, and how much
+            honest activity it stopped by mistake, are shown in your team&apos;s console, on the{" "}
+            <Link className="underline" href={`/t/${team}/fraud`}>
+              Fraud console
+            </Link>{" "}
+            page under <b>Fraud API results</b>.
+          </p>
+          <p>The kinds of fraud that can be sent:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            {Object.entries(FRAUD_KINDS).map(([id, about]) => (
+              <li key={id}>
+                <code>{id}</code>: {about}.
+              </li>
+            ))}
+          </ul>
+          <p>
+            An incident counts as <b>stopped</b> if the victim lost nothing, <b>held before cash-out</b> if the victim&apos;s money left but was blocked before it could be withdrawn (so it can be returned), and <b>got through</b> if it was withdrawn as cash. A warning does not
+            stop an incident by itself: the simulated victim heeds it some of the time, and a fraudster never does. The console states the rates used.
+          </p>
         </Section>
       </main>
     </>

@@ -211,16 +211,33 @@ export function buildSimulated(seed: number = SIM_DEFAULTS.seed): string {
   return file;
 }
 
+const CARRIED = ["integrations", "fraud_apps", "api_clients", "ussd_codes", "ussd_activations", "config", "config_history"];
+
 /** Replaces a world with the simulated country. What was there before is kept as a save point. */
 export async function loadSimulated(id: string, seed?: number) {
   const file = buildSimulated(seed);
   if (count(getWorld(id).db, "SELECT COUNT(*) AS n FROM persons")) await snapshotWorld(id, "Before loading simulated data");
+  // What the team has set up for itself comes along: plugged-in APIs, connected applications, API partners, short codes and settings.
+  const kept: Record<string, Record<string, unknown>[]> = {};
   await withLock(getWorld(id), () => {
+    const old = getWorld(id).db;
+    for (const table of CARRIED) kept[table] = old.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
     closeWorld(id);
     removeFile(worldFile(id));
     fs.copyFileSync(file, worldFile(id));
   });
-  return getWorld(id);
+  const w = getWorld(id);
+  tx(w.db, () => {
+    for (const table of CARRIED) {
+      for (const row of kept[table]) {
+        // A partner's link to a merchant wallet or bank account pointed into the old world.
+        if (table === "api_clients") Object.assign(row, { wallet_id: null, account_id: null });
+        const cols = Object.keys(row);
+        w.db.prepare(`INSERT OR REPLACE INTO ${table}(${cols.join(", ")}) VALUES(${cols.map(() => "?").join(", ")})`).run(...(cols.map((c) => row[c]) as (string | number | null)[]));
+      }
+    }
+  });
+  return w;
 }
 
 /** What the simulated history in a world contains, if one was loaded. */

@@ -5,6 +5,7 @@ import { openAccount, setAccountStatus } from "@/engine/bank";
 import { getConfig } from "@/engine/config/store";
 import { TIERS, type KycTier } from "@/engine/config/schemas";
 import { count } from "@/engine/db";
+import { connectApp, disconnectApp, fraudResults, startRun, stopRun } from "@/engine/fraudsim";
 import { EVENTS, SAMPLES, addIntegration, integrationLog, listIntegrations, pointsFor, removeIntegration, setIntegrationEnabled, testIntegration } from "@/engine/integrations";
 import { balanceOf, getTxn, getWallet, walletByMsisdn } from "@/engine/ledger";
 import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } from "@/engine/nia";
@@ -198,9 +199,39 @@ const hub: System = {
         { system: "switch", title: "Send across networks and settle", detail: "Cross-network and bank payments go through the national switch, which settles the net positions.", done: c.settlements > 0 },
       ],
       activity: auditFeed(w, undefined, 40),
+      fraud: (() => {
+        const run = w.db.prepare("SELECT id FROM fraud_runs ORDER BY started_at DESC LIMIT 1").get() as { id: string } | undefined;
+        if (!run) return null;
+        const n = (where: string) => sum(w, `SELECT COUNT(*) AS n FROM fraud_incidents WHERE run_id = ? AND kind = 'fraud' AND ${where}`, run.id);
+        return { incidents: n("outcome != 'void'"), stopped: n("outcome = 'stopped'"), contained: n("outcome = 'contained'") };
+      })(),
     };
   },
   actions: { txn: txnDetail },
+};
+
+// ---------- fraud console ----------
+
+const fraud: System = {
+  view: (w) => fraudResults(w),
+  actions: {
+    run(w, b) {
+      const r = startRun(w, { kinds: b.kinds ?? b.kind, incidents: b.incidents, ordinary: b.ordinary === "" ? undefined : b.ordinary, app: b.app || undefined, seed: b.seed || undefined });
+      return ok(`Started: ${r.incidents} incident(s) and ${r.ordinary} piece(s) of ordinary activity, against ${r.against}. The results build up below.`, r);
+    },
+    stop(w) {
+      stopRun(w);
+      return ok("Stopping after the incident in progress.");
+    },
+    connect_app(w, b) {
+      const a = connectApp(w, { name: b.name, url: b.url, kinds: b.kinds });
+      return ok(`"${a.name}" is connected. Choose it under "Send incidents to" to test it.`, a);
+    },
+    disconnect_app(w, b) {
+      disconnectApp(w, b.id);
+      return ok("Disconnected.");
+    },
+  },
 };
 
 // ---------- NIA ----------
@@ -865,7 +896,7 @@ const nca: System = {
 
 // ---------- registry ----------
 
-export const SYSTEM_PATHS = ["hub", "nia", "telco/{mtn|telecel|at}", "care/{mtn|telecel|at}", "sim-agent/{mtn|telecel|at}", "momo-agent/{mtn|telecel|at}", "phone", `bank/{${BANK_IDS.join("|")}}`, "switch", "bog", "nca"];
+export const SYSTEM_PATHS = ["hub", "fraud", "nia", "telco/{mtn|telecel|at}", "care/{mtn|telecel|at}", "sim-agent/{mtn|telecel|at}", "momo-agent/{mtn|telecel|at}", "phone", `bank/{${BANK_IDS.join("|")}}`, "switch", "bog", "nca"];
 
 export function resolveSystem(path: string[]): System {
   const [a, b] = path;
@@ -876,6 +907,8 @@ export function resolveSystem(path: string[]): System {
   switch (a) {
     case "hub":
       return hub;
+    case "fraud":
+      return fraud;
     case "nia":
       return nia;
     case "telco":

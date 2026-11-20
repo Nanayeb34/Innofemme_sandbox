@@ -1052,7 +1052,16 @@ describe("simulated data: a ready-made country with labelled fraud", () => {
     const worlds = await import("../src/engine/worlds");
     const before = await resetWorld("team-01");
     person(before, "Left", "Behind");
+    // What the team set up for itself survives the load: a plugged-in API, a connected application, a setting.
+    const { addIntegration, listIntegrations } = await import("../src/engine/integrations");
+    const { connectApp, listApps } = await import("../src/engine/fraudsim");
+    addIntegration(before, "mtn", { point: "pin.set", name: "Kept", url: "http://127.0.0.1:9/" });
+    connectApp(before, { name: "Kept app", url: "http://127.0.0.1:9/", kinds: "sim_swap" });
+    setConfig(before.db, "telco.mtn", { ...getConfig(before.db, "telco.mtn"), simSwapMomoHoldHours: 12 }, "test", "test");
     const w = await worlds.loadSimulated("team-01");
+    expect(listIntegrations(w, "mtn").map((i) => i.name)).toEqual(["Kept"]);
+    expect(listApps(w)).toMatchObject([{ name: "Kept app", kinds: ["sim_swap"] }]);
+    expect(getConfig(w.db, "telco.mtn").simSwapMomoHoldHours).toBe(12);
     const s = worlds.simulatedSummary(w)!;
     expect(s).toMatchObject({ transactions: 100023, fraud: 22005, legitimate: 78018 });
     expect(Object.values(s.byScenario).reduce((n, x) => n + x.transactions, 0)).toBe(22005);
@@ -1068,4 +1077,182 @@ describe("simulated data: a ready-made country with labelled fraud", () => {
     await resetWorld("team-01");
     await resetWorld("team-02");
   }, 180_000);
+});
+
+describe("fraud simulator: incidents played live against what a team has built", () => {
+  let w: World;
+  let api: import("node:http").Server;
+  let url = "";
+  // What an institution sends differs from step to step; the test APIs below pick out the fields they need.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Sent = Record<string, any>;
+  let answer: (point: string, data: Sent) => Record<string, unknown> = () => ({ decision: "allow" });
+  const asked: { point: string; institution: string; data: Sent; raw: string }[] = [];
+  let sim: typeof import("../src/engine/fraudsim");
+  let integrations: typeof import("../src/engine/integrations");
+  type Results = ReturnType<typeof import("../src/engine/fraudsim").fraudResults>;
+  /** Runs the simulator and waits for it to finish. */
+  const run = async (req: Record<string, unknown>): Promise<NonNullable<Results["latest"]>> => {
+    sim.startRun(w, { seed: 9, ...req });
+    while (sim.isRunning(w)) await new Promise((r) => setTimeout(r, 20));
+    return sim.fraudResults(w).latest!;
+  };
+  const unplug = () => {
+    for (const i of ["mtn", "telecel", "at", "gcb", "switch"]) for (const p of integrations.listIntegrations(w, i)) integrations.removeIntegration(w, i, p.id);
+  };
+  const everywhere = (point: string, name: string) => {
+    for (const t of ["mtn", "telecel", "at"]) integrations.addIntegration(w, t, { point, name, url });
+  };
+
+  beforeAll(async () => {
+    const http = await import("node:http");
+    sim = await import("../src/engine/fraudsim");
+    integrations = await import("../src/engine/integrations");
+    const { simulate } = await import("../src/engine/simulate");
+    api = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const j = JSON.parse(body);
+        asked.push({ ...j, raw: body });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(answer(j.point, j.data)));
+      });
+    });
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    url = `http://127.0.0.1:${(api.address() as import("node:net").AddressInfo).port}/`;
+    w = await resetWorld("team-02");
+    simulate(w, { total: 9000, seed: 21 });
+    return () => api.close();
+  }, 60_000);
+
+  it("needs people to act as victims, and says so", async () => {
+    const empty = await resetWorld("team-01");
+    expect(() => sim.startRun(empty, {})).toThrow(/Load the simulated country/);
+    expect(() => sim.startRun(w, { kinds: "nonsense" })).toThrow(/Unknown kind of fraud/);
+  });
+
+  it("with nothing plugged in, every kind of fraud gets through and honest activity is untouched", async () => {
+    const r = await run({ kinds: "all", incidents: 22, ordinary: 24 });
+    expect(r.status).toBe("finished");
+    expect(r.fraud).toMatchObject({ total: 22, stopped: 0, contained: 0, through: 22 });
+    expect(r.ordinary).toMatchObject({ total: 24, fine: 24, blocked: 0, slowed: 0 });
+    expect(r.byKind.map((k) => k.kind).sort()).toEqual(Object.keys(sim.FRAUD_KINDS).sort());
+    expect(r.lost).toBeGreaterThan(0);
+    expect(r.stops).toEqual([]);
+    // Each incident has its steps on record, and really happened in the world.
+    const one = r.incidents.find((i) => i.scenario === "reversal_scam")!;
+    expect(one.trail.map((t) => t.what)).toEqual(expect.arrayContaining(["The fraudster texts the victim", "The fraudster calls the victim", "The victim sends the money"]));
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM sms_log WHERE to_msisdn = ? AND body LIKE 'Payment received%' AND at > ?", one.who!, Date.now() - 600_000)).toBe(1);
+    expect(count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM wallets WHERE balance < 0")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE status IN ('ringing','active')")).toBe(0);
+  });
+
+  it("an API plugged in at the payment step stops the scams it recognises, at that step, and is given the credit", async () => {
+    // Blocks a payment made to a wallet opened in the last day while the payer is on the phone with its owner.
+    everywhere("payment.authorize", "Call guard");
+    answer = (p, d) => (p === "payment.authorize" && d.payer.onCallWith === d.payee.msisdn && Date.now() - Date.parse(d.payee.walletOpenedAt) < 86_400_000 ? { decision: "reject", message: "You are on a call with the person you are paying." } : { decision: "allow" });
+    asked.length = 0;
+    const r = await run({ kinds: "reversal_scam", incidents: 8, ordinary: 12 });
+    expect(r.fraud).toMatchObject({ total: 8, stopped: 8, through: 0 });
+    expect(r.lost).toBe(0);
+    expect(r.ordinary.blocked).toBe(0);
+    expect(r.stops).toEqual([{ step: "payment.authorize", by: "Call guard", answer: "reject", fraud: 8, ordinary: 0 }]);
+    expect(r.incidents.find((i) => i.kind === "fraud")).toMatchObject({ outcome: "stopped", stoppedAt: "payment.authorize", stoppedBy: "Call guard", lost: 0, summary: "The payment was blocked" });
+    // The service is asked as it would be for anything else: nothing it receives says what was fraud.
+    expect(asked.length).toBeGreaterThan(8);
+    expect(asked.some((a) => /fraud|scenario|simulat|incident/i.test(a.raw))).toBe(false);
+    // It does nothing for a kind of fraud it was not built for.
+    const other = await run({ kinds: "sim_swap", incidents: 4, ordinary: 0 });
+    expect(other.fraud).toMatchObject({ total: 4, stopped: 0 });
+    unplug();
+  });
+
+  it("warnings work on victims some of the time, and not on fraudsters; blocking everything shows up as honest customers stopped", async () => {
+    everywhere("payment.authorize", "Warner");
+    answer = (p) => (p === "payment.authorize" ? { decision: "warn", message: "Check who you are paying." } : { decision: "allow" });
+    const r = await run({ kinds: ["relative_impersonation", "pin_phishing"], incidents: 30, ordinary: 20 });
+    const by = Object.fromEntries(r.byKind.map((k) => [k.kind, k]));
+    // Some victims cancel after the warning, some carry on.
+    expect(by.relative_impersonation.stopped).toBeGreaterThan(3);
+    expect(by.relative_impersonation.through).toBeGreaterThan(0);
+    // When the fraudster holds the phone, a warning changes nothing.
+    expect(by.pin_phishing).toMatchObject({ stopped: 0, contained: 0, through: 15 });
+    expect(r.ordinary.slowed).toBeGreaterThan(0);
+    unplug();
+
+    everywhere("payment.authorize", "Wall");
+    answer = () => ({ decision: "reject", message: "No." });
+    const wall = await run({ kinds: "fake_promo", incidents: 6, ordinary: 30 });
+    expect(wall.fraud).toMatchObject({ total: 6, stopped: 6 });
+    expect(wall.ordinary.blocked).toBeGreaterThan(5);
+    expect(wall.stops[0]).toMatchObject({ by: "Wall", fraud: 6 });
+    expect(wall.stops[0].ordinary).toBeGreaterThan(5);
+    unplug();
+  });
+
+  it("covers the other steps: texts, SIM replacement, PIN choice, the cash-out", async () => {
+    // A filter on texts stops the scams that arrive only by text.
+    everywhere("sms.deliver", "Text filter");
+    answer = (p, d) => (p === "sms.deliver" && /CONGRATULATIONS|it's me, my phone fell/.test(d.text) ? { decision: "reject" } : { decision: "allow" });
+    let r = await run({ kinds: ["fake_promo", "relative_impersonation"], incidents: 8, ordinary: 10 });
+    expect(r.fraud).toMatchObject({ stopped: 8, through: 0 });
+    expect(r.stops[0]).toMatchObject({ step: "sms.deliver", by: "Text filter", fraud: 8, ordinary: 0 });
+    unplug();
+
+    // A check on SIM replacements.
+    everywhere("sim.swap", "Swap check");
+    answer = (p, d) => (p === "sim.swap" && d.replacedBy.kind === "registration_agent" && d.walletBalance > 300 ? { decision: "reject", message: "Go to a service centre." } : { decision: "allow" });
+    r = await run({ kinds: "sim_swap", incidents: 5, ordinary: 10 });
+    expect(r.fraud).toMatchObject({ stopped: 5, through: 0 });
+    expect(r.incidents.find((i) => i.kind === "fraud")!.summary).toBe("The SIM replacement was refused");
+    expect(r.ordinary.blocked).toBe(0);
+    unplug();
+
+    // A weak-PIN check: the customer is made to choose a better PIN, and the thief cannot guess it.
+    everywhere("pin.set", "PIN check");
+    answer = (p, d) => (p === "pin.set" && (String(d.msisdn).endsWith(d.pin) || d.customer?.dateOfBirth.startsWith(d.pin)) ? { decision: "reject", message: "Too easy to guess." } : { decision: "allow" });
+    r = await run({ kinds: "pin_guessing", incidents: 4, ordinary: 0 });
+    expect(r.fraud).toMatchObject({ stopped: 4, through: 0 });
+    expect(r.incidents[0]).toMatchObject({ stoppedAt: "pin.set", stoppedBy: "PIN check", summary: "The thief could not guess the PIN, and the wallet locked itself" });
+    unplug();
+
+    // Catching it late: the victim has paid, but the money is refused at the agent and can still be returned.
+    everywhere("payment.request", "Cash-out watch");
+    answer = (p, d) => (p === "payment.request" && d.kind === "cash_out" && Date.now() - Date.parse(d.customer.walletOpenedAt) < 86_400_000 ? { decision: "reject", message: "New wallet." } : { decision: "allow" });
+    r = await run({ kinds: "relative_impersonation", incidents: 5, ordinary: 10 });
+    expect(r.fraud).toMatchObject({ stopped: 0, contained: 5, through: 0 });
+    expect(r.lost).toBe(0);
+    expect(r.atRisk).toBeGreaterThan(0);
+    expect(r.ordinary.blocked).toBe(0);
+    unplug();
+  });
+
+  it("a standalone application connects to the Fraud API and is sent the incidents directly, at every step", async () => {
+    const app = sim.connectApp(w, { name: "Swap Alert", url, kinds: "sim_swap" });
+    expect(() => sim.connectApp(w, { name: "x", url: "ftp://nope" })).toThrow(/http/);
+    // Nothing is plugged into any institution: only the application is asked.
+    unplug();
+    answer = (p, d) => (p === "pin.reset" && d.lastSimSwapAt ? { decision: "reject", message: "PIN reset right after a SIM replacement." } : { decision: "allow" });
+    asked.length = 0;
+    // With no kinds given, it is sent the kinds it said it was built for.
+    const r = await run({ app: app.id, incidents: 5, ordinary: 6 });
+    expect(r.against).toBe('The application "Swap Alert"');
+    expect(r.kinds).toEqual(["sim_swap"]);
+    expect(r.fraud).toMatchObject({ total: 5, stopped: 5, through: 0 });
+    expect(r.stops[0]).toMatchObject({ step: "pin.reset", by: "Swap Alert", fraud: 5 });
+    // It saw the whole of each incident, not one institution's step.
+    expect(new Set(asked.map((a) => a.point))).toEqual(expect.objectContaining(new Set(["sim.register", "wallet.open", "sim.swap", "pin.reset"])));
+    expect([...new Set(asked.map((a) => a.point))].length).toBeGreaterThan(5);
+    // The institutions' own records of plugged-in APIs are not touched by an application under test.
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM integration_calls WHERE at > ?", Date.parse(r.startedAt) - 1)).toBe(0);
+    // Earlier runs stay on record, and the console's view carries everything it shows.
+    const view = sim.fraudResults(w);
+    expect(view.runs.length).toBeGreaterThan(5);
+    expect(view.apps).toMatchObject([{ name: "Swap Alert" }]);
+    expect(view.running).toBe(false);
+    sim.disconnectApp(w, app.id);
+    expect(sim.listApps(w)).toEqual([]);
+  });
 });

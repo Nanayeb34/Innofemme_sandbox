@@ -9,6 +9,7 @@ import AgentMenu from "../screens/agent-menu";
 import { MomoPoint, SimPoint } from "../screens/agents";
 import Bank from "../screens/bank";
 import Care from "../screens/care";
+import Fraud from "../screens/fraud";
 import Nia from "../screens/nia";
 import Phone from "../screens/phone";
 import { Bog, Nca } from "../screens/regulators";
@@ -41,6 +42,7 @@ export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">)
   }
   if (sys.length === 1) {
     if (system === "nia") return <Nia team={team} />;
+    if (system === "fraud") return <Fraud team={team} />;
     if (system === "phone") return <Phone team={team} role={role} />;
     if (system === "agent") return <AgentMenu team={team} role={role} logos={telcoLogos()} />;
     if (system === "switch") return <Switch team={team} />;

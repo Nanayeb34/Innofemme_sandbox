@@ -75,6 +75,47 @@ function record(w: World, c: Pick<CallRow, "from_msisdn" | "to_msisdn" | "from_t
   return id;
 }
 
+/** The called person's network may have plugged in an API that screens calls before they ring. */
+function screenCall(w: World, from: { msisdn: string; telco: Telco; registered_at: number | null }, to: { msisdn: string; telco: Telco }) {
+  return consult(w, to.telco, "call.connect", {
+    from: from.msisdn,
+    fromNetwork: from.telco,
+    callerSimRegisteredAt: from.registered_at ? new Date(from.registered_at).toISOString() : null,
+    to: to.msisdn,
+    toNetwork: to.telco,
+    callsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE answered_at IS NOT NULL AND ((from_msisdn = ? AND to_msisdn = ?) OR (from_msisdn = ? AND to_msisdn = ?))", from.msisdn, to.msisdn, to.msisdn, from.msisdn),
+    numbersTheCallerHasRungToday: count(w.db, "SELECT COUNT(DISTINCT to_msisdn) AS n FROM calls WHERE from_msisdn = ? AND started_at >= ?", from.msisdn, w.now - (w.now % 86_400_000)),
+  });
+}
+
+/**
+ * For the fraud simulator: a call with no audio between two simulated people. It is screened like any
+ * other call and shows as in progress until `scriptedCallEnd`, so what happens meanwhile happens "on the call".
+ */
+export function scriptedCall(w: World, req: { from: string; to: string }): { id?: string; connected: boolean; warning?: string } {
+  const from = getSim(w, normalizeMsisdn(req.from));
+  const to = getSim(w, normalizeMsisdn(req.to));
+  if (!from || !to || from.status !== "active" || to.status !== "active") throw new SimError("Both numbers must be active to place a call.");
+  const base = { from_msisdn: from.msisdn, to_msisdn: to.msisdn, from_telco: from.telco, to_telco: to.telco };
+  const d = screenCall(w, from, to);
+  if (d.decision === "reject") {
+    record(w, { ...base, status: "failed", reason: "The number you are calling is not available." });
+    return { connected: false };
+  }
+  const id = record(w, { ...base, status: "ringing", reason: null });
+  w.db.prepare("UPDATE calls SET status = 'active', answered_at = ? WHERE id = ?").run(w.now, id);
+  const warning = d.decision === "warn" ? (d.message ?? "Flagged by your network") : undefined;
+  // Neither end is a real phone, so the call is kept open until the simulator ends it.
+  w.calls.set(id, { offer: "", candidates: { caller: [], callee: [] }, seen: { caller: w.now + 3_600_000, callee: w.now + 3_600_000 }, callerDevice: "simulator", calleeDevice: "simulator", warning });
+  return { id, connected: true, warning };
+}
+
+/** Ends a scripted call, recording it as having lasted `seconds`. */
+export function scriptedCallEnd(w: World, id: string, seconds: number) {
+  w.db.prepare("UPDATE calls SET status = 'ended', reason = 'Call ended', started_at = ?, answered_at = ?, ended_at = ? WHERE id = ?").run(w.now - seconds * 1000 - 8000, w.now - seconds * 1000, w.now, id);
+  w.calls.delete(id);
+}
+
 /** Places a call. The caller's phone sends its side of the audio connection (the offer) with it. */
 export function startCall(w: World, req: { from: string; to: string; device: string; offer: string }): { id: string } {
   const from = getSim(w, normalizeMsisdn(req.from));
@@ -103,16 +144,7 @@ export function startCall(w: World, req: { from: string; to: string; device: str
     refuse("missed", "The number you are calling cannot be reached. Their phone is switched off.");
   }
 
-  // The called person's network may have plugged in an API that screens calls before they ring.
-  const d = consult(w, to!.telco, "call.connect", {
-    from: from.msisdn,
-    fromNetwork: from.telco,
-    callerSimRegisteredAt: from.registered_at ? new Date(from.registered_at).toISOString() : null,
-    to: dialled,
-    toNetwork: to!.telco,
-    callsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE answered_at IS NOT NULL AND ((from_msisdn = ? AND to_msisdn = ?) OR (from_msisdn = ? AND to_msisdn = ?))", from.msisdn, dialled, dialled, from.msisdn),
-    numbersTheCallerHasRungToday: count(w.db, "SELECT COUNT(DISTINCT to_msisdn) AS n FROM calls WHERE from_msisdn = ? AND started_at >= ?", from.msisdn, w.now - (w.now % 86_400_000)),
-  });
+  const d = screenCall(w, from, to!);
   if (d.decision === "reject") refuse("failed", "The number you are calling is not available.");
 
   const id = record(w, { ...base, status: "ringing", reason: null });

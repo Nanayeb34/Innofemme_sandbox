@@ -175,6 +175,36 @@ Loading takes about 15 seconds the first time on a server each day (the sandbox 
 while it builds), and a second or two after that. A loaded world is about 115 MB on disk; fewer save
 points are kept for worlds that size.
 
+## Fraud console and Fraud API
+
+Where a team tests what it has built. The fraud simulator plays fraud incidents of a chosen kind, live,
+through the sandbox's own processes: the fraudster registers a line, texts or calls the victim, the
+victim's money leaves, moves through another wallet and is withdrawn at an agent. At each step the
+team's service is asked, exactly as for real activity, and what it answers decides whether the incident
+goes on. Honest activity is played alongside, so a service that stops everything is not mistaken for a
+good one.
+
+- **An API plugged into an institution** is asked at its own step. Nothing else needs doing: start a run.
+- **A standalone application** connects itself to the Fraud API with its address and the kinds of fraud
+  it is built to stop. During a run it is sent every step of each incident, in the plug-in format.
+- **Results** are shown only in the team's console, on the Fraud console page under **Fraud API
+  results**: incidents stopped before any money moved, held before cash-out, or got through; at which
+  step and by which API or application; money kept from fraudsters; honest activity wrongly stopped.
+  The service under test is never told which requests were fraud.
+
+Eleven kinds of fraud can be sent: the ten in the simulated data, plus `pin_guessing` (a thief with the
+victim's phone tries the PINs people usually choose). With nothing plugged in, every incident gets
+through: that is the baseline to improve on.
+
+```
+POST /api/w/{team}/fraud-simulator  {"kinds": "sim_swap", "incidents": 20}
+POST /api/w/{team}/fraud-simulator  {"action": "connect", "name": "Swap Alert", "url": "https://…", "kinds": ["sim_swap"]}
+POST /api/w/{team}/fraud-simulator  {"application": "Swap Alert", "incidents": 20}
+```
+
+It needs people to act as victims, so the simulated country must be loaded first. Loading it keeps what
+a team has set up: plugged-in APIs, connected applications, API partners, short codes and settings.
+
 ## Customer care and disputes
 
 A customer raises a complaint by calling 100 (a real voice call to their network's care console, when an agent there is on line) or from the phone: wallet short code → My Wallet → Report a Problem. Either way a ticket is opened and the customer is told by SMS.
