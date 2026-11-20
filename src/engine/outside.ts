@@ -2,6 +2,7 @@ import dns from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { bridgeAddress, sendThroughBridge } from "./bridge";
 import { SimError, need } from "./util";
 
 /**
@@ -15,6 +16,9 @@ import { SimError, need } from "./util";
  *
  * The address is checked when it is typed and again at the moment of connecting, against the very address
  * the name resolved to, so a name that changes where it points cannot slip past. Redirects are not followed.
+ *
+ * A team working from a laptop types a bridge address instead (bridge://laptop): the request then travels
+ * over the call that team's bridge program keeps open to the sandbox. See bridge.ts.
  */
 
 const blocking = () => process.env.SANDBOX_PRIVATE_ADDRESSES === "block";
@@ -49,12 +53,17 @@ function refusal(address: string): string | undefined {
 /** Checks an address a team typed. Throws, in plain words, if the sandbox will not call it. */
 export function checkUrl(input: string | undefined | null, what = "The API's address"): string {
   const url = String(need(input?.trim(), what));
+  // An API on a team's laptop, reached through their bridge. Whether it is connected is known only when it is called.
+  if (/^bridge:/i.test(url)) {
+    if (!bridgeAddress(url)) throw new SimError("A bridge address looks like bridge://laptop");
+    return url;
+  }
   let u: URL;
   try {
     u = new URL(url);
     if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error();
   } catch {
-    throw new SimError("The address must be a full http:// or https:// address");
+    throw new SimError("The address must be a full http:// or https:// address, or a bridge address such as bridge://laptop");
   }
   const host = u.hostname.toLowerCase().replace(/\.$/, "");
   if (host === "metadata.google.internal" || host === "metadata") throw new SimError("That address is not allowed");
@@ -87,12 +96,21 @@ export interface Reply {
 
 const MAX_REPLY = 256 * 1024;
 
-/** Sends one request to an address a team supplied and returns what came back. Throws if it cannot be reached in time. */
-export function callOut(address: string, req: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs: number }): Promise<Reply> {
+/**
+ * Sends one request to an address a team supplied and returns what came back. Throws if it cannot be reached in time.
+ * `world` says whose request this is: a bridge address means that team's bridge and nobody else's.
+ */
+export function callOut(address: string, req: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs: number; world?: string }): Promise<Reply> {
   return new Promise((resolve, reject) => {
     let url: URL;
     try {
-      url = new URL(checkUrl(address));
+      const checked = checkUrl(address);
+      const bridge = bridgeAddress(checked);
+      if (bridge) {
+        if (!req.world) throw new SimError("A bridge address cannot be used here");
+        return sendThroughBridge(req.world, bridge.name, bridge.path, req).then(resolve, reject);
+      }
+      url = new URL(checked);
     } catch (e) {
       return reject(e);
     }

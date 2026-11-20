@@ -118,6 +118,7 @@ nothing installed beyond Python or Node.js, and show how to connect, not what to
 | --- | --- |
 | `plugin_api.py`, `plugin-api.mjs` | An API an institution plugs into its own steps. Answers "allow" and prints what it was sent. The Fraud API can send incidents to it too. |
 | `app.py`, `app.mjs` | An application of your own: signs in to a network with partner credentials, then makes one call of each kind, including a request to pay. |
+| `bridge.py`, `bridge.mjs` | The bridge: lets a shared sandbox reach an API running on a laptop. Run as it is, beside the API. |
 
 **A ready test customer.** The team home page has a button, and the console API a call
 (`POST /api/w/{team}/s/hub {"action":"test_customer","network":"mtn"}`), that makes a new person, registers
@@ -180,6 +181,15 @@ there, every address a team types in (plug-in APIs, USSD applications, callbacks
 API) must be reachable from the internet, and addresses on the server's own machine or private network are
 refused. The address is checked when it is typed and again at the moment of connecting, and redirects are
 not followed.
+
+**The bridge: an API on a laptop.** A sandbox on the internet cannot call a laptop, so a team working from
+one runs `examples/bridge.py` or `examples/bridge.mjs` beside their API, with their team key. It calls the
+sandbox (`POST /api/w/{team}/bridge`) and is held until the sandbox has something for the API; the request
+is passed to the API on the laptop and the answer sent back. The team then types `bridge://laptop` wherever
+an address is asked for: a plug-in, an application for the Fraud API, a USSD application, a callback. The
+API itself is an ordinary API in any language and runs unchanged once hosted. A bridge belongs to one
+team's world, keeps nothing on disk, and counts as "not answering" the moment its program stops.
+`GET /api/w/{team}/bridge` lists a team's bridges and whether each is connected.
 
 ## Simulated data
 

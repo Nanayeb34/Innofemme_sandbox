@@ -10,14 +10,15 @@ Before you run it:
      To collect payments, tie it to one of the network's merchants. You get a client ID and an API key.
   2. Pick a customer's number on that network (the Phone simulator lists them).
 
-Run it:
-  SANDBOX=https://…/api/w/your-team CLIENT_ID=… API_KEY=… NUMBER=024… python3 app.py
-  Add AMOUNT=5 to also ask that customer for a payment of GHS 5, and wait for their answer.
-  NETWORK=telecel or NETWORK=at for the other networks (default mtn).
+Run it (on Windows, type python in place of python3):
+  python3 app.py --sandbox https://…/api/w/your-team --client-id … --api-key … --number 024…
+  Add --amount 5 to also ask that customer for a payment of GHS 5, and wait for their answer.
+  Add --network telecel or --network at for the other networks (default mtn).
 
-SANDBOX is the "Base URL" shown at the top of your team's documentation page.
+--sandbox is the "Base URL" shown at the top of your team's documentation page.
 """
 
+import argparse
 import base64
 import json
 import os
@@ -27,10 +28,18 @@ import urllib.error
 import urllib.request
 import uuid
 
-SANDBOX, CLIENT_ID, API_KEY, NUMBER = (os.environ.get(k) for k in ("SANDBOX", "CLIENT_ID", "API_KEY", "NUMBER"))
-AMOUNT, NETWORK = os.environ.get("AMOUNT"), os.environ.get("NETWORK", "mtn")
+# Settings can be given as arguments, which works on every system, or as environment variables.
+parser = argparse.ArgumentParser(description="Signs in to a network and makes one call of each kind.")
+parser.add_argument("--sandbox", default=os.environ.get("SANDBOX"), help="your team's Base URL, https://…/api/w/your-team")
+parser.add_argument("--client-id", default=os.environ.get("CLIENT_ID"), help="from the network's API partners tab")
+parser.add_argument("--api-key", default=os.environ.get("API_KEY"), help="from the network's API partners tab")
+parser.add_argument("--number", default=os.environ.get("NUMBER"), help="a customer's number on that network")
+parser.add_argument("--amount", default=os.environ.get("AMOUNT"), help="also ask the customer for this many cedis")
+parser.add_argument("--network", default=os.environ.get("NETWORK", "mtn"), help="mtn, telecel or at (default mtn)")
+options = parser.parse_args()
+SANDBOX, CLIENT_ID, API_KEY, NUMBER, AMOUNT, NETWORK = options.sandbox, options.client_id, options.api_key, options.number, options.amount, options.network
 if not (SANDBOX and CLIENT_ID and API_KEY and NUMBER):
-    sys.exit("Set SANDBOX, CLIENT_ID, API_KEY and NUMBER. See the top of this file.")
+    sys.exit("Usage: python3 app.py --sandbox https://…/api/w/your-team --client-id … --api-key … --number 024…   (see the top of this file)")
 network = f"{SANDBOX.rstrip('/')}/network/{NETWORK}"
 momo = f"{SANDBOX.rstrip('/')}/momo/{NETWORK}"
 

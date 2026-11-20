@@ -1004,13 +1004,80 @@ describe("plug-in points: an outside API plugged into an institution's own steps
     expect(integrations.pointsFor("switch").map(([id]) => id)).toEqual(["switch.route", "events"]);
     expect(() => integrations.addIntegration(w, "gcb", { point: "sim.swap", name: "x", url })).toThrow(/no such step/);
   });
+  it("an API on a laptop is reached through the team's bridge, where the sandbox could never call the laptop itself", async () => {
+    const bridge = await import("../src/engine/bridge");
+    const { checkUrl } = await import("../src/engine/outside");
+    const { createTestCustomer } = await import("../src/engine/testcustomer");
+    const customer = await createTestCustomer(w, { network: "telecel" });
+    const wallet = () => walletByMsisdn(w, customer.number)!;
+    const calls = () => view<{ pluginCalls: { decision: string; message: string | null }[]; plugins: { url: string; bridge?: { connected: boolean } }[] }>(w, "telco", "telecel");
+    process.env.SANDBOX_PRIVATE_ADDRESSES = "block";
+    try {
+      // On a shared server a laptop's own address is refused, and a bridge address is accepted in its place.
+      expect(() => plug("telecel", "pin.set", { url: "http://localhost:4010/" })).toThrow(/own machine or private network/);
+      expect(checkUrl("bridge://laptop/check")).toBe("bridge://laptop/check");
+      expect(() => checkUrl("bridge://Not A Name")).toThrow(/bridge/);
+      plug("telecel", "pin.set", { url: "bridge://laptop/check" });
+
+      // Nobody has started the bridge yet: the network is told so at once, and does what its owner chose (carry on).
+      const started = Date.now();
+      await run(() => telco.changePin(w, wallet(), "7391"));
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(wallet().pin).toBe("7391");
+      expect(calls().pluginCalls[0]).toMatchObject({ decision: "error", message: expect.stringMatching(/bridge "laptop" is not connected.*carried on/) });
+      expect(calls().plugins.find((x) => x.url.startsWith("bridge:"))!.bridge).toMatchObject({ connected: false });
+
+      // The bridge program on the laptop: it calls in, is handed each question, and sends back what the API there said.
+      const passed: { method: string; path: string }[] = [];
+      const program = async (session: string, answer: (q: { point: string; data: { pin: string } }) => Record<string, unknown>, gone?: AbortSignal) => {
+        for (;;) {
+          const got = await bridge.pollBridge(w.id, { name: "laptop", session, to: "http://localhost:4010" }, gone);
+          if ("replaced" in got) return "replaced";
+          if (gone?.aborted) return "stopped";
+          for (const r of got.requests) {
+            passed.push({ method: r.method, path: r.path });
+            bridge.replyBridge(w.id, { name: "laptop", session, id: r.id, ...answer(JSON.parse(r.body!)) });
+          }
+        }
+      };
+      const first = program("first-run", (q) => ({ status: 200, body: JSON.stringify(q.point === "pin.set" && q.data.pin === "1111" ? { decision: "reject", message: "Too simple, says the laptop." } : { decision: "allow" }) }));
+      await settled();
+      expect(bridge.listBridges(w.id)).toMatchObject([{ name: "laptop", address: "bridge://laptop", connected: true, passesTo: "http://localhost:4010" }]);
+      expect(calls().plugins.find((x) => x.url.startsWith("bridge:"))!.bridge).toMatchObject({ connected: true });
+
+      // The laptop's API now decides, exactly as one at an internet address would.
+      await expect(run(() => telco.changePin(w, wallet(), "1111"))).rejects.toThrow(/Too simple, says the laptop/);
+      expect(wallet().pin).toBe("7391");
+      await run(() => telco.changePin(w, wallet(), "8642"));
+      expect(wallet().pin).toBe("8642");
+      expect(passed).toEqual([{ method: "POST", path: "/check" }, { method: "POST", path: "/check" }]);
+      expect(calls().pluginCalls.slice(0, 2).map((c) => c.decision)).toEqual(["allow", "reject"]);
+      // A bridge belongs to one team's world: another team's world cannot send anything through it.
+      await expect(bridge.sendThroughBridge("team-01", "laptop", "/", { timeoutMs: 200 })).rejects.toThrow(/not connected/);
+
+      // A second laptop starting under the same name takes over, and the first is told to stop.
+      const stop = new AbortController();
+      const second = program("second-run", () => ({ error: "Nothing is answering at http://localhost:4010: is your API running?" }), stop.signal);
+      expect(await first).toBe("replaced");
+      // That laptop's API is not running: the network's record says so in plain words.
+      await run(() => telco.changePin(w, wallet(), "2468"));
+      expect(calls().pluginCalls[0]).toMatchObject({ decision: "error", message: expect.stringMatching(/Nothing is answering at http:\/\/localhost:4010.*through the bridge "laptop"/) });
+      // When the program is closed, the bridge counts as gone straight away.
+      stop.abort();
+      expect(await second).toBe("stopped");
+      expect(bridge.listBridges(w.id)[0].connected).toBe(false);
+    } finally {
+      delete process.env.SANDBOX_PRIVATE_ADDRESSES;
+    }
+  });
 });
 
 describe("a ready test customer in one step", () => {
   it("makes a person, a registered number and a funded wallet with a known PIN, in an empty world, on any network", async () => {
     const { createTestCustomer } = await import("../src/engine/testcustomer");
     const w = await resetWorld("team-01");
-    const made = (["mtn", "telecel", "at"] as const).map((network) => createTestCustomer(w, { network }));
+    const made = [];
+    for (const network of ["mtn", "telecel", "at"] as const) made.push(await createTestCustomer(w, { network }));
     for (const c of made) {
       expect(c).toMatchObject({ network: expect.any(String), kyc: "medium", balance: 500 });
       expect(c.pin).toMatch(/^\d{4}$/);
@@ -1019,18 +1086,39 @@ describe("a ready test customer in one step", () => {
       expect(dial(w, c.number, c.walletCode).text).toMatch(/1\)/);
     }
     // A second customer on the same network uses the service centre that is already there.
-    const second = createTestCustomer(w, { network: "mtn", amount: 0 });
+    const second = await createTestCustomer(w, { network: "mtn", amount: 0 });
     expect(second.balance).toBe(0);
     expect(count(w.db, "SELECT COUNT(*) AS n FROM sim_agents WHERE telco = 'mtn'")).toBe(1);
     // They can pay each other with the PIN they were told.
     expect(dial(w, made[0].number, "*170#", "1", "1", second.number, second.number, "25", "hello", made[0].pin).text).toMatch(/GHS 25.00 sent to/);
     expect(walletByMsisdn(w, second.number)!.balance).toBe(2500);
     // From the console API it is one call, and the books still balance.
-    const viaApi = resolveSystem(["hub"]).actions.test_customer(w, { network: "telecel", amount: 100 }) as { ok: boolean; customer: { number: string; pin: string; balance: number } };
+    const viaApi = (await resolveSystem(["hub"]).staged!.test_customer(w, { network: "telecel", amount: 100 })) as { ok: boolean; customer: { number: string; pin: string; balance: number } };
     expect(viaApi).toMatchObject({ ok: true, customer: { balance: 100 } });
     expect(count(w.db, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)")).toBe(0);
     expect(JSON.stringify(view(w, "bog"))).not.toContain('"backed":false');
-    expect(() => createTestCustomer(w, { amount: 999999 })).toThrow(/between GHS 0 and GHS 5,000/);
+    await expect(createTestCustomer(w, { amount: 999999 })).rejects.toThrow(/between GHS 0 and GHS 5,000/);
+
+    // With APIs plugged into the steps along the way, each is asked once and the customer is still made.
+    const http = await import("node:http");
+    const { addIntegration } = await import("../src/engine/integrations");
+    const asked: string[] = [];
+    const api = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        asked.push((JSON.parse(body) as { point: string }).point);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"decision":"allow"}');
+      });
+    });
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(api.address() as import("node:net").AddressInfo).port}/`;
+    for (const point of ["sim.register", "wallet.open", "pin.set", "kyc.upgrade", "payment.receive"]) addIntegration(w, "at", { point, name: point, url });
+    const watched = await createTestCustomer(w, { network: "at" });
+    api.close();
+    expect(watched).toMatchObject({ balance: 500, kyc: "medium" });
+    expect(asked.sort()).toEqual(["kyc.upgrade", "payment.receive", "pin.set", "sim.register", "wallet.open"]);
     await resetWorld("team-01");
   });
 });

@@ -251,7 +251,7 @@ async function callback(w: World, ref: string) {
   const r = getApproval(w, ref);
   if (!r?.callback_url) return;
   try {
-    await callOut(r.callback_url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ referenceId: ref, ...approvalView(r) }), timeoutMs: 3000 });
+    await callOut(r.callback_url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ referenceId: ref, ...approvalView(r) }), timeoutMs: 3000, world: w.id });
   } catch {
     // Callbacks are best effort, as with the real API.
   }

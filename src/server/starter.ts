@@ -11,6 +11,8 @@ export const KITS = [
   { file: "plugin-api.mjs", language: "JavaScript", kind: "plugin", run: "node plugin-api.mjs" },
   { file: "app.py", language: "Python", kind: "app", run: "python3 app.py" },
   { file: "app.mjs", language: "JavaScript", kind: "app", run: "node app.mjs" },
+  { file: "bridge.py", language: "Python", kind: "bridge", run: "python3 bridge.py" },
+  { file: "bridge.mjs", language: "JavaScript", kind: "bridge", run: "node bridge.mjs" },
 ] as const;
 
 export type Kit = (typeof KITS)[number];

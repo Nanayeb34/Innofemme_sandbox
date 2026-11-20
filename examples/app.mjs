@@ -11,17 +11,24 @@
 //   2. Pick a customer's number on that network (the Phone simulator lists them).
 //
 // Run it:
-//   SANDBOX=https://…/api/w/your-team CLIENT_ID=… API_KEY=… NUMBER=024… node app.mjs
-//   Add AMOUNT=5 to also ask that customer for a payment of GHS 5, and wait for their answer.
-//   NETWORK=telecel or NETWORK=at for the other networks (default mtn).
+//   node app.mjs --sandbox https://…/api/w/your-team --client-id … --api-key … --number 024…
+//   Add --amount 5 to also ask that customer for a payment of GHS 5, and wait for their answer.
+//   Add --network telecel or --network at for the other networks (default mtn).
 //
-// SANDBOX is the "Base URL" shown at the top of your team's documentation page.
+// --sandbox is the "Base URL" shown at the top of your team's documentation page.
 
 import { randomUUID } from "node:crypto";
 
-const { SANDBOX, CLIENT_ID, API_KEY, NUMBER, AMOUNT, NETWORK = "mtn" } = process.env;
+// Settings can be given as arguments (--name value), which works on every system, or as environment variables.
+const args = Object.fromEntries(process.argv.slice(2).flatMap((a, i, all) => (a.startsWith("--") ? [[a.slice(2), all[i + 1]]] : [])));
+const SANDBOX = args.sandbox ?? process.env.SANDBOX;
+const CLIENT_ID = args["client-id"] ?? process.env.CLIENT_ID;
+const API_KEY = args["api-key"] ?? process.env.API_KEY;
+const NUMBER = args.number ?? process.env.NUMBER;
+const AMOUNT = args.amount ?? process.env.AMOUNT;
+const NETWORK = args.network ?? process.env.NETWORK ?? "mtn";
 if (!SANDBOX || !CLIENT_ID || !API_KEY || !NUMBER) {
-  console.error("Set SANDBOX, CLIENT_ID, API_KEY and NUMBER. See the top of this file.");
+  console.error("Usage: node app.mjs --sandbox https://…/api/w/your-team --client-id … --api-key … --number 024…   (see the top of this file)");
   process.exit(1);
 }
 const network = `${SANDBOX.replace(/\/$/, "")}/network/${NETWORK}`;

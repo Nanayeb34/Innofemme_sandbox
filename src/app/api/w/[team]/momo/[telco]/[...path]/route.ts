@@ -220,7 +220,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     if (!amount || !payee) return momoError(400, "INVALID_INPUT", "amount and payee.partyId are required");
     if (getPayout(w, ref, telco)) return momoError(409, "RESOURCE_ALREADY_EXIST", "Duplicated reference id");
     const r = await locked(w, () => payout(w, telco, who.wallet(), ref, { msisdn: normalizeMsisdn(payee), amount, externalId: str(b.externalId), payerMessage: str(b.payerMessage), payeeNote: str(b.payeeNote) }));
-    void notifyPartner(callbackUrl, { referenceId: ref, ...payoutView(r) });
+    void notifyPartner(w.id, callbackUrl, { referenceId: ref, ...payoutView(r) });
     return accepted();
   }
 
@@ -236,7 +236,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
     const refunded = Number((w.db.prepare("SELECT COALESCE(SUM(amount),0) AS n FROM api_transfers WHERE external_id = ? AND status = 'SUCCESSFUL'").get(`refund:${original.ref}`) as { n: number }).n);
     if (refunded + amount > original.amount) return momoError(409, "NOT_ALLOWED", "The refund is more than what is left of the original payment");
     const r = await locked(w, () => payout(w, telco, who.wallet(), ref, { msisdn: original.payer_msisdn, amount, externalId: `refund:${original.ref}`, payerMessage: str(b.payerMessage) ?? "Refund", payeeNote: str(b.payeeNote), waiveFee: true }));
-    void notifyPartner(callbackUrl, { referenceId: ref, ...payoutView(r) });
+    void notifyPartner(w.id, callbackUrl, { referenceId: ref, ...payoutView(r) });
     return accepted();
   }
 

@@ -4,10 +4,12 @@
 It says "allow" to everything and prints what it was sent. Put your own logic in decide().
 It needs nothing installed beyond Python 3.8 or later.
 
-Run it:      python3 plugin_api.py                    (listens on port 4010; PORT=5000 python3 plugin_api.py for another)
+Run it:      python3 plugin_api.py                    (listens on port 4010; python3 plugin_api.py --port 5000 for another)
+             On Windows, type python in place of python3.
 Plug it in:  open an institution's console > Plug-ins > "Plug in an API", and give this API's address.
              With the sandbox on your own machine that is http://localhost:4010/
-             With a sandbox shared by every team, the address must be reachable from the internet.
+             With a sandbox shared by every team, run the bridge beside this API (bridge.py or bridge.mjs)
+             and give the address bridge://laptop
 Try it:      the Plug-ins tab has a "Send a test" button, and shows every question asked and what you answered.
 
 You receive:  { "point": "...", "institution": "...", "world": "...", "at": "...", "data": { ... } }
@@ -23,6 +25,7 @@ The Fraud API can also send fraud incidents straight to this address, in the sam
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -54,6 +57,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 4010))
+    port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else int(os.environ.get("PORT", 4010))
     print("Listening on port", port, flush=True)
     ThreadingHTTPServer(("", port), Handler).serve_forever()

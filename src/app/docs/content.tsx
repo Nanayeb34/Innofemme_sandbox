@@ -23,7 +23,7 @@ const CONTENTS: { title: string; items: [id: string, label: string][] }[] = [
   },
   {
     title: "Starter kits",
-    items: [["kits", "The four kits"], ["kit-plugin", "Run a plug-in API"], ["kit-app", "Run an application"], ["reach", "Where your API has to be"]],
+    items: [["kits", "The kits"], ["kit-plugin", "Run a plug-in API"], ["kit-app", "Run an application"], ["reach", "Where your API has to be"], ["bridge", "The bridge: an API on your laptop"]],
   },
   {
     title: "Reference",
@@ -38,6 +38,7 @@ const CONTENTS: { title: string; items: [id: string, label: string][] }[] = [
 const KIT_ABOUT = {
   plugin: "An API that an institution plugs into its own steps. Answers \"allow\" to everything and prints what it was sent.",
   app: "An application of your own that signs in to a network and makes one call of each kind.",
+  bridge: "Lets the sandbox reach an API running on your laptop. Run it beside your API, in whatever language that is written.",
 } as const;
 
 /**
@@ -225,9 +226,10 @@ export async function DocsContent({ team }: { team?: string }) {
 
           <Part>Starter kits</Part>
 
-          <Section title="The four kits" id="kits">
+          <Section title="The kits" id="kits">
             <p>
               Small working files to copy and change. They do the plumbing (receiving a question, signing in, sending an answer in the right shape) and nothing else: what to build is yours. None needs anything installed beyond Python or Node.js itself.
+              The last two are not something to build on: the bridge is a helper you run as it is.
             </p>
             <div className="grid gap-3 md:grid-cols-2">
               {kits.map((k) => (
@@ -256,10 +258,11 @@ export async function DocsContent({ team }: { team?: string }) {
           <Section title="Run a plug-in API" id="kit-plugin">
             <ol className="list-decimal space-y-2 pl-5">
               <li>
-                Download <code>plugin_api.py</code> or <code>plugin-api.mjs</code> and run it. It listens on port 4010 and prints <code>Listening on port 4010</code>.
+                Download <code>plugin_api.py</code> or <code>plugin-api.mjs</code> and run it: <code>python3 plugin_api.py</code> or <code>node plugin-api.mjs</code> (on Windows, <code>python</code> in place of <code>python3</code>). It listens on port 4010 and prints{" "}
+                <code>Listening on port 4010</code>.
               </li>
               <li>
-                Make sure the sandbox can reach it: see <a className="underline" href="#reach">where your API has to be</a>.
+                Make sure the sandbox can reach it: see <a className="underline" href="#reach">where your API has to be</a>. From a laptop, that means starting <a className="underline" href="#bridge">the bridge</a> and using <code>bridge://laptop</code> as the address.
               </li>
               <li>
                 Open the console of the institution that should ask it, for example {screen("/telco/mtn", "the MTN back office")}, and go to <b>Plug-ins</b>. Under <b>Plug in an API</b>, give it a name, choose the step, and enter its address.
@@ -293,13 +296,14 @@ export async function DocsContent({ team }: { team?: string }) {
               </li>
               <li>Download <code>app.py</code> or <code>app.mjs</code> and run it with those details:</li>
             </ol>
-            <Code>{`SANDBOX=${base} CLIENT_ID=… API_KEY=… NUMBER=024… python3 app.py
-SANDBOX=${base} CLIENT_ID=… API_KEY=… NUMBER=024… node app.mjs
+            <Code>{`python3 app.py --sandbox ${base} --client-id … --api-key … --number 024…
+node app.mjs --sandbox ${base} --client-id … --api-key … --number 024…
 
-# add AMOUNT=5 to also ask that customer for GHS 5 and wait for their answer
-# add NETWORK=telecel or NETWORK=at for the other networks`}</Code>
+# add --amount 5 to also ask that customer for GHS 5 and wait for their answer
+# add --network telecel or --network at for the other networks
+# on Windows, type python in place of python3`}</Code>
             <p>
-              It signs in, looks up who the number is registered to, asks whether its SIM was replaced lately, and reads the name on the wallet. With <code>AMOUNT</code> it also sends the customer a request to pay, then waits while they approve or refuse on their
+              It signs in, looks up who the number is registered to, asks whether its SIM was replaced lately, and reads the name on the wallet. With <code>--amount</code> it also sends the customer a request to pay, then waits while they approve or refuse on their
               phone: {approvals.map((a, i) => (
                 <span key={a.name}>
                   {i > 0 && "; "}on {a.name}, dial <code>{a.code}</code> and {a.path}
@@ -317,31 +321,73 @@ SANDBOX=${base} CLIENT_ID=… API_KEY=… NUMBER=024… node app.mjs
             {shared ? (
               <>
                 <p>
-                  <b>This sandbox is shared by every team and runs on the internet, so it can only call addresses on the internet.</b> An API running on your laptop at <code>http://localhost:4010</code> cannot be reached from here, and the sandbox refuses
-                  addresses like it. There are two ways to give your API an address it can reach:
+                  <b>This sandbox is shared by every team and runs on the internet, so it cannot call your laptop.</b> An address like <code>http://localhost:4010</code> means &quot;this same machine&quot;, which for the sandbox is its own server, and it refuses addresses
+                  like it. You have three ways to connect your API:
                 </p>
-                <ul className="list-disc space-y-1 pl-5">
+                <ol className="list-decimal space-y-1 pl-5">
                   <li>
-                    <b>Host it.</b> Put the API on any hosting service that gives it a public <code>https://</code> address, and plug that address in.
+                    <b>The bridge (simplest).</b> Keep your API on your laptop and run the bridge beside it. Nothing to install, no account, and the address never changes. See <a className="underline" href="#bridge">the next section</a>.
                   </li>
                   <li>
-                    <b>Keep it on your laptop and open a tunnel.</b> A tunnel gives your laptop a temporary public address while you work. With the kit running on port 4010, either of these prints an <code>https://</code> address to plug in:
+                    <b>Host it.</b> Put the API on any hosting service that gives it a public <code>https://</code> address, and use that address. This does not depend on a laptop staying awake, so it is the steadiest choice for a final demonstration.
                   </li>
-                </ul>
-                <Code>{`cloudflared tunnel --url http://localhost:4010
-ngrok http 4010`}</Code>
-                <p className="text-xs text-gray-600">These are two widely used tunnel tools, named as examples; any other does the same job. The address changes each time you start the tunnel, so update the plug-in when it does.</p>
+                  <li>
+                    <b>A tunnel.</b> A tunnel tool gives your laptop a temporary public address, for example <code>cloudflared tunnel --url http://localhost:4010</code> or <code>ngrok http 4010</code>. The address changes each time you start it.
+                  </li>
+                </ol>
               </>
             ) : (
               <p>
-                <b>This sandbox is running on your own machine or in a Codespace, so an address on the same machine works as it is:</b> with a kit running on port 4010, plug in <code>http://localhost:4010/</code>. On a sandbox shared by every team it is different:
-                that one can only call addresses on the internet, so there you either host the API somewhere with a public <code>https://</code> address or open a tunnel from your laptop (for example <code>cloudflared tunnel --url http://localhost:4010</code> or{" "}
-                <code>ngrok http 4010</code>).
+                <b>This sandbox is running on your own machine or in a Codespace, so an address on the same machine works as it is:</b> with a kit running on port 4010, use <code>http://localhost:4010/</code>. On a sandbox shared by every team it is different: that
+                one cannot call your laptop, so there you run <a className="underline" href="#bridge">the bridge</a>, host the API at a public <code>https://</code> address, or open a tunnel. The bridge works here too, if you want to practise with it.
               </p>
             )}
             <p>
               The other direction needs nothing: your own code, wherever it runs, can always call the sandbox. That includes a web page calling it straight from the browser, as long as the key or credentials are sent in a header.
             </p>
+          </Section>
+
+          <Section title="The bridge: an API on your laptop" id="bridge">
+            <p>
+              The sandbox cannot call your laptop, but your laptop can call the sandbox. The bridge is a small program that does that and stays on the line. Whatever the sandbox has for your API arrives on that call, is passed to your API on the laptop, and the
+              answer goes back the same way. Your API stays an ordinary API, in any language: nothing in it changes, and the same code runs unchanged once it is hosted.
+            </p>
+            <ol className="list-decimal space-y-2 pl-5">
+              <li>Start your API on your laptop, for example a plug-in kit on port 4010.</li>
+              <li>
+                Download <code>bridge.py</code> or <code>bridge.mjs</code> (<a className="underline" href="#kits">above</a>) and start it beside your API. It does not matter which one you use, whatever your API is written in:
+              </li>
+            </ol>
+            <Code>{`python3 bridge.py --sandbox ${base} --key ${key}
+node bridge.mjs --sandbox ${base} --key ${key}
+
+# add --to http://localhost:5000 if your API is not at http://localhost:4010
+# add --name ama to call the bridge something other than "laptop" (each laptop needs its own name)
+# on Windows, type python in place of python3`}</Code>
+            <ol className="list-decimal space-y-2 pl-5" start={3}>
+              <li>
+                It prints <code>Connected to the sandbox as &quot;laptop&quot;</code>. From then on, wherever the sandbox asks for your API&apos;s address (the Plug-ins tab, the Fraud console, a USSD short code, a callback address), type{" "}
+                <code>bridge://laptop</code>. A path is passed on as well: <code>bridge://laptop/check</code> reaches <code>http://localhost:4010/check</code>.
+              </li>
+              <li>
+                Press <b>Send a test</b> on the Plug-ins tab. The bridge prints a line for every request it passes on, and the tab shows whether the laptop is connected.
+              </li>
+            </ol>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <b>Leave it running.</b> If the bridge stops, or the laptop sleeps or loses its connection, the sandbox treats your API as not answering and does what was chosen under <b>If the API does not answer</b>. Start the bridge again and it carries on;
+                nothing needs to be plugged in again.
+              </li>
+              <li>
+                <b>One name, one laptop.</b> If a second bridge starts under the same name, it takes over and the first one stops. Teammates who each run an API give their bridges different names.
+              </li>
+              <li>
+                <b>Only your team.</b> A bridge is opened with your team key and can only be used from your own team&apos;s world.
+              </li>
+              <li>
+                <b>From a script.</b> <code>curl {"{base}"}/bridge {auth}</code> lists your team&apos;s bridges and whether each is connected.
+              </li>
+            </ul>
           </Section>
 
           <Part>Reference</Part>
@@ -714,7 +760,9 @@ curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect",
                     [
                       ["401: Team key required", "The call needs your team key. Send it in the x-team-key header. In a browser, open the sandbox from your team link first."],
                       ["401: API credentials required", "A partner API (sections 1 to 6) wants the client ID and API key that institution issued, from its API partners tab. The team key does not work there, and one institution's credentials do not work on another's API."],
-                      ["\"That address is on the sandbox's own machine or private network\"", "A shared sandbox only calls addresses on the internet. See \"Where your API has to be\"."],
+                      ["\"That address is on the sandbox's own machine or private network\"", "A shared sandbox cannot call your laptop. Run the bridge and use bridge://laptop as the address. See \"Where your API has to be\"."],
+                      ["A plug-in's log shows \"The bridge … is not connected\"", "The bridge program is not running on the laptop, or the laptop has lost its connection. Start it again; nothing needs to be plugged in again."],
+                      ["A plug-in's log shows \"Nothing is answering at http://localhost:4010\"", "The bridge is running but your API is not, or it is on another port. Start the API, or start the bridge with --to set to where the API is."],
                       ["A plug-in's log shows \"error: no answer within 2000 ms\"", "Your API did not answer in time, or could not be reached. Check it is running and that the address is right with Send a test. The institution then did what was chosen under \"If the API does not answer\": carried on, or refused."],
                       ["A plug-in's log shows \"answered …, but this step accepts: …\"", "That step does not take that answer: only payments can be delayed, for example. The table in section 7 lists what each step accepts."],
                       ["My API is never asked", "Check it is plugged into the right institution and step, and switched on. For a payment, the payer's network is asked; for money arriving, the payee's network or bank. Section 7 says who is asked when."],

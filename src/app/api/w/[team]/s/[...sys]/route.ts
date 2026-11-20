@@ -28,7 +28,9 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   const w = await authWorld(req, team, rolesFor(sys));
   const system = resolveSystem(sys);
   const b = await body(req);
+  const staged = system.staged?.[String(b.action)];
+  if (staged) return staged(w, b);
   const action = system.actions[String(b.action)];
-  if (!action) throw new SimError(`Unknown action. This system supports: ${Object.keys(system.actions).join(", ")}`);
+  if (!action) throw new SimError(`Unknown action. This system supports: ${[...Object.keys(system.actions), ...Object.keys(system.staged ?? {})].join(", ")}`);
   return locked(w, () => action(w, b));
 });

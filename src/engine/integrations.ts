@@ -1,5 +1,6 @@
 import { BANK_IDS, SimError, isTelco, need, newId } from "./util";
 import { count } from "./db";
+import { bridgeAddress, bridgeConnected } from "./bridge";
 import { callOut, checkUrl } from "./outside";
 import { audit, stepAside, withLock, type World } from "./world";
 
@@ -182,7 +183,14 @@ const active = (w: World, institution: string, point: string): Integration[] =>
 
 export function listIntegrations(w: World, institution: string) {
   const rows = w.db.prepare("SELECT * FROM integrations WHERE institution = ? ORDER BY created_at").all(institution) as unknown as Integration[];
-  return rows.map((i) => ({ id: i.id, point: i.point, when: POINTS[i.point]?.when ?? i.point, name: i.name, url: i.url, enabled: !!i.enabled, failOpen: !!i.fail_open, timeoutMs: i.timeout_ms, calls: i.calls }));
+  return rows.map((i) => {
+    // For an API on a laptop: whether its bridge is calling in right now.
+    const via = /^bridge:/i.test(i.url) ? bridgeAddress(i.url) : undefined;
+    return {
+      id: i.id, point: i.point, when: POINTS[i.point]?.when ?? i.point, name: i.name, url: i.url, enabled: !!i.enabled, failOpen: !!i.fail_open, timeoutMs: i.timeout_ms, calls: i.calls,
+      bridge: via ? { name: via.name, connected: bridgeConnected(w.id, via.name) } : undefined,
+    };
+  });
 }
 
 export function integrationLog(w: World, institution: string, limit = 60) {
@@ -251,6 +259,7 @@ const post = (world: string, i: Integration, point: string, data: unknown) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ point, institution: i.institution, world, at: new Date().toISOString(), data }),
     timeoutMs: i.timeout_ms,
+    world,
   });
 
 /**

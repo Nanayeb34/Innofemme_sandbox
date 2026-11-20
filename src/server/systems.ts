@@ -32,6 +32,8 @@ type Body = Record<string, unknown>;
 export interface System {
   view(w: World, q: URLSearchParams): unknown;
   actions: Record<string, (w: World, b: Body) => unknown>;
+  /** Actions made of several steps, each of which takes its own turn on the world. The caller must not hold the turn. */
+  staged?: Record<string, (w: World, b: Body) => Promise<unknown>>;
 }
 
 const str = (v: unknown) => (v === undefined || v === null ? undefined : String(v));
@@ -218,8 +220,10 @@ const hub: System = {
   },
   actions: {
     txn: txnDetail,
-    test_customer(w, b) {
-      const c = createTestCustomer(w, { network: b.network, amount: b.amount });
+  },
+  staged: {
+    async test_customer(w, b) {
+      const c = await createTestCustomer(w, { network: b.network, amount: b.amount });
       return ok(`${c.name} is ready: ${c.number} on ${c.networkName}, wallet PIN ${c.pin}, GHS ${c.balance.toFixed(2)} in the wallet.`, { customer: c });
     },
   },
