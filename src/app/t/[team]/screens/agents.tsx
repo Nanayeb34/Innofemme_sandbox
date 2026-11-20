@@ -60,7 +60,7 @@ function Who({ label, value, onChange, options }: { label: string; value: string
 
 interface SimPointView {
   telco: string;
-  brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null };
+  brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null; approvals?: string };
   agents: { id: string; name: string; kind: string; town: string; status: string }[];
   current: string | null;
   stockCount: number;
@@ -187,7 +187,7 @@ export function SimPoint({ team, telco, role }: { team: string; telco: string; r
 
 interface MomoPointView {
   telco: string;
-  brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null };
+  brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null; approvals?: string };
   agents: { code: string; name: string; town: string; status: string }[];
   agent: {
     code: string; name: string; msisdn: string; town: string; status: string; float: number; cash: number; commission: number;
@@ -286,7 +286,7 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
             <>
               <Section
                 title="Cash-out"
-                hint={`You check the customer's Ghana Card: the name must match the wallet. You enter their number and the amount. They then dial ${b.shortcode}, choose option 4 and approve with their PIN. Pay out the cash only once the request shows as successful.`}
+                hint={`You check the customer's Ghana Card: the name must match the wallet. You enter their number and the amount. They then dial ${b.shortcode}, ${b.approvals ?? "open their approvals"} and approve with their PIN. Pay out the cash only once the request shows as successful.`}
               >
                 <ActionForm
                   team={team}

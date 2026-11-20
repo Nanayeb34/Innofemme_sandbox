@@ -1,5 +1,6 @@
 import { BANK_IDS, SimError, isTelco, need, newId } from "./util";
 import { count } from "./db";
+import { callOut, checkUrl } from "./outside";
 import { audit, withLock, type World } from "./world";
 
 /**
@@ -141,21 +142,6 @@ export interface Integration {
   created_at: number;
 }
 
-/** Addresses the sandbox will not call: cloud metadata services, which hold the server's own credentials. */
-export function checkUrl(input: string | undefined): string {
-  const url = String(need(input?.trim(), "The API's address"));
-  let host: string;
-  try {
-    const u = new URL(url);
-    if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error();
-    host = u.hostname;
-  } catch {
-    throw new SimError("The address must be a full http:// or https:// address");
-  }
-  if (host === "metadata.google.internal" || host.startsWith("169.254.")) throw new SimError("That address is not allowed");
-  return url;
-}
-
 export function addIntegration(w: World, institution: string, input: { point?: string; name?: string; url?: string; failOpen?: unknown; timeoutMs?: unknown }): Integration {
   const point = String(need(input.point, "The step to plug into"));
   if (!pointsFor(institution).some(([p]) => p === point)) throw new SimError("This institution has no such step to plug into");
@@ -250,15 +236,12 @@ function record(w: World, i: Integration, point: string, request: unknown, decis
   w.db.prepare("DELETE FROM integration_calls WHERE institution = ? AND id <= (SELECT MAX(id) FROM integration_calls WHERE institution = ?) - 500").run(i.institution, i.institution);
 }
 
-async function post(w: World, i: Integration, point: string, data: unknown): Promise<{ status: number; body: string }> {
-  const res = await fetch(i.url, {
-    method: "POST",
+const post = (w: World, i: Integration, point: string, data: unknown) =>
+  callOut(i.url, {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ point, institution: i.institution, world: w.id, at: new Date().toISOString(), data }),
-    signal: AbortSignal.timeout(i.timeout_ms),
+    timeoutMs: i.timeout_ms,
   });
-  return { status: res.status, body: await res.text() };
-}
 
 /** Asks one plugged-in API. An API that fails to answer is treated as its owner chose: carry on, or refuse. */
 async function ask(w: World, i: Integration, point: string, payload: unknown): Promise<Decision> {
@@ -273,7 +256,7 @@ async function ask(w: World, i: Integration, point: string, payload: unknown): P
     record(w, i, point, payload, d.decision, d.message, Date.now() - started);
     return d;
   } catch (e) {
-    const why = (e as Error).name === "TimeoutError" ? `no answer within ${i.timeout_ms} ms` : (e as Error).message;
+    const why = /^No answer within/.test((e as Error).message) ? `no answer within ${i.timeout_ms} ms` : (e as Error).message;
     record(w, i, point, payload, "error", `${why}; ${i.fail_open ? "carried on" : "refused"}`, Date.now() - started);
     return i.fail_open ? ALLOW : { decision: "reject", message: "This service is temporarily unavailable. Please try again later." };
   }
@@ -317,7 +300,7 @@ async function flush(w: World, events: World["outbox"], only?: Integration[], qu
         const r = await post(w, i, "events", payload);
         outcome = r.status >= 200 && r.status < 300 ? ["sent", e.event] : ["error", `${e.event}: answered with status ${r.status}`];
       } catch (err) {
-        outcome = ["error", `${e.event}: ${(err as Error).name === "TimeoutError" ? "no answer in time" : (err as Error).message}`];
+        outcome = ["error", `${e.event}: ${/^No answer within/.test((err as Error).message) ? "no answer in time" : (err as Error).message}`];
       }
       // Written in turn with everything else that touches this world.
       const write = () => record(w, i, "events", payload, outcome[0], outcome[1], Date.now() - started);

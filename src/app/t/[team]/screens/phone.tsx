@@ -23,6 +23,7 @@ interface PhoneState {
   simStatus: string;
   owner: string;
   shortcode: string;
+  approvalsPath: string;
   codes: { code: string; label: string }[];
   wallet: { name: string; type: string; tier: string; status: string; balance: number } | null;
   sms: { id: number; sender: string; body: string; at: string }[];
@@ -291,7 +292,7 @@ function Dialer({ team, state, calls, onDone }: { team: string; state: PhoneStat
     <div className="flex h-full flex-col px-6 pb-5 pt-4">
       {state.approvals.length > 0 && (
         <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          {state.approvals.length} payment request(s) waiting. Dial {state.shortcode} and choose option 4 to approve or reject.
+          {state.approvals.length} payment request(s) waiting. Dial {state.shortcode} and {state.approvalsPath} to approve or reject.
         </div>
       )}
       <div className="flex min-h-12 items-center justify-center text-3xl tracking-wider text-gray-900">{code || <span className="text-base text-gray-400">Dial a number or a short code</span>}</div>

@@ -57,6 +57,38 @@ export function withdrawAtAgent(w: World, from: WalletRow, o: { agent: string; a
 // ---------- cash machines ----------
 
 /** Whether a network's menu has a way to get a cash machine voucher: followed from the first screen, as a customer would. */
+/**
+ * How a customer gets to the requests waiting for their answer, in words: "choose 4 (Allow Cash Out)" on one
+ * network, "choose 6 (My Wallet), then 4 (My Approvals)" on another. Read from the menu as it is now, so it
+ * stays true when a team rearranges the menu. The shortest way is given.
+ */
+export function approvalsPath(w: World, telco: Telco): string {
+  const menu = cfgOf(w, telco).menu;
+  const seen = new Set<string>([menu.start]);
+  let level: { id: string; steps: string[] }[] = [{ id: menu.start, steps: [] }];
+  while (level.length) {
+    const next: typeof level = [];
+    const found: string[][] = [];
+    for (const { id, steps } of level) {
+      const node = menu.nodes[id];
+      if (!node || node.type !== "menu") continue;
+      for (const o of node.options) {
+        const to = menu.nodes[o.next];
+        const path = [...steps, `${o.key} (${o.label})`];
+        if (to?.type === "action" && to.action === "approvals") found.push(path);
+        else if (!seen.has(o.next)) {
+          seen.add(o.next);
+          next.push({ id: o.next, steps: path });
+        }
+      }
+    }
+    // Where a menu offers two equally short ways, the one named for approvals in general is the one to send people to.
+    if (found.length) return `choose ${(found.find((p) => /approvals/i.test(p[p.length - 1])) ?? found[0]).join(", then ")}`;
+    level = next;
+  }
+  return "open the requests waiting for approval";
+}
+
 export function offersAtm(w: World, telco: Telco): boolean {
   const menu = cfgOf(w, telco).menu;
   const seen = new Set<string>();

@@ -3,13 +3,16 @@ import { BrandBar } from "@/components/brand";
 import { canViewTeam } from "@/server/guard";
 import { pageOrigin } from "@/server/qr";
 import { SYSTEM_PATHS } from "@/server/systems";
-import { teamById } from "@/engine/worlds";
+import { getWorld, teamById } from "@/engine/worlds";
+import { getConfig } from "@/engine/config/store";
+import { approvalsPath } from "@/engine/services";
+import { sharedServer } from "@/engine/outside";
 import { SURFACE_NAMES } from "@/engine/config/schemas";
 import { DATASET_FILES } from "@/engine/dataset";
 import { FRAUD_KINDS } from "@/engine/fraudsim";
 import { EVENTS, POINTS, SAMPLES } from "@/engine/integrations";
 import { SCENARIOS } from "@/engine/simulate";
-import { BANK_IDS } from "@/engine/util";
+import { BANK_IDS, TELCOS, TELCO_INFO } from "@/engine/util";
 import NoAccess from "../no-access";
 
 export default async function Docs(props: PageProps<"/t/[team]/docs">) {
@@ -20,6 +23,9 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
   const auth = `-H "x-team-key: ${key}"`;
   const json = `-H "content-type: application/json"`;
   const partner = `-u "$CLIENT_ID:$API_KEY"`;
+  // Where each network's menu, as this team has it now, keeps requests waiting for the customer's answer.
+  const world = getWorld(team);
+  const approvals = TELCOS.map((t) => ({ name: TELCO_INFO[t].name, code: getConfig(world.db, `telco.${t}`).menu.shortcode, path: approvalsPath(world, t) }));
 
   return (
     <>
@@ -56,6 +62,9 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
             {key}
           </div>
         </div>
+        <p className="mt-2 text-xs text-gray-600">
+          Your own web page can call any of this straight from the browser, wherever the page is served from. Send the key or the credentials in a header, as in the examples below; a page on another site cannot use a console sign-in.
+        </p>
 
         <Section title="1. Getting partner credentials">
           <p>
@@ -98,7 +107,13 @@ POST disbursement/v2_0/deposit               same body
 POST disbursement/v1_0/refund                {amount, currency, referenceIdToRefund}   gives back all or part of a payment you collected, with no fee
 GET  disbursement/v1_0/{transfer|deposit|refund}/{ref}`}</Code>
           <p>
-            A request to pay, a pre-approval and a profile request all appear on the customer&apos;s phone under option 4, where they agree with their PIN or refuse. Once a pre-approval is granted, a request to pay from the same partner to that customer completes without asking.
+            A request to pay, a pre-approval and a profile request all appear on the customer&apos;s phone, where they agree with their PIN or refuse. Each network keeps them in its own place on its menu:{" "}
+            {approvals.map((a, i) => (
+              <span key={a.name}>
+                {i > 0 && "; "}on {a.name}, dial <code>{a.code}</code> and {a.path}
+              </span>
+            ))}
+            . Once a pre-approval is granted, a request to pay from the same partner to that customer completes without asking.
           </p>
           <p>
             As on MTN&apos;s developer portal, you can also create credentials from code with your team key: <code>POST momo/&#123;telco&#125;/v1_0/apiuser</code> (with <code>X-Reference-Id</code> and <code>X-Merchant-Id</code>), then <code>POST …/apiuser/&#123;id&#125;/apikey</code>.
@@ -165,7 +180,11 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
 
         <Section title="7. Plug-in points: your API inside an institution's system" id="plugins">
           <p>
-            Put your API online, then open the console of a network, a bank or the national switch, go to <b>Plug-ins</b>, and enter its address and the step it should be asked at. From then on the institution sends a <code>POST</code> with a JSON body to your address every time that step
+            Put your API online
+            {sharedServer()
+              ? " (this sandbox is shared by every team, so the address must be one the internet can reach: localhost and private network addresses are refused)"
+              : " (running the sandbox yourself, an address on the same machine such as http://localhost:8080 works too)"}
+            , then open the console of a network, a bank or the national switch, go to <b>Plug-ins</b>, and enter its address and the step it should be asked at. From then on the institution sends a <code>POST</code> with a JSON body to your address every time that step
             happens, waits for your answer (2 seconds by default), and acts on it. The same tab shows every question it asked and what you answered, and has a <b>Send a test</b> button.
           </p>
           <Code>{`# What you receive

@@ -41,7 +41,7 @@ interface Customer {
 }
 interface CareView {
   telco: string;
-  brand: { name: string; wallet: string; color: string; shortcode: string; careLine: string; logo: string | null };
+  brand: { name: string; wallet: string; color: string; shortcode: string; careLine: string; logo: string | null; approvals: string };
   endpoint: string;
   waiting: number;
   stats: { open: number; awaitingRecipient: number; withOtherNetwork: number; fromOtherNetworks: number; closed: number; onHold: number };
@@ -196,7 +196,7 @@ export default function Care({ team, telco }: { team: string; telco: string }) {
                       The money is on another network. Only that network can hold it, ask the recipient, or send it back. {t.linked ? "This ticket updates as they act and closes when they decide." : "Send the dispute to them through the national switch."}
                     </p>
                   )}
-                  {t.waitingForRecipient && <p className="mt-2 text-xs text-amber-800">The recipient has been asked to return the money and has not answered yet. They answer on their phone: {b.shortcode}, option 4.</p>}
+                  {t.waitingForRecipient && <p className="mt-2 text-xs text-amber-800">The recipient has been asked to return the money and has not answered yet. They answer on their phone: dial {b.shortcode}, {b.approvals}.</p>}
                   <div className="mt-3 flex flex-wrap gap-2">
                     {t.can.forward && (
                       <ActionButton team={team} path={path} body={{ action: "forward", ticket: t.id }} onDone={refresh} dark>

@@ -973,6 +973,34 @@ describe("plug-in points: an outside API plugged into an institution's own steps
   });
 });
 
+describe("addresses teams type in, on a server every team shares", () => {
+  it("only addresses out on the internet are called; on your own machine, local ones are fine", async () => {
+    const { checkUrl, callOut, guardedLookup } = await import("../src/engine/outside");
+    const local = ["http://localhost:8080/check", "http://127.0.0.1:8080/", "http://2130706433/", "http://0x7f.1/", "http://[::1]:3000/", "http://[::ffff:127.0.0.1]/", "http://10.128.0.5/", "http://192.168.1.20:5000/hook", "http://172.17.0.1/", "http://app:3000/api/org/overview", "http://caddy.internal/"];
+    // On your own machine an API under development can be plugged in from localhost.
+    for (const url of local) expect(checkUrl(url)).toBe(url);
+    // The server's own credentials are never reachable, wherever it runs.
+    for (const url of ["http://169.254.169.254/computeMetadata/v1/", "http://metadata.google.internal/", "http://[fe80::1]/", "http://2852039166/"]) expect(() => checkUrl(url)).toThrow(/not allowed/);
+    expect(() => checkUrl("ftp://example.com/x")).toThrow(/full http/);
+    process.env.SANDBOX_PRIVATE_ADDRESSES = "block";
+    try {
+      for (const url of local) expect(() => checkUrl(url)).toThrow(/own machine or private network/);
+      expect(checkUrl("https://my-team-api.example.com/check")).toBe("https://my-team-api.example.com/check");
+      expect(checkUrl("http://41.215.160.10:8080/hook")).toBe("http://41.215.160.10:8080/hook");
+      // A name that looks public but points inside is refused at the moment of connecting.
+      const looked = await new Promise<Error | null>((done) => guardedLookup("localhost", { all: true }, (err) => done(err)));
+      expect(looked?.message).toMatch(/own machine or private network/);
+      await expect(callOut("http://127.0.0.1:9/", { body: "{}", timeoutMs: 500 })).rejects.toThrow(/own machine or private network/);
+      // Plugging one in says so straight away.
+      const w = await resetWorld("team-02");
+      const { addIntegration } = await import("../src/engine/integrations");
+      expect(() => addIntegration(w, "mtn", { point: "pin.set", name: "Mine", url: "http://localhost:4000/pin" })).toThrow(/own machine or private network/);
+    } finally {
+      delete process.env.SANDBOX_PRIVATE_ADDRESSES;
+    }
+  });
+});
+
 describe("simulated data: a ready-made country with labelled fraud", () => {
   const rows = <T>(w: World, sql: string, ...args: (string | number)[]) => w.db.prepare(sql).all(...args) as T[];
   const one = <T>(w: World, sql: string, ...args: (string | number)[]) => w.db.prepare(sql).get(...args) as T;
@@ -1515,6 +1543,23 @@ describe("each network's own wallet menu and services", () => {
     expect(asked.map((a) => `${a.data.type}:${a.data.payee.kind ?? a.data.payee.walletType}`)).toEqual(["cashout:agent", "airtime:airtime", "airtime:airtime", "bill:bill", "atm_withdrawal:cash_machine"]);
     for (const p of integrations.listIntegrations(w, "telecel")) integrations.removeIntegration(w, "telecel", p.id);
     api.close();
+  });
+
+  it("people are sent to where their own network's menu keeps requests to approve, even after the menu is rearranged", async () => {
+    const { approvalsPath } = await import("../src/engine/services");
+    expect(approvalsPath(w, "mtn")).toBe("choose 4 (Allow Cash Out)");
+    expect(approvalsPath(w, "telecel")).toBe("choose 6 (My Wallet), then 4 (My Approvals)");
+    expect(approvalsPath(w, "at")).toBe("choose 7 (My Wallet), then 4 (My Approvals)");
+    type Phone = { phone: { approvalsPath: string } };
+    expect((resolveSystem(["phone"]).view(w, new URLSearchParams({ msisdn: net.telecel.a })) as Phone).phone.approvalsPath).toBe("choose 6 (My Wallet), then 4 (My Approvals)");
+    // A team moves MTN's approvals off the first screen: the directions follow the menu.
+    const cfg = structuredClone(getConfig(w.db, "telco.mtn"));
+    const main = cfg.menu.nodes.main as { options: { key: string; label: string; next: string }[] };
+    main.options = main.options.filter((o) => o.next !== "approvals").map((o, i) => ({ ...o, key: String(i + 1) }));
+    setConfig(w.db, "telco.mtn", cfg, "Approvals moved under My Wallet", "test");
+    expect(approvalsPath(w, "mtn")).toBe("choose 5 (My Wallet), then 5 (My Approvals)");
+    undoChange(w.db, (w.db.prepare("SELECT MAX(id) AS id FROM config_history").get() as { id: number }).id, "test");
+    expect(approvalsPath(w, "mtn")).toBe("choose 4 (Allow Cash Out)");
   });
 
   it("the totals the consoles keep stay right when a payment is undone part-way, and move the moment money moves", async () => {

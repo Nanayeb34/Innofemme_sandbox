@@ -3,6 +3,7 @@ import { getSim } from "./telco";
 import { ussd, type UssdReply } from "./ussd";
 import { SimError, TELCOS, TELCO_INFO, need, newId, type Telco } from "./util";
 import { audit, type World } from "./world";
+import { callOut, checkUrl } from "./outside";
 
 /**
  * USSD services run by outside providers. The NCA allocates a short code to a provider; each
@@ -27,8 +28,7 @@ export function allocateCode(w: World, input: { code?: string; owner?: string; u
   if (reserved(w).has(code)) throw new SimError(`${code} is already used by the networks themselves`);
   if (getCode(w, code)?.status === "allocated") throw new SimError(`${code} is already allocated`);
   const owner = String(need(input.owner?.trim(), "Service provider")).slice(0, 60);
-  const url = String(need(input.url?.trim(), "The provider's application address"));
-  if (!/^https?:\/\//.test(url)) throw new SimError("The application address must start with http:// or https://");
+  const url = checkUrl(input.url, "The provider's application address");
   w.db.prepare("INSERT INTO ussd_codes(code, owner, url, status, created_at) VALUES(?,?,?, 'allocated', ?) ON CONFLICT(code) DO UPDATE SET owner = excluded.owner, url = excluded.url, status = 'allocated', created_at = excluded.created_at").run(code, owner, url, w.now);
   audit(w, "nca", "short_code", `Allocated ${code} to ${owner}`);
   return getCode(w, code)!;
@@ -68,13 +68,12 @@ interface External {
 /** One step of a provider's session: send what the subscriber typed, show what the application answers. */
 async function forward(w: World, session: { id: string; msisdn: string; telco: string }, ext: External, input: string, newSession: boolean): Promise<{ text: string; end: boolean }> {
   try {
-    const res = await fetch(ext.url, {
-      method: "POST",
+    const res = await callOut(ext.url, {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: session.id, serviceCode: ext.code, msisdn: session.msisdn, network: session.telco, newSession, input, text: ext.inputs.join("*") }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      timeoutMs: TIMEOUT_MS,
     });
-    const raw = (await res.text()).trim();
+    const raw = res.body.trim();
     if (!res.ok || !raw) throw new Error(`status ${res.status}`);
     // Either {"message": "...", "continueSession": true} or plain text starting with CON (more to come) or END.
     if (raw.startsWith("{")) {

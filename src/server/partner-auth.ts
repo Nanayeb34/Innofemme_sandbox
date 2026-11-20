@@ -3,6 +3,7 @@ import { authenticate, getClient, recordCall, type ApiClient } from "@/engine/pa
 import { teamById } from "@/engine/worlds";
 import { getWorld } from "@/engine/worlds";
 import type { World } from "@/engine/world";
+import { callOut } from "@/engine/outside";
 import { HttpError } from "./http";
 
 /**
@@ -73,7 +74,7 @@ export function requirePartner(req: Request, team: string, institution: string) 
 export async function notifyPartner(url: string | null | undefined, body: unknown, method: "PUT" | "POST" = "PUT") {
   if (!url) return;
   try {
-    await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
+    await callOut(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body), timeoutMs: 3000 });
   } catch {
     // The partner's server was unreachable. It can still ask for the status.
   }

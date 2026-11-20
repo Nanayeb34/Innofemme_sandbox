@@ -14,7 +14,7 @@ import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments
 import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
-import { atmOf, atmWithdraw, billersOf, bundlesOf, offersAtm } from "@/engine/services";
+import { approvalsPath, atmOf, atmWithdraw, billersOf, bundlesOf, offersAtm } from "@/engine/services";
 import { AIRTIME_CODE, LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE } from "@/engine/ussd";
 import { allocateCode, dial, listCodes, revokeCode, setActivation } from "@/engine/ussdapps";
 import { BANKS, BANK_IDS, PARTICIPANTS, SimError, TELCOS, TELCO_INFO, TRUST_BANK, amountOf, bankName, isTelco, need, normalizeMsisdn, participantName, type Telco } from "@/engine/util";
@@ -289,7 +289,7 @@ function telcoSystem(t: Telco): System {
       const wallets = list<Record<string, string | number>>(w, "SELECT w.*, p.ghana_card FROM wallets w JOIN persons p ON p.id = w.person_id WHERE w.telco = ? ORDER BY w.created_at DESC LIMIT 200", t);
       return {
         telco: t,
-        brand: { ...brand, logo: telcoLogo(t) },
+        brand: { ...brand, logo: telcoLogo(t), approvals: approvalsPath(w, t) },
         stats: {
           simsInStock: sum(w, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", t),
           simsActive: sum(w, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'active'", t),
@@ -410,7 +410,7 @@ function simAgentSystem(t: Telco): System {
       const agent = agents.find((a) => a.id === q.get("agent") && a.status === "active") ?? agents.find((a) => a.status === "active");
       return {
         telco: t,
-        brand: { ...brand, logo: telcoLogo(t) },
+        brand: { ...brand, logo: telcoLogo(t), approvals: approvalsPath(w, t) },
         agents,
         current: agent?.id ?? null,
         stockCount: sum(w, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", t),
@@ -485,7 +485,7 @@ function momoAgentSystem(t: Telco): System {
       const a = agents.find((x) => x.code === q.get("agent") && x.status === "active") ?? agents.find((x) => x.status === "active");
       return {
         telco: t,
-        brand: { ...brand, logo: telcoLogo(t) },
+        brand: { ...brand, logo: telcoLogo(t), approvals: approvalsPath(w, t) },
         agents: agents.map((x) => ({ code: x.code, name: x.name, town: x.town, status: x.status })),
         agent: a
           ? {
@@ -514,7 +514,7 @@ function momoAgentSystem(t: Telco): System {
       },
       cash_out(w, b) {
         const r = telcoOps.agentRequestCashOut(w, t, b.agent, { msisdn: str(b.msisdn), amount: b.amount, card: str(b.card) });
-        return ok(`Request sent to ${r.payer_msisdn}. The customer must dial ${getConfig(w.db, `telco.${t}`).menu.shortcode}, choose option 4 and approve with their PIN. Pay out the cash only after it shows as SUCCESSFUL below.`);
+        return ok(`Request sent to ${r.payer_msisdn}. The customer must dial ${getConfig(w.db, `telco.${t}`).menu.shortcode}, ${approvalsPath(w, t)} and approve with their PIN. Pay out the cash only after it shows as SUCCESSFUL below.`);
       },
       send_float(w, b) {
         return ok(telcoOps.agentSendFloat(w, t, b.agent, { toCode: str(b.toCode), amount: b.amount, pin: str(b.pin) }).message);
@@ -598,7 +598,7 @@ function careSystem(t: Telco): System {
     view(w, q) {
       return {
         telco: t,
-        brand: { ...brand, logo: telcoLogo(t) },
+        brand: { ...brand, logo: telcoLogo(t), approvals: approvalsPath(w, t) },
         endpoint: careEndpoint(t),
         waiting: careQueue(w, t),
         stats: {
@@ -630,7 +630,7 @@ function careSystem(t: Telco): System {
       },
       ask_recipient(w, b) {
         care.requestConsent(w, t, b.ticket, by);
-        return ok("The recipient has been asked by SMS. They answer from their phone, under option 4.");
+        return ok(`The recipient has been asked by SMS. They answer from their phone: dial ${getConfig(w.db, `telco.${t}`).menu.shortcode}, ${approvalsPath(w, t)}.`);
       },
       return_funds(w, b) {
         const r = care.returnFunds(w, t, b.ticket, by);
@@ -693,6 +693,7 @@ const phone: System = {
         simStatus: sim.status,
         owner: lines.find((l) => l.msisdn === sim.msisdn)?.owner ?? "",
         shortcode: getConfig(w.db, `telco.${sim.telco}`).menu.shortcode,
+        approvalsPath: approvalsPath(w, sim.telco),
         codes: [
           { code: getConfig(w.db, `telco.${sim.telco}`).menu.shortcode, label: brand.wallet },
           ...(!wallet && getConfig(w.db, `telco.${sim.telco}`).selfRegistration && getConfig(w.db, `telco.${sim.telco}`).registration?.code ? [{ code: getConfig(w.db, `telco.${sim.telco}`).registration!.code!, label: `Register for ${brand.wallet}` }] : []),

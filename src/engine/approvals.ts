@@ -7,6 +7,7 @@ import { notify } from "./notify";
 import { walletPay, type Receipt } from "./payments";
 import { MINUTE, SimError, cedis, toIntl } from "./util";
 import type { World } from "./world";
+import { callOut } from "./outside";
 
 /**
  * Payments that wait for the payer to say yes on their own phone: an agent's cash-out request,
@@ -250,7 +251,7 @@ async function callback(w: World, ref: string) {
   const r = getApproval(w, ref);
   if (!r?.callback_url) return;
   try {
-    await fetch(r.callback_url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ referenceId: ref, ...approvalView(r) }), signal: AbortSignal.timeout(3000) });
+    await callOut(r.callback_url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ referenceId: ref, ...approvalView(r) }), timeoutMs: 3000 });
   } catch {
     // Callbacks are best effort, as with the real API.
   }

@@ -2,7 +2,8 @@ import { approve, createApproval, rejectApproval, type ApprovalRow } from "./app
 import { scriptedCall, scriptedCallEnd } from "./calls";
 import { getConfig } from "./config/store";
 import { count } from "./db";
-import { Confirm, checkUrl, runWithIntegrations } from "./integrations";
+import { Confirm, runWithIntegrations } from "./integrations";
+import { checkUrl } from "./outside";
 import { feeFor } from "./ledger";
 import { enrol } from "./nia";
 import { bankToWallet, walletPay, type Receipt } from "./payments";

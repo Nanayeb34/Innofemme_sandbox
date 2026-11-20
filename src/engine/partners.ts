@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accountByNumber, getAccount, getWallet, type AccountRow, type WalletRow } from "./ledger";
 import { BANK_IDS, SimError, bankName, isTelco, need, participantName } from "./util";
 import { audit, type World } from "./world";
+import { checkUrl } from "./outside";
 
 /**
  * API partners: companies an institution has given programmatic access to, the way a telco, a bank,
@@ -46,8 +47,7 @@ export function createClient(w: World, institution: string, input: { name?: stri
     account = accountByNumber(w, String(need(input.accountNo, "The partner's account at this bank")));
     if (!account || account.bank !== institution || account.kind !== "personal") throw new SimError("That account is not held at this bank");
   }
-  const callbackUrl = input.callbackUrl?.trim() || null;
-  if (callbackUrl && !/^https?:\/\//.test(callbackUrl)) throw new SimError("The callback address must start with http:// or https://");
+  const callbackUrl = input.callbackUrl?.trim() ? checkUrl(input.callbackUrl, "The callback address") : null;
   const id = input.id ?? randomUUID();
   if (getClient(w, id)) throw new SimError("That client id is already in use");
   w.db

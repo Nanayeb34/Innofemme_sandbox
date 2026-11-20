@@ -115,6 +115,9 @@ Besides the consoles, each institution has the API it would give an outside comp
 | National switch | `/api/w/{team}/ghipss` | Participants, name enquiry across banks and networks, status of a routed payment. |
 | NIA | `/api/w/{team}/nia` | Ghana Card verification: valid or not with the card number, the holder's details on a fingerprint match. |
 
+A team's own web page can call any of these, and the console API, straight from the browser: every address
+under `/api/w/` answers requests from other sites, as long as the key or credentials are sent in a header.
+
 Subscriber details, texts, payments and identity checks are what licensed partners get in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries and could not be confirmed for Ghana. Not included: an outside company cannot see a network's full transaction feed, freeze a wallet or block a SIM; those stay inside the institution (the console API).
 
 ## Plug-in points
@@ -148,6 +151,13 @@ answer, and acts on it.
 sent. The API reference inside the app (section 7) shows exactly what is sent at each step.
 
 With nothing plugged in, the sandbox behaves exactly as it did before.
+
+**Where the API may live.** Run on your own machine or in a Codespace, the sandbox will call an API on
+`localhost`. The Docker image, which is what a shared server runs, sets `SANDBOX_PRIVATE_ADDRESSES=block`:
+there, every address a team types in (plug-in APIs, USSD applications, callbacks, applications for the Fraud
+API) must be reachable from the internet, and addresses on the server's own machine or private network are
+refused. The address is checked when it is typed and again at the moment of connecting, and redirects are
+not followed.
 
 ## Simulated data
 
@@ -243,7 +253,7 @@ A customer raises a complaint by calling 100 (a real voice call to their network
 A dispute over a wallet-to-wallet payment is worked where the money now is, on the recipient's network:
 
 1. **Hold.** Care moves whatever the recipient still has of the disputed amount out of their wallet, so it cannot be spent.
-2. **Ask the recipient.** The recipient gets an SMS and answers on their own phone (option 4): agree with their PIN, or refuse.
+2. **Ask the recipient.** The recipient gets an SMS and answers on their own phone, where their network's menu keeps requests to approve (see the table above): agree with their PIN, or refuse.
 3. **Return or reject.** Held money goes back to the sender, with the fee when everything is recovered; or the claim is rejected and the hold is released.
 
 When the recipient is on another network, the sender's network cannot touch the money. It sends the dispute through the national switch; the recipient's network gets a ticket of its own and decides, and the sender's ticket follows along. Returned money travels back through the switch. A disputed cash-out is reversed in full, including the agent's till and commission.
@@ -278,7 +288,7 @@ Dial another registered number from the phone and that phone rings; the two peop
 
 ## Deploying (GCP)
 
-All worlds run in a single process: USSD sessions live in memory and the worlds are SQLite files. Run it on **one Compute Engine VM** (e2-standard-2 is plenty for 10 teams) with a persistent disk, not on autoscaled Cloud Run. `deploy/gcp.sh` sets this up.
+All worlds run in a single process: USSD sessions live in memory and the worlds are SQLite files. Run it on **one Compute Engine VM** with a persistent disk (e2-standard-2: with 20 teams each on the simulated country, 100 phones and 80 consoles open at once used about half of one processor core, and screens answered in under a tenth of a second), not on autoscaled Cloud Run. `deploy/gcp.sh` sets this up.
 
 ```bash
 docker build -t momo-sandbox .
@@ -293,4 +303,3 @@ The same image runs the venue's offline back-up server. Copy `/data` from the cl
 - GhIPSS products not yet modelled: the national QR code, Proxy Pay and its own Request to Pay.
 - Menu trees: wording approximates the live menus. Replace it with the telcos' trees when they arrive.
 - An AI assistant to help non-coders find their way around the systems.
-- Fraud scenarios: removed for now; to be designed on top of this base.
