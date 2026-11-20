@@ -622,6 +622,30 @@ describe("access links", () => {
     expect(roleOfKey(one, undefined)).toBeUndefined();
     expect([roleHome("team-01", "team"), roleHome("team-01", "customer"), roleHome("team-01", "agent")]).toEqual(["/t/team-01", "/t/team-01/phone", "/t/team-01/agent"]);
   });
+
+  it("keeps the consoles and the phone apart, so neither can take the other away from a device", async () => {
+    const { savedRole, consoleCookie, phoneCookie } = await import("../src/server/http");
+    const { registry, roleKey } = await import("../src/engine/worlds");
+    const t = registry().teams[0];
+    const console_ = `${consoleCookie(t.id)}=${t.key}`;
+    const customer = `${phoneCookie(t.id)}=${roleKey(t, "customer")}`;
+    const agent = `${phoneCookie(t.id)}=${roleKey(t, "agent")}`;
+    expect(savedRole(t, null)).toBeUndefined();
+    expect(savedRole(t, customer)).toBe("customer");
+    expect(savedRole(t, `other=1; ${agent}`)).toBe("agent");
+    // A device that has opened the team link is a console, whatever phone code it opened before or after.
+    expect(savedRole(t, `${customer}; ${console_}`)).toBe("team");
+    expect(savedRole(t, `${console_}; ${agent}`)).toBe("team");
+    // What a browser kept before the two were separated still counts, and can no longer hide the team link.
+    expect(savedRole(t, `momo_${t.id}=${t.key}`)).toBe("team");
+    expect(savedRole(t, `momo_${t.id}=${roleKey(t, "customer")}`)).toBe("customer");
+    expect(savedRole(t, `momo_${t.id}=${roleKey(t, "customer")}; ${console_}`)).toBe("team");
+    // The same name sent twice: the widest access wins.
+    expect(savedRole(t, `momo_${t.id}=${roleKey(t, "customer")}; momo_${t.id}=${t.key}`)).toBe("team");
+    // A key for another team, or a wrong one, opens nothing.
+    expect(savedRole(t, `${consoleCookie(t.id)}=${registry().teams[1].key}`)).toBeUndefined();
+    expect(savedRole(t, `${consoleCookie(t.id)}=nonsense`)).toBeUndefined();
+  });
 });
 
 describe("fees", () => {

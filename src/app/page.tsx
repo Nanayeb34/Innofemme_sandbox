@@ -2,16 +2,16 @@ import Link from "next/link";
 import { InnofemmeLogo } from "@/components/brand";
 import { TelcoMark } from "@/components/telco-mark";
 import { telcoLogos } from "@/server/logos";
-import { cookies } from "next/headers";
-import { registry, roleHome, roleOfKey } from "@/engine/worlds";
-import { teamCookie } from "@/server/http";
+import { headers } from "next/headers";
+import { registry, roleHome } from "@/engine/worlds";
+import { savedRole } from "@/server/http";
 
 export default async function Home() {
   const logos = telcoLogos();
   // Teams this browser has already joined by scanning their QR card.
-  const jar = await cookies();
+  const kept = (await headers()).get("cookie");
   const joined = registry()
-    .teams.map((t) => ({ ...t, role: roleOfKey(t, jar.get(teamCookie(t.id))?.value) }))
+    .teams.map((t) => ({ ...t, role: savedRole(t, kept) }))
     .filter((t) => t.role);
   return (
     <main className="flex flex-1 flex-col">

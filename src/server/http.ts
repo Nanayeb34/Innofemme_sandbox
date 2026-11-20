@@ -2,11 +2,39 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { ConfigError } from "@/engine/config/store";
-import { getWorld, registry, roleOfKey, teamById, ORGANISER_WORLD, type Role } from "@/engine/worlds";
+import { getWorld, registry, roleOfKey, teamById, ORGANISER_WORLD, type Role, type Team } from "@/engine/worlds";
 import { SimError } from "@/engine/util";
 import type { World } from "@/engine/world";
 
-export const teamCookie = (team: string) => `momo_${team}`;
+/**
+ * What a browser keeps after opening a team's link or scanning a phone code. The consoles and the
+ * phone screens are kept under different names, so opening one can never replace or hide the other:
+ * a device that has ever opened the team link is a console, whatever else it has opened.
+ */
+export const consoleCookie = (team: string) => `momo_${team}_console`;
+export const phoneCookie = (team: string) => `momo_${team}_phone`;
+/** The single name used before the two were kept apart. Still honoured. */
+const earlierCookie = (team: string) => `momo_${team}`;
+
+/** The role a browser holds for a team, from everything it has kept. The widest access wins. */
+export function savedRole(team: Team, cookieHeader: string | null | undefined): Role | undefined {
+  const names = [consoleCookie(team.id), phoneCookie(team.id), earlierCookie(team.id)];
+  const roles: Role[] = [];
+  // Read from the raw header, so that nothing is missed if a browser sends the same name twice.
+  for (const name of names) {
+    for (const part of (cookieHeader ?? "").split(";")) {
+      const eq = part.indexOf("=");
+      if (eq < 0 || part.slice(0, eq).trim() !== name) continue;
+      let value = part.slice(eq + 1).trim();
+      try {
+        value = decodeURIComponent(value);
+      } catch {}
+      const role = roleOfKey(team, value);
+      if (role) roles.push(role);
+    }
+  }
+  return roles.includes("team") ? "team" : roles[0];
+}
 export const ORG_COOKIE = "momo_org";
 
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -38,8 +66,7 @@ export async function isOrganiser(req?: Request): Promise<boolean> {
 export async function requestRole(req: Request, team: string): Promise<Role | undefined> {
   const t = teamById(team);
   if (!t) return undefined;
-  const jar = await cookies();
-  const roles = [presentedKey(req), jar.get(teamCookie(team))?.value].map((k) => roleOfKey(t, k)).filter(Boolean) as Role[];
+  const roles = [roleOfKey(t, presentedKey(req)), savedRole(t, req.headers.get("cookie"))].filter(Boolean) as Role[];
   if (roles.includes("team") || (await isOrganiser(req))) return "team";
   return roles[0];
 }

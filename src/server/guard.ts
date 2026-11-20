@@ -1,6 +1,6 @@
-import { cookies } from "next/headers";
-import { ORGANISER_WORLD, roleOfKey, teamById, type Role } from "@/engine/worlds";
-import { isOrganiser, teamCookie } from "./http";
+import { headers } from "next/headers";
+import { ORGANISER_WORLD, teamById, type Role } from "@/engine/worlds";
+import { isOrganiser, savedRole } from "./http";
 
 /** Server-side page guard: what this browser may open in a team's world, or null for nothing. */
 export async function teamRole(team: string): Promise<Role | null> {
@@ -8,8 +8,7 @@ export async function teamRole(team: string): Promise<Role | null> {
   const t = teamById(team);
   if (!t) return null;
   if (await isOrganiser()) return "team";
-  const jar = await cookies();
-  return roleOfKey(t, jar.get(teamCookie(team))?.value) ?? null;
+  return savedRole(t, (await headers()).get("cookie")) ?? null;
 }
 
 /** True when the browser holds the team's own key (or organiser access), which opens every system. */
