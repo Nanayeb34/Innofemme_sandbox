@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { roleHome, roleOfKey, teamById } from "@/engine/worlds";
-import { publicOrigin, teamCookie } from "@/server/http";
+import { isOrganiser, publicOrigin, teamCookie } from "@/server/http";
 
 /**
  * The QR code target. The key in the link says what it opens: the team's systems, only the customer
@@ -16,6 +16,8 @@ export async function GET(req: Request, ctx: RouteContext<"/join/[team]">) {
   const res = NextResponse.redirect(new URL(roleHome(team, role), publicOrigin(req)));
   // A browser that already holds the team's own key keeps it: scanning a phone code must not lock a teammate out of the consoles.
   const held = roleOfKey(t, (await cookies()).get(teamCookie(team))?.value);
-  if (held !== "team") res.cookies.set(teamCookie(team), key, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 14 });
+  // An organiser trying out a phone code keeps the consoles too, including after signing out.
+  const keep = held === "team" ? undefined : role !== "team" && (await isOrganiser(req)) ? t.key : key;
+  if (keep) res.cookies.set(teamCookie(team), keep, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 14 });
   return res;
 }

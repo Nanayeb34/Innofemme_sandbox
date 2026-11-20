@@ -26,8 +26,9 @@ show_links() {
   echo "================ Mobile Money Sandbox ================"
   pnpm -s sandbox:info "$PUBLIC_URL" 2>/dev/null
   echo
-  echo "Sign in at ${PUBLIC_URL}/organiser to print every team's QR cards,"
-  echo "or open a team link above: its page shows the customer and agent phone codes."
+  echo "To use a laptop and a phone together: open a team link above on the LAPTOP (that is the console),"
+  echo "then scan the customer or agent code shown on that page with the PHONE."
+  echo "Sign in at ${PUBLIC_URL}/organiser to print every team's QR cards."
   echo "======================================================"
 }
 

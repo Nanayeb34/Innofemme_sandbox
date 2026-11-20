@@ -33,12 +33,15 @@ export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">)
   if (!allowed(role, system)) {
     return (
       <main className="mx-auto flex max-w-md flex-1 flex-col items-center justify-center px-6 text-center">
-        <h1 className="text-xl font-semibold text-gray-900">{role === "customer" ? "This phone is a customer phone" : "This phone is an agent phone"}</h1>
-        <p className="mt-2 text-sm text-gray-600">The code you scanned opens only that screen. The other systems are run from your team&apos;s laptops.</p>
-        <Link href={roleHome(team, role)} className="btn btn-dark mt-4">
+        <h1 className="text-xl font-semibold text-gray-900">{role === "customer" ? "This device is set up as a customer phone" : "This device is set up as an agent phone"}</h1>
+        <p className="mt-2 text-sm text-gray-600">
+          It opened the {role} phone code, which shows only {role === "customer" ? "the phone" : "the agent screens"}. The consoles have their own, different link: your <b>team link</b>. Open the team link on this device, or enter the team key below, and it
+          becomes a console. Other devices are not affected.
+        </p>
+        <TeamKey team={team} label="Enter your team key to use this device for the consoles" />
+        <Link href={roleHome(team, role)} className="mt-4 text-sm text-gray-600 underline">
           {role === "customer" ? "Back to the phone" : "Back to the agent screens"}
         </Link>
-        <TeamKey team={team} label="To use this device for the consoles instead, enter your team key" />
       </main>
     );
   }
