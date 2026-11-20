@@ -14,6 +14,7 @@ import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments
 import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
+import { createTestCustomer } from "@/engine/testcustomer";
 import { approvalsPath, atmOf, atmWithdraw, billersOf, bundlesOf, offersAtm } from "@/engine/services";
 import { AIRTIME_CODE, LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE } from "@/engine/ussd";
 import { allocateCode, dial, listCodes, revokeCode, setActivation } from "@/engine/ussdapps";
@@ -215,7 +216,13 @@ const hub: System = {
       })(),
     };
   },
-  actions: { txn: txnDetail },
+  actions: {
+    txn: txnDetail,
+    test_customer(w, b) {
+      const c = createTestCustomer(w, { network: b.network, amount: b.amount });
+      return ok(`${c.name} is ready: ${c.number} on ${c.networkName}, wallet PIN ${c.pin}, GHS ${c.balance.toFixed(2)} in the wallet.`, { customer: c });
+    },
+  },
 };
 
 // ---------- fraud console ----------

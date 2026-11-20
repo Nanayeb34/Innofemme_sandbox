@@ -281,7 +281,7 @@ export default function Fraud({ team }: { team: string }) {
           <>
             For a product that is its own application, not an API plugged into an institution. Connect it here (or let it connect itself, see the{" "}
             <Link className="underline" href={`/t/${team}/docs#fraud`}>
-              API reference
+              documentation
             </Link>
             ) with the kinds of fraud it is built to stop. Chosen above, it is sent every step of each incident, in the same format a plugged-in API receives, and answers allow, warn, delay or reject.
           </>

@@ -1006,6 +1006,35 @@ describe("plug-in points: an outside API plugged into an institution's own steps
   });
 });
 
+describe("a ready test customer in one step", () => {
+  it("makes a person, a registered number and a funded wallet with a known PIN, in an empty world, on any network", async () => {
+    const { createTestCustomer } = await import("../src/engine/testcustomer");
+    const w = await resetWorld("team-01");
+    const made = (["mtn", "telecel", "at"] as const).map((network) => createTestCustomer(w, { network }));
+    for (const c of made) {
+      expect(c).toMatchObject({ network: expect.any(String), kyc: "medium", balance: 500 });
+      expect(c.pin).toMatch(/^\d{4}$/);
+      expect(walletByMsisdn(w, c.number)).toMatchObject({ pin: c.pin, kyc_tier: "medium", balance: 50000, status: "active" });
+      // The phone works straight away: the menu opens without asking for a new PIN.
+      expect(dial(w, c.number, c.walletCode).text).toMatch(/1\)/);
+    }
+    // A second customer on the same network uses the service centre that is already there.
+    const second = createTestCustomer(w, { network: "mtn", amount: 0 });
+    expect(second.balance).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM sim_agents WHERE telco = 'mtn'")).toBe(1);
+    // They can pay each other with the PIN they were told.
+    expect(dial(w, made[0].number, "*170#", "1", "1", second.number, second.number, "25", "hello", made[0].pin).text).toMatch(/GHS 25.00 sent to/);
+    expect(walletByMsisdn(w, second.number)!.balance).toBe(2500);
+    // From the console API it is one call, and the books still balance.
+    const viaApi = resolveSystem(["hub"]).actions.test_customer(w, { network: "telecel", amount: 100 }) as { ok: boolean; customer: { number: string; pin: string; balance: number } };
+    expect(viaApi).toMatchObject({ ok: true, customer: { balance: 100 } });
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)")).toBe(0);
+    expect(JSON.stringify(view(w, "bog"))).not.toContain('"backed":false');
+    expect(() => createTestCustomer(w, { amount: 999999 })).toThrow(/between GHS 0 and GHS 5,000/);
+    await resetWorld("team-01");
+  });
+});
+
 describe("addresses teams type in, on a server every team shares", () => {
   it("only addresses out on the internet are called; on your own machine, local ones are fine", async () => {
     const { checkUrl, callOut, guardedLookup } = await import("../src/engine/outside");

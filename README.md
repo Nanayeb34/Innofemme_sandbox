@@ -64,7 +64,8 @@ A Codespace holds the code as it was when the Codespace was created. To bring in
 | `/t/{team}/switch` | The national switch (GhIPSS in real life) | Connect and disconnect participants, watch the message log, see each participant's position, run net settlement, follow disputes between networks. |
 | `/t/{team}/bog` | Bank of Ghana | KYC tier limits for all networks; check that every telco's e-money is backed by its trust account. |
 | `/t/{team}/nca` | National Communications Authority | SIM registration rules (SIMs per Ghana Card, minimum age, approval from the first number); the central SIM register across networks. |
-| `/t/{team}/docs` | | API reference with the team's own base URL and key. |
+| `/docs` | | The documentation, open to anyone: getting started, starter kits, every API, troubleshooting. |
+| `/t/{team}/docs` | | The same documentation with the team's own base URL and key filled into every example. |
 
 There are **two kinds of agent**, as in real life. SIM registration points are authorised by a telco to register and fix SIMs; the telco is answerable for them. Mobile money agents handle cash and e-money on a dedicated agent line with its own float.
 
@@ -101,6 +102,27 @@ These are the main design decisions:
 - **Settlement is deferred.** Payments between institutions clear at once but move money only when the switch settles. A telco settles through its trust account at its partner bank; banks settle across their accounts at the Bank of Ghana.
 - **One SQLite file per world** (Node's built-in `node:sqlite`). Save points, rollback and reset are file operations, and the offline back-up needs no database server.
 - **Biometrics are a code.** NIA gives each person a fingerprint code that stands in for their fingerprints. It must be presented wherever a biometric check is done.
+
+## Documentation and starter kits
+
+The documentation is part of the sandbox, so it cannot fall out of step with it. `/docs` is open to
+anyone, with placeholders where a team's address and key would be, so participants can read it before
+they have a team link. `/t/{team}/docs` is the same page with that team's own address and key filled in.
+It has four parts: getting started (including a first 15 minutes), the starter kits, the full API
+reference, and what to do when something goes wrong.
+
+The starter kits are in `examples/`, are shown on that page and can be downloaded from it. They need
+nothing installed beyond Python or Node.js, and show how to connect, not what to build.
+
+| File | What it is |
+| --- | --- |
+| `plugin_api.py`, `plugin-api.mjs` | An API an institution plugs into its own steps. Answers "allow" and prints what it was sent. The Fraud API can send incidents to it too. |
+| `app.py`, `app.mjs` | An application of your own: signs in to a network with partner credentials, then makes one call of each kind, including a request to pay. |
+
+**A ready test customer.** The team home page has a button, and the console API a call
+(`POST /api/w/{team}/s/hub {"action":"test_customer","network":"mtn"}`), that makes a new person, registers
+a number for them, opens a wallet on medium KYC with GHS 500 and tells you the PIN. Each part is done the
+way the institutions do it, so it works in an empty world and in the simulated country alike.
 
 ## Partner APIs
 
@@ -147,8 +169,8 @@ answer, and acts on it.
 | `switch.route` | national switch | a payment is about to pass between two institutions | allow, reject |
 | `events` | all | after something has happened | nothing: it is only told |
 
-`examples/starter-api.mjs` is a starting point: it answers "allow" to everything and prints what it was
-sent. The API reference inside the app (section 7) shows exactly what is sent at each step.
+`examples/plugin_api.py` and `examples/plugin-api.mjs` are starting points: they answer "allow" to
+everything and print what they were sent. The documentation (section 7) shows exactly what is sent at each step.
 
 With nothing plugged in, the sandbox behaves exactly as it did before.
 

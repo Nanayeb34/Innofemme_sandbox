@@ -65,7 +65,7 @@ export function Plugins({ team, path, institution, view, onChange }: { team: str
             A team builds an API and puts it online. Enter its address here and choose the step it should be asked at. From then on {institution} sends it the details every time that step happens, and does what it answers. Nothing changes for anyone
             until an API is plugged in. The{" "}
             <Link className="underline" href={`/t/${team}/docs#plugins`}>
-              API reference
+              documentation
             </Link>{" "}
             shows what is sent at each step and how to answer.
           </>

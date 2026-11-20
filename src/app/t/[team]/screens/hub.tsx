@@ -41,7 +41,7 @@ export default function Hub({ team, logos, phones, consoles }: { team: string; l
             <h1 className="text-lg font-semibold text-gray-900">{teamName(team)}: choose a system</h1>
           </div>
           <Link href={`${base}/docs`} className="btn">
-            API for coders
+            Documentation
           </Link>
         </div>
       </header>
@@ -139,6 +139,7 @@ export default function Hub({ team, logos, phones, consoles }: { team: string; l
               <Activity rows={data.activity} showSystem empty="Nothing yet. Start at NIA: issue the first Ghana Card." />
             </section>
 
+            <TestCustomer team={team} onChange={refresh} />
             <SimulatedData team={team} onChange={refresh} />
         <WorldTools team={team} onChange={refresh} />
           </>
@@ -279,6 +280,78 @@ interface DatasetView {
   files?: { name: string; about: string; rows: number; url: string }[];
 }
 const num = (n: number) => n.toLocaleString("en");
+
+interface Customer {
+  name: string;
+  ghanaCard: string;
+  fingerprint: string;
+  number: string;
+  network: string;
+  networkName: string;
+  walletCode: string;
+  pin: string;
+  balance: number;
+}
+
+/** A customer to try things with, without building one by hand: a person, a registered number and a funded wallet whose PIN is shown. */
+function TestCustomer({ team, onChange }: { team: string; onChange: () => void }) {
+  const [network, setNetwork] = useState("mtn");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [made, setMade] = useState<Customer[]>([]);
+  const create = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api<{ customer: Customer }>(team, "/s/hub", { body: { action: "test_customer", network } });
+      setMade((m) => [r.customer, ...m]);
+      onChange();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card mb-5 p-4">
+      <h2 className="font-semibold text-gray-900">A ready test customer</h2>
+      <p className="mt-0.5 text-sm text-gray-600">
+        Makes a new person with a Ghana Card, registers a number for them, opens their wallet and puts GHS 500 in it. You are shown the wallet PIN, so you can dial from their phone straight away. Write the PIN down: it is not shown again once you leave this page.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <select className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" value={network} onChange={(e) => setNetwork(e.target.value)} aria-label="Network">
+          {TELCOS.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <button className="btn btn-dark" disabled={busy} onClick={create}>
+          {busy ? "Creating…" : "Create a test customer"}
+        </button>
+        {msg && <span className="text-sm text-red-700">{msg}</span>}
+      </div>
+      {made.length > 0 && (
+        <ul className="mt-3 divide-y divide-gray-100 text-sm">
+          {made.map((c) => (
+            <li key={c.number} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2">
+              <span>
+                <span className="font-medium text-gray-900">{c.name}</span> · {c.networkName} <span className="font-mono">{c.number}</span> · wallet PIN <span className="font-mono font-semibold">{c.pin}</span> · GHS {c.balance.toFixed(2)}
+                <span className="block text-xs text-gray-500">
+                  Ghana Card <span className="font-mono">{c.ghanaCard}</span> · fingerprint <span className="font-mono">{c.fingerprint}</span> · dial <span className="font-mono">{c.walletCode}</span>
+                </span>
+              </span>
+              {/* The phone page opens on the number this browser last chose. */}
+              <Link href={`/t/${team}/phone`} onClick={() => localStorage.setItem(`phone:${team}`, c.number)} className="btn !py-1 !text-xs">
+                Open this phone
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 /** A ready-made country with three months of history, a known share of it fraud, to load in place of the empty world. */
 function SimulatedData({ team, onChange }: { team: string; onChange: () => void }) {
