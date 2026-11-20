@@ -11,7 +11,7 @@ import { Plugins, type PluginView } from "./plugins";
 interface TelcoView {
   telco: string;
   brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null };
-  stats: { simsInStock: number; simsActive: number; simsBlocked: number; wallets: number; agents: number; merchants: number; eMoney: number; revenue: number; onHold: number; openTickets: number; trustBalance: number; trustBank: string; switchPosition: number };
+  stats: { simsInStock: number; simsActive: number; simsBlocked: number; wallets: number; agents: number; merchants: number; eMoney: number; revenue: number; airtimeSales: number; owedToBillers: number; onHold: number; openTickets: number; trustBalance: number; trustBank: string; switchPosition: number };
   stock: { msisdn: string; iccid: string }[];
   sims: { msisdn: string; iccid: string; status: string; owner: string; card: string; registeredAt: string; registeredBy: string; lastSwapAt: string | null; blockReason: string | null; hasWallet: boolean }[];
   simAgents: { id: string; name: string; kind: string; town: string; status: string; owner: string; registered: number }[];
@@ -22,6 +22,8 @@ interface TelcoView {
   calls: { id: string; at: string; from: string; to: string; fromNetwork: string; toNetwork: string; status: string; reason: string | null; seconds: number }[];
   sms: { id: number; at: string; kind: string; from: string; fromNetwork: string; to: string; toNetwork: string; body: string; parts: number; status: string; reason: string | null }[];
   apiPartners: ApiPartner[];
+  services: { cashOut: string; bundles: { id: string; name: string; price: number; mb: number; days: number }[]; billers: { id: string; name: string; ask: string; token?: boolean }[]; atmBanks: string[]; registration: { code?: string; pinBySms?: boolean } };
+  bills: { id: string; at: string; biller: string; account: string; amount: number; token: string | null; from: string }[];
   plugins: PluginView["plugins"];
   pluginPoints: PluginView["pluginPoints"];
   pluginEvents: PluginView["pluginEvents"];
@@ -44,7 +46,7 @@ interface TelcoView {
 }
 
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
-const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["api", "API partners"], ["plugins", "Plug-ins"], ["settings", "Settings"]] as const;
+const TABS = [["overview", "Overview"], ["sims", "SIMs"], ["points", "SIM registration points"], ["wallets", "Wallets"], ["agents", "Mobile money agents"], ["merchants", "Merchants"], ["txns", "Transactions"], ["calls", "Calls"], ["sms", "SMS"], ["services", "Services"], ["api", "API partners"], ["plugins", "Plug-ins"], ["settings", "Settings"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 export default function TelcoConsole({ team, telco }: { team: string; telco: string }) {
@@ -64,7 +66,7 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
         <Stat label="E-money in wallets" value={ghs(s.eMoney)} sub={s.onHold ? `${ghs(s.onHold)} more on hold in disputes` : undefined} />
         <Stat label={`Trust account (${s.trustBank})`} value={ghs(s.trustBalance)} sub="backs the e-money" />
         <Stat label="Switch position" value={ghs(Math.abs(s.switchPosition))} sub={s.switchPosition > 0 ? "owed to others" : s.switchPosition < 0 ? "owed to us, unsettled" : "settled"} />
-        <Stat label="Fee income" value={ghs(s.revenue)} sub="after agent commission" />
+        <Stat label="Fee income" value={ghs(s.revenue)} sub={s.airtimeSales || s.owedToBillers ? `airtime sold ${ghs(s.airtimeSales)} · owed to billers ${ghs(s.owedToBillers)}` : "after agent commission"} />
       </Stats>
       <Tabs tabs={TABS} value={tab} onChange={setTab} />
 
@@ -374,6 +376,60 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
             ]}
           />
         </Section>
+      )}
+
+      {tab === "services" && (
+        <>
+          <Section title={`What a ${b.wallet} wallet can do from the phone`} hint={`Everything here is reached from ${b.shortcode}. The menu itself, the bundles, the billers and the partner banks are in Settings, where they can be changed.`}>
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Opening a wallet</dt>
+                <dd className="mt-0.5 text-gray-800">
+                  {data.services.registration.code ? `The subscriber dials ${data.services.registration.code}, or goes to an agent with their Ghana Card.` : `The subscriber dials ${b.shortcode}, or goes to an agent with their Ghana Card.`}{" "}
+                  {data.services.registration.pinBySms ? "At an agent, a starting PIN is texted to the customer, who must replace it the first time they open the menu." : "At an agent, the customer chooses their PIN."}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Withdrawing cash at an agent</dt>
+                <dd className="mt-0.5 text-gray-800">
+                  {data.services.cashOut === "customer_starts"
+                    ? "The customer starts it on their own phone: the agent's number, the amount, their PIN. The agent is told by text and hands over the cash."
+                    : "The agent checks the customer's Ghana Card and sends a request. The customer allows it on their phone with their PIN."}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Withdrawing at a cash machine</dt>
+                <dd className="mt-0.5 text-gray-800">{data.services.atmBanks.length ? `The customer gets a voucher from the phone and uses it at a ${data.services.atmBanks.join(" or ")} cash machine with their phone number. The money leaves the wallet when the machine pays out.` : "Not on this network's menu."}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Also on the menu</dt>
+                <dd className="mt-0.5 text-gray-800">Sending to wallets on any network and to bank accounts, paying merchants, moving money in from the owner&apos;s bank account, checking an agent before trusting one, and answering requests to approve.</dd>
+              </div>
+            </dl>
+          </Section>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Section title="Data bundles on sale" hint={`Airtime is bought in any amount. Sales so far: ${ghs(s.airtimeSales)}. A line's airtime and data show on *124#.`}>
+              <Table rows={data.services.bundles} empty="No bundles." cols={[{ label: "Bundle", cell: (x) => x.name }, { label: "Price", right: true, cell: (x) => ghs(x.price) }, { label: "Data", right: true, cell: (x) => `${x.mb.toLocaleString("en")} MB` }, { label: "Lasts", right: true, cell: (x) => `${x.days} day${x.days === 1 ? "" : "s"}` }]} />
+            </Section>
+            <Section title="Billers" hint={`Money collected for billers is held for them: ${ghs(s.owedToBillers)} so far.`}>
+              <Table rows={data.services.billers} empty="No billers." cols={[{ label: "Biller", cell: (x) => x.name }, { label: "The customer is asked", cell: (x) => x.ask }, { label: "", cell: (x) => (x.token ? <Badge tone="blue">returns a token</Badge> : "") }]} />
+            </Section>
+          </div>
+          <Section title="Bills paid">
+            <Table
+              rows={data.bills}
+              empty="No bills paid yet."
+              cols={[
+                { label: "Time", cell: (x) => <span className="whitespace-nowrap text-gray-500">{when(x.at)}</span> },
+                { label: "Biller", cell: (x) => x.biller },
+                { label: "Account", cell: (x) => <span className="font-mono text-xs">{x.account}</span> },
+                { label: "Paid from", cell: (x) => <span className="font-mono text-xs">{x.from}</span> },
+                { label: "Amount", right: true, cell: (x) => ghs(x.amount) },
+                { label: "Token", cell: (x) => <span className="font-mono text-[11px]">{x.token}</span> },
+              ]}
+            />
+          </Section>
+        </>
       )}
 
       {tab === "plugins" && <Plugins team={team} path={path} institution={b.name} view={data} onChange={refresh} />}

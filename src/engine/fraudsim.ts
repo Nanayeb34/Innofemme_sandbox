@@ -421,13 +421,24 @@ async function cashOut(inc: Incident, who: string, holder: Line, amount: number)
     if (agent.cash < give * 100) w.db.prepare("UPDATE momo_agents SET cash = cash + ? WHERE code = ?").run(give * 100 + ghs(2000), agent.code);
   });
   const what = `${who} withdraws the money as cash at an agent`;
-  const req = await attempt(inc, what, () => telcoOps.agentRequestCashOut(w, holder.telco, agent.code, { msisdn: holder.msisdn, amount: give, card: holder.card }));
-  if (!req.value) return void inc.end("contained", "The cash-out was refused, so the money is still in the system", req.stop);
-  const ref = (req.value as ApprovalRow).ref;
-  const blocked = await crookPays(inc, what, holder, agent.id, (ack) => approve(w, ref, holder.pin, ack));
+  const blocked = await takeCash(inc, what, holder, agent, give);
   if (blocked) return void inc.end("contained", "The cash-out was refused, so the money is still in the system", blocked);
   inc.lost += give * 100;
 }
+/**
+ * A withdrawal at an agent, done the way the line's network does it: the agent sends a request and the
+ * holder of the line allows it (MTN), or the holder starts it with the agent's number (Telecel, AT).
+ * Returns what stopped it, if anything did.
+ */
+async function takeCash(inc: Incident, what: string, holder: Line, agent: { code: string; id: string }, give: number): Promise<Seen | undefined> {
+  const w = inc.w;
+  if (telcoOps.cashOutMode(w, holder.telco) === "customer_starts")
+    return crookPays(inc, what, holder, agent.id, (acknowledged) => walletPay(w, { type: "cashout", channel: "ussd", from: holder.id, to: agent.id, amount: give * 100, pin: holder.pin, acknowledged }));
+  const req = await attempt(inc, what, () => telcoOps.agentRequestCashOut(w, holder.telco, agent.code, { msisdn: holder.msisdn, amount: give, card: holder.card }));
+  if (!req.value) return req.stop ?? { key: "", institution: holder.telco, point: "payment.request", decision: "reject" };
+  return crookPays(inc, what, holder, agent.id, (ack) => approve(w, (req.value as ApprovalRow).ref, holder.pin, ack));
+}
+
 /** After the victim's money has arrived: sometimes through a second wallet, then out as cash. */
 async function moveOn(inc: Incident, holder: Line, amount: number, hops = inc.rng.chance(0.6) ? 1 : 0): Promise<void> {
   const w = inc.w;
@@ -608,10 +619,7 @@ const PLAY: Record<string, (inc: Incident) => Promise<void>> = {
     await quiet(inc.r, () => {
       if (agent.cash < give * 100) w.db.prepare("UPDATE momo_agents SET cash = cash + ? WHERE code = ?").run(give * 100 + ghs(2000), agent.code);
     });
-    const what = "A complicit agent withdraws from the victim's wallet";
-    const req = await attempt(inc, what, () => telcoOps.agentRequestCashOut(w, victim.telco, agent.code, { msisdn: victim.msisdn, amount: give, card: victim.card }));
-    if (!req.value) return inc.end("stopped", "The withdrawal request was refused", req.stop);
-    const blocked = await crookPays(inc, what, victim, agent.id, (ack) => approve(w, (req.value as ApprovalRow).ref, victim.pin, ack));
+    const blocked = await takeCash(inc, "A complicit agent withdraws from the victim's wallet", victim, agent, give);
     if (blocked) return inc.end("stopped", "The withdrawal was blocked", blocked);
     inc.paid = inc.lost = give * 100;
   },
@@ -847,6 +855,8 @@ const ORDINARY: [string, number, (inc: Incident) => Promise<void>][] = [
     await quiet(inc.r, () => {
       if (agent.cash < give * 100) w.db.prepare("UPDATE momo_agents SET cash = cash + ? WHERE code = ?").run(ghs(5000), agent.code);
     });
+    if (telcoOps.cashOutMode(w, from.telco) === "customer_starts")
+      return honestPays(inc, "The customer withdraws cash at an agent", (acknowledged) => walletPay(w, { type: "cashout", channel: "ussd", from: from.id, to: agent.id, amount: give * 100, pin: from.pin, acknowledged }), false);
     const req = await attempt(inc, "The customer asks an agent for cash", () => telcoOps.agentRequestCashOut(w, from.telco, agent.code, { msisdn: from.msisdn, amount: give, card: from.card }));
     if (!req.value) return inc.end("blocked", "The customer's withdrawal was refused", req.stop);
     await honestPays(inc, "The customer approves the withdrawal", (ack) => approve(w, (req.value as ApprovalRow).ref, from.pin, ack), false);

@@ -2,7 +2,7 @@ import { randomInt } from "node:crypto";
 import { getConfig } from "./config/store";
 import type { KycTier } from "./config/schemas";
 import { count, tx } from "./db";
-import { getWallet, walletByMsisdn, type WalletRow } from "./ledger";
+import { clearTemporaryPin, getWallet, markTemporaryPin, walletByMsisdn, type WalletRow } from "./ledger";
 import { ageOf, fullName, personById, verify, type Person } from "./nia";
 import { createApproval } from "./approvals";
 import { consult, emit } from "./integrations";
@@ -48,6 +48,9 @@ const pinOk = (pin: unknown): string => {
   if (!/^\d{4}$/.test(String(pin ?? ""))) throw new SimError("PIN must be 4 digits");
   return String(pin);
 };
+
+/** Who starts a withdrawal at an agent on this network: the agent, with the customer approving (MTN), or the customer, on their own phone (Telecel, AT). */
+export const cashOutMode = (w: World, telco: Telco) => getConfig(w.db, `telco.${telco}`).cashOut ?? "agent_requests";
 
 /** How a customer is described to an API the network has plugged in. */
 const customerOf = (p: Person | undefined) => (p ? { name: fullName(p), ghanaCard: p.ghana_card, dateOfBirth: p.dob, gender: p.gender, region: p.region } : null);
@@ -306,6 +309,16 @@ export function agentRegisterWallet(w: World, telco: Telco, agentCode: unknown, 
     if (existing.owner_type !== "person" || existing.kyc_tier !== "minimum") throw new SimError(`${sim.msisdn} already has a wallet on ${existing.kyc_tier} KYC`);
     return upgradeTier(w, telco, sim.msisdn, "medium", `agent ${agent.code}`);
   }
+  // On a network that texts a starting PIN, the agent never learns it: the customer replaces it the first time they open the menu.
+  if (getConfig(w.db, `telco.${telco}`).registration?.pinBySms && !input.pin) {
+    const pin = digits(4);
+    return tx(w.db, () => {
+      const wallet = openWallet(w, sim, { pin, tier: "medium", ownerType: "person", displayName: fullName(p), by: `agent ${agent.name} (${agent.code})` });
+      markTemporaryPin(w, wallet.id);
+      sendSms(w, sim.msisdn, TELCO_INFO[telco].wallet.replace(/\s/g, ""), `Your starting ${TELCO_INFO[telco].wallet} PIN is ${pin}. Dial ${TELCO_INFO[telco].shortcode} now to create your own secret PIN. Never share your PIN.`);
+      return wallet;
+    });
+  }
   return tx(w.db, () => openWallet(w, sim, { pin: acceptPin(w, sim.msisdn, input.pin, "new_wallet"), tier: "medium", ownerType: "person", displayName: fullName(p), by: `agent ${agent.name} (${agent.code})` }));
 }
 
@@ -356,6 +369,7 @@ export function resetPin(w: World, telco: Telco, by: string, input: { msisdn?: s
   const pin = digits(4);
   tx(w.db, () => {
     w.db.prepare("UPDATE wallets SET pin = ?, pin_fails = 0, status = CASE WHEN status = 'locked' THEN 'active' ELSE status END WHERE id = ?").run(pin, wallet.id);
+    markTemporaryPin(w, wallet.id);
     simEvent(w, sim.msisdn, "pin_reset", by, "Owner verified with Ghana Card and fingerprint");
     notify(w, telco, "pin_reset", wallet.msisdn, { pin });
     audit(w, telco, "pin_reset", `Wallet PIN reset for ${wallet.msisdn} by ${by}`);
@@ -364,6 +378,7 @@ export function resetPin(w: World, telco: Telco, by: string, input: { msisdn?: s
 
 export function changePin(w: World, wallet: WalletRow, newPin: string) {
   w.db.prepare("UPDATE wallets SET pin = ? WHERE id = ?").run(acceptPin(w, wallet.msisdn, newPin, "change"), wallet.id);
+  clearTemporaryPin(w, wallet.id);
   emit(w, wallet.telco, "pin.changed", { msisdn: wallet.msisdn, network: wallet.telco });
 }
 
@@ -453,6 +468,8 @@ export function agentCashIn(w: World, telco: Telco, agentCode: unknown, input: {
  */
 export function agentRequestCashOut(w: World, telco: Telco, agentCode: unknown, input: { msisdn?: string; amount?: unknown; card?: string }) {
   const a = momoAgent(w, telco, agentCode);
+  if (cashOutMode(w, telco) === "customer_starts")
+    throw new SimError(`On ${TELCO_INFO[telco].wallet} the customer starts the withdrawal on their own phone: they dial ${TELCO_INFO[telco].shortcode}, choose to withdraw at an agent, and enter your agent number ${a.code}.`);
   const amount = amountOf(input.amount);
   const payer = ownWallet(w, telco, input.msisdn);
   const id = verify(w, { requester: telco, purpose: `Cash-out ID check at agent ${a.code}`, card: input.card, biometric: false });

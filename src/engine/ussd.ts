@@ -2,11 +2,12 @@ import { approve, getApproval, pendingFor, rejectApproval } from "./approvals";
 import { openTicket } from "./care";
 import { getConfig } from "./config/store";
 import type { Condition, FactName, Menu, MenuNode } from "./config/schemas";
-import { accountByNumber, checkPin, feeFor, getWallet, walletByMsisdn, type WalletRow } from "./ledger";
+import { accountByNumber, checkPin, feeFor, getWallet, hasTemporaryPin, walletByMsisdn, type WalletRow } from "./ledger";
 import { fullName, personById } from "./nia";
 import { render } from "./notify";
 import { Confirm, consult, emit } from "./integrations";
 import { toBankFee, walletPay, walletToBank, type Receipt } from "./payments";
+import { agentBy, atmVoucher, billersOf, bundlesOf, buyAirtime, buyBundle, fromOwnBank, lineBalanceText, ownAccount, payBill, verifyAgent, withdrawAtAgent } from "./services";
 import { changePin, getSim, pinProblem, selfRegisterWallet, type SimRow } from "./telco";
 import { SimError, TELCO_INFO, bankName, cedis, clock, newId, normalizeMsisdn } from "./util";
 import type { UssdSession, World } from "./world";
@@ -25,6 +26,8 @@ const MAX_STEPS = 50;
 export const REGISTRATION_CHECK_CODE = "*400#";
 /** Lists every number registered to the caller's Ghana Card, on all networks. */
 export const LINKED_SIMS_CODE = "*402*1#";
+/** Airtime and data balance, on every network. */
+export const AIRTIME_CODE = "*124#";
 export const OWN_NUMBER_CODE = { mtn: "*156#", telecel: "*127#", at: "*703#" } as const;
 const end = (text: string): Screen => ({ text, end: true });
 const show = (text: string): Screen => ({ text, end: false });
@@ -39,12 +42,22 @@ export function ussd(w: World, args: { sessionId?: string; msisdn: string; input
   const brand = TELCO_INFO[sim.telco];
 
   /** The first screen of the mobile money menu: the menu itself, or the offer to register. */
+  // Some networks open wallets from a code of their own rather than from the wallet's short code.
+  const registerCode = cfg.selfRegistration ? cfg.registration?.code : undefined;
   const opening = (session: UssdSession): Screen => {
     const wallet = walletByMsisdn(w, sim.msisdn);
+    const registering = !!registerCode && session.vars.dialled === registerCode;
     if (!wallet) {
       if (!cfg.selfRegistration) return end(`You are not registered for ${brand.wallet}. Visit a ${brand.wallet} agent with your Ghana Card.`);
+      if (registerCode && !registering) return end(`You are not registered for ${brand.wallet}. Dial ${registerCode} to register, or visit a ${brand.wallet} agent with your Ghana Card.`);
       session.pending = { kind: "register", data: { step: "offer" } };
       return show(`Welcome to ${brand.wallet}. This number has no wallet yet.\n1) Register now\n2) Cancel`);
+    }
+    if (registering) return end(`This number is already registered for ${brand.wallet}. Dial ${menu.shortcode} to use your wallet.`);
+    // A PIN the network issued has to be replaced before anything else.
+    if (hasTemporaryPin(w, wallet.id)) {
+      session.pending = { kind: "first_pin", data: { step: "given" } };
+      return show(`Welcome to ${brand.wallet}. Enter the PIN sent to you by SMS`);
     }
     return guard(() => advance(w, session, menu, wallet));
   };
@@ -55,9 +68,10 @@ export function ussd(w: World, args: { sessionId?: string; msisdn: string; input
     if (dialled === REGISTRATION_CHECK_CODE) return none(registrationStatus(w, sim));
     if (dialled === LINKED_SIMS_CODE) return none(linkedSims(w, sim));
     if (dialled === OWN_NUMBER_CODE[sim.telco]) return none(`Your number is ${sim.msisdn}`);
-    if (dialled === "*124#") return none("Airtime is not part of the sandbox.");
-    if (dialled !== menu.shortcode) return none(`Unknown USSD code. ${brand.wallet} is ${menu.shortcode}. Other codes: ${REGISTRATION_CHECK_CODE} registration status, ${LINKED_SIMS_CODE} numbers on your Ghana Card, ${OWN_NUMBER_CODE[sim.telco]} your number.`);
-    s = { id: newId("ussd"), msisdn: sim.msisdn, telco: sim.telco, node: menu.start, vars: {}, startedAt: Date.now(), lastAt: Date.now() };
+    if (dialled === AIRTIME_CODE) return none(lineBalanceText(w, sim.msisdn));
+    if (dialled !== menu.shortcode && dialled !== registerCode)
+      return none(`Unknown USSD code. ${brand.wallet} is ${menu.shortcode}.${registerCode ? ` Register with ${registerCode}.` : ""} Other codes: ${AIRTIME_CODE} airtime and data, ${REGISTRATION_CHECK_CODE} registration status, ${LINKED_SIMS_CODE} numbers on your Ghana Card, ${OWN_NUMBER_CODE[sim.telco]} your number.`);
+    s = { id: newId("ussd"), msisdn: sim.msisdn, telco: sim.telco, node: menu.start, vars: dialled === registerCode ? { dialled } : {}, startedAt: Date.now(), lastAt: Date.now() };
     w.ussd.set(s.id, s);
     // The network may have plugged in an API that has something to say before the menu opens.
     const wallet = walletByMsisdn(w, sim.msisdn);
@@ -179,6 +193,10 @@ function advance(w: World, s: UssdSession, menu: Menu, wallet: WalletRow): Scree
       case "branch":
         s.node = evaluate(node.if, facts(w, s, wallet)) ? node.then : node.else;
         continue;
+      case "set":
+        s.vars[node.var] = node.value;
+        s.node = node.next;
+        continue;
       case "action":
         return runAction(w, s, node.action, wallet);
       case "message":
@@ -208,21 +226,42 @@ function draft(w: World, s: UssdSession, wallet: WalletRow) {
   const recipient = v.recipient ? walletByMsisdn(w, v.recipient) : undefined;
   const merchant = v.till ? merchantWallet(w, v.till) : undefined;
   const bank = v.account ? accountByNumber(w, v.account) : undefined;
+  const agent = v.agent ? agentBy(w, wallet.telco, v.agent) : undefined;
+  const bundle = v.bundle ? bundlesOf(w, wallet.telco).find((b) => b.id === v.bundle) : undefined;
+  const biller = v.biller ? billersOf(w, wallet.telco).find((b) => b.id === v.biller) : undefined;
   const to = recipient ?? merchant;
-  const amount = v.amount ? Math.round(Number(v.amount) * 100) : 0;
+  const amount = bundle ? Math.round(bundle.price * 100) : v.amount ? Math.round(Number(v.amount) * 100) : 0;
   const cross = !!to && to.telco !== wallet.telco;
   const fees = getConfig(w.db, `telco.${wallet.telco}`).fees;
-  const fee = !amount ? 0 : v.till ? feeFor(fees.merchant, amount) : bank ? toBankFee(w, wallet, bank, amount) : feeFor(cross ? fees.p2p_offnet : fees.p2p_onnet, amount);
-  return { to, bank, amount, cross, fee };
+  // The menu says which service is being used ("service"), which decides the fee shown before the PIN.
+  const fee = !amount
+    ? 0
+    : v.service === "withdraw" || v.service === "atm"
+      ? feeFor(fees.cashout, amount)
+      : v.service === "airtime" || v.service === "bundle" || v.service === "frombank"
+        ? 0
+        : v.service === "bill" || v.till
+          ? feeFor(fees.merchant, amount)
+          : bank
+            ? toBankFee(w, wallet, bank, amount)
+            : feeFor(cross ? fees.p2p_offnet : fees.p2p_onnet, amount);
+  return { to, bank, agent, bundle, biller, amount, cross, fee };
 }
 
 function renderText(w: World, s: UssdSession, text: string, wallet: WalletRow): string {
   const v = s.vars;
   const d = draft(w, s, wallet);
+  const own = v.service === "frombank" ? ownAccount(w, wallet) : undefined;
   return render(text, {
     ...v,
-    amount: v.amount ? cedis(d.amount) : "",
-    recipient_name: d.to?.display_name ?? (d.bank ? `${d.bank.name} (${bankName(d.bank.bank)})` : v.recipient ? "Unregistered" : ""),
+    amount: d.amount ? cedis(d.amount) : "",
+    recipient_name: d.agent?.name ?? d.to?.display_name ?? (d.bank ? `${d.bank.name} (${bankName(d.bank.bank)})` : v.recipient ? "Unregistered" : ""),
+    agent_name: d.agent ? `${d.agent.name}, ${d.agent.town}` : "",
+    bundle_name: d.bundle?.name ?? "",
+    biller_name: d.biller?.name ?? "",
+    biller_ask: d.biller?.ask ?? "Enter account number",
+    top_up_to: v.airtime_to ?? "your number",
+    bank_name: own ? `${bankName(own.bank)} ${own.account_no}` : "your bank account",
     fee: cedis(d.fee),
     balance: cedis(wallet.balance),
     telco: TELCO_INFO[wallet.telco].wallet,
@@ -295,6 +334,17 @@ function acceptInput(w: World, s: UssdSession, varName: string, kind: string, in
       if (accountByNumber(w, input)?.kind !== "personal") return { text: "Account not found" };
       s.vars[varName] = input;
       return;
+    case "agent": {
+      const a = agentBy(w, wallet.telco, input);
+      if (!a) return { text: `That is not a ${TELCO_INFO[wallet.telco].name} agent number` };
+      if (a.status !== "active") return { text: "This agent is suspended and cannot serve you", end: true };
+      s.vars[varName] = a.code;
+      return;
+    }
+    case "biller_ref":
+      if (!/^[A-Za-z0-9-]{4,20}$/.test(input)) return { text: "Invalid number" };
+      s.vars[varName] = input;
+      return;
     default:
       s.vars[varName] = input.slice(0, 40);
   }
@@ -330,6 +380,23 @@ function runAction(w: World, s: UssdSession, action: string, wallet: WalletRow, 
     case "to_bank":
       if (!d.bank) return end("Account not found.");
       return pay(w, s, wallet, { kind: "warned", data: { action } }, () => walletToBank(w, { from: wallet.id, accountNo: d.bank!.account_no, amount: d.amount, pin: v.pin ?? "", reference: v.reference, channel: "ussd", acknowledged }));
+    case "withdraw_at_agent":
+      if (!d.agent) return end("Agent not found.");
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => withdrawAtAgent(w, wallet, { agent: d.agent!.code, amount: d.amount, pin: v.pin ?? "", acknowledged }));
+    case "atm_voucher":
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => ({ txnId: "", fee: 0, commission: 0, message: atmVoucher(w, wallet, { amount: d.amount, pin: v.pin ?? "", acknowledged }) }));
+    case "buy_airtime":
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => buyAirtime(w, wallet, { to: v.airtime_to, amount: d.amount, pin: v.pin ?? "", acknowledged }));
+    case "buy_bundle":
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => buyBundle(w, wallet, { bundle: v.bundle ?? "", to: v.airtime_to, pin: v.pin ?? "", acknowledged }));
+    case "pay_bill":
+      return pay(w, s, wallet, { kind: "warned", data: { action } }, () => payBill(w, wallet, { biller: v.biller ?? "", ref: v.ref ?? "", amount: d.amount, pin: v.pin ?? "", acknowledged }));
+    case "from_bank":
+      return end(fromOwnBank(w, wallet, { amount: d.amount, pin: v.pin ?? "" }).message);
+    case "verify_agent":
+      return end(verifyAgent(w, wallet.telco, v.agent_check ?? ""));
+    case "airtime_balance":
+      return end(lineBalanceText(w, wallet.msisdn));
     case "check_balance":
       checkPin(w, wallet, v.pin ?? "", attempts);
       return end(`Your ${TELCO_INFO[wallet.telco].wallet} balance is GHS ${cedis(wallet.balance)}.`);
@@ -398,6 +465,23 @@ function handlePending(w: World, s: UssdSession, wallet: WalletRow, input: strin
     const category = input === "2" ? "unauthorised" : d.agent ? "agent_complaint" : "wrong_transfer";
     const t = openTicket(w, wallet.telco, { msisdn: wallet.msisdn, category, txnId: d.id, channel: "ussd", by: "the customer, from their phone" });
     return end(`Your complaint has been received. Ticket ${t.id}. Customer care will update you by SMS. Call ${TELCO_INFO[wallet.telco].careLine} for help.`);
+  }
+
+  if (p.kind === "first_pin") {
+    const brand = TELCO_INFO[wallet.telco];
+    if (d.step === "given") {
+      checkPin(w, wallet, input, getConfig(w.db, `telco.${wallet.telco}`).pinAttemptsBeforeLock);
+      s.pending = { kind: "first_pin", data: { step: "new" } };
+      return show("Create your own 4-digit PIN. Keep it secret.");
+    }
+    if (d.step === "new") {
+      const problem = input === wallet.pin ? "Choose a PIN different from the one sent to you." : pinProblem(w, wallet.msisdn, input, "change");
+      s.pending = problem ? { kind: "first_pin", data: { step: "new" } } : { kind: "first_pin", data: { step: "confirm", pin: input } };
+      return show(problem ? `${problem}\nCreate your own 4-digit PIN` : "Enter the new PIN again to confirm");
+    }
+    if (input !== d.pin) return end(`PINs do not match. Dial ${brand.shortcode} to try again.`);
+    changePin(w, wallet, input);
+    return end(`Your PIN is set. Dial ${brand.shortcode} to use your ${brand.wallet} wallet.`);
   }
 
   if (p.kind === "change_pin") {

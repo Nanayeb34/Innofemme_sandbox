@@ -18,6 +18,7 @@ interface BankView {
   activity: ActivityRow[];
   config: { fees: unknown };
   apiPartners: ApiPartner[];
+  atm: { wallets: string[]; paid: number };
   plugins: PluginView["plugins"];
   pluginPoints: PluginView["pluginPoints"];
   pluginEvents: PluginView["pluginEvents"];
@@ -74,6 +75,16 @@ export default function Bank({ team, bank }: { team: string; bank: string }) {
           </Section>
           <Section title="Cash withdrawal">
             <ActionForm team={team} path={path} action="withdraw" submit="Withdraw" onDone={refresh} disabled={none} fields={[{ name: "account", label: "Account", type: "select", options: accountOptions }, amount]} />
+          </Section>
+          <Section
+            title="Cash machine: cardless withdrawal"
+            hint={
+              data.atm.wallets.length
+                ? `This stands in for the bank's cash machine. A ${data.atm.wallets.join(" or ")} customer gets a voucher from their phone (withdraw cash, from ATM), then enters their phone number and the voucher here. The money leaves their wallet and the machine pays out. ${data.atm.paid} paid so far.`
+                : "No network's wallet vouchers are accepted at this bank's cash machines. Ecobank and Absa accept them by default; a network can change that in its settings."
+            }
+          >
+            <ActionForm team={team} path={path} action="atm_withdraw" submit="Withdraw at the cash machine" onDone={refresh} disabled={data.atm.wallets.length ? undefined : "Not accepted at this bank."} fields={[{ name: "msisdn", label: "Phone number" }, { name: "code", label: "Voucher", placeholder: "6 digits, from the phone" }]} />
           </Section>
         </>
       )}

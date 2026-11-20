@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { DATA_DIR, SCHEMA_VERSION, SNAPSHOTS_DIR, WORLDS_DIR, count, getMeta, openDb, setMeta, tx } from "./db";
+import { EARLIER_MENUS, defaultTelco, notifications } from "./config/defaults";
 import { seedConfig } from "./config/store";
 import { seedTrustAccounts } from "./bank";
 import { SIM_DEFAULTS, simulate, type SimSummary } from "./simulate";
+import { TELCOS } from "./util";
 import { makeWorld, withLock, type World } from "./world";
 
 export interface Team {
@@ -104,9 +106,49 @@ function open(id: string): World {
       seedTrustAccounts(w);
       setMeta(db, "schema", SCHEMA_VERSION);
       setMeta(db, "created_at", Date.now());
+      setMeta(db, "menus", MENUS_VERSION);
     });
   }
+  upgradeMenus(db);
   return w;
+}
+
+const MENUS_VERSION = 2;
+/** The same value whatever order its keys were written in. */
+const canon = (v: unknown): string => JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as object).sort(([a], [b]) => a.localeCompare(b))) : x));
+
+/**
+ * A world made before each network had its own menu still holds the one menu all three shared. Each
+ * network that has not changed its menu since gets its own now, with the settings that go with it.
+ * A menu a team has edited is left alone.
+ */
+export function upgradeMenus(db: World["db"]) {
+  if (Number(getMeta(db, "menus") ?? 1) >= MENUS_VERSION) return;
+  tx(db, () => {
+    for (const t of TELCOS) {
+      const row = db.prepare("SELECT value FROM config WHERE surface = ?").get(`telco.${t}`) as { value: string } | undefined;
+      if (!row) continue;
+      const cfg = JSON.parse(row.value) as ReturnType<typeof defaultTelco>;
+      const fresh = defaultTelco(t);
+      const untouched = canon(cfg.menu) === canon(EARLIER_MENUS[t]);
+      if (untouched) {
+        cfg.menu = fresh.menu;
+        cfg.cashOut = fresh.cashOut;
+        cfg.registration = fresh.registration;
+        cfg.selfRegistration = fresh.selfRegistration;
+        // The two texts that tell a customer where to answer a request name a place on the menu.
+        for (const event of ["approval_prompt", "dispute_consent"] as const) {
+          if (cfg.notifications[event]?.template.includes("option 4")) cfg.notifications[event] = notifications(t)[event];
+        }
+      }
+      cfg.bundles ??= fresh.bundles;
+      cfg.billers ??= fresh.billers;
+      cfg.atm ??= fresh.atm;
+      db.prepare("UPDATE config SET value = ?, version = version + 1 WHERE surface = ?").run(JSON.stringify(cfg), `telco.${t}`);
+      if (untouched) db.prepare("INSERT INTO audit(at, system, action, summary) VALUES(?,?,?,?)").run(Date.now(), t, "settings", `The phone menu was replaced with ${fresh.menu.nodes.main.type === "menu" ? fresh.menu.nodes.main.text : t}'s own`);
+    }
+    setMeta(db, "menus", MENUS_VERSION);
+  });
 }
 
 export function getWorld(id: string): World {
@@ -181,7 +223,7 @@ export async function restoreSnapshot(id: string, snapId: string) {
 
 const SIM_DIR = path.join(DATA_DIR, "simulated");
 /** Bump when the simulation changes what it produces, so stale copies are rebuilt. */
-const SIM_VERSION = 1;
+const SIM_VERSION = 2;
 
 /**
  * Builds the simulated country once per day and seed, into a file that team worlds are copied from.
@@ -201,6 +243,7 @@ export function buildSimulated(seed: number = SIM_DEFAULTS.seed): string {
       seedTrustAccounts(w);
       setMeta(db, "schema", SCHEMA_VERSION);
       setMeta(db, "created_at", Date.now());
+      setMeta(db, "menus", MENUS_VERSION);
     });
     simulate(w, { seed });
     db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);

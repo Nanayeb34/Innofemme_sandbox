@@ -161,7 +161,7 @@ CREATE INDEX IF NOT EXISTS txns_to ON txns(to_wallet, created_at);
 CREATE TABLE IF NOT EXISTS postings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   txn_id TEXT NOT NULL,
-  account TEXT NOT NULL,             -- w:<wallet> | bank:<account> | fee:<party> | emoney:<telco> | vault:<bank> | switch:<party> | reserve:<bank>
+  account TEXT NOT NULL,             -- w:<wallet> | bank:<account> | fee:<party> | emoney:<telco> | vault:<bank> | switch:<party> | reserve:<bank> | airtime:<telco> | billers:<telco>
   amount INTEGER NOT NULL,
   at INTEGER NOT NULL
 );
@@ -348,6 +348,48 @@ CREATE TABLE IF NOT EXISTS ussd_activations (
   code TEXT NOT NULL,
   telco TEXT NOT NULL,
   PRIMARY KEY (code, telco)
+);
+
+-- ===== Wallet services =====
+-- Airtime and data on each line. A line with no row has none.
+CREATE TABLE IF NOT EXISTS sim_balances (
+  msisdn TEXT PRIMARY KEY,
+  airtime INTEGER NOT NULL DEFAULT 0,  -- pesewas
+  data_mb INTEGER NOT NULL DEFAULT 0,
+  data_expires INTEGER
+);
+
+-- A voucher for a cardless withdrawal at a bank's cash machine. The money leaves the wallet when it is used.
+CREATE TABLE IF NOT EXISTS atm_vouchers (
+  code TEXT PRIMARY KEY,
+  msisdn TEXT NOT NULL,
+  wallet_id TEXT NOT NULL,
+  telco TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  status TEXT NOT NULL,              -- active | used | expired
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  bank TEXT,                         -- where it was used
+  txn_id TEXT
+);
+CREATE INDEX IF NOT EXISTS atm_vouchers_msisdn ON atm_vouchers(msisdn, status);
+
+-- Bills paid from wallets, as each biller would see them.
+CREATE TABLE IF NOT EXISTS bill_payments (
+  txn_id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  telco TEXT NOT NULL,
+  biller TEXT NOT NULL,
+  account_ref TEXT NOT NULL,         -- meter, smartcard or account number
+  amount INTEGER NOT NULL,
+  token TEXT,                        -- e.g. a prepaid electricity token
+  msisdn TEXT NOT NULL
+);
+
+-- Wallets whose PIN was issued by the network (a reset, or a wallet opened by an agent) and must be replaced on first use.
+CREATE TABLE IF NOT EXISTS pin_temporary (
+  wallet_id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
 );
 
 -- ===== Simulated data =====

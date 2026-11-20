@@ -14,7 +14,8 @@ import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments
 import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
-import { LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE } from "@/engine/ussd";
+import { atmOf, atmWithdraw, billersOf, bundlesOf, offersAtm } from "@/engine/services";
+import { AIRTIME_CODE, LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE } from "@/engine/ussd";
 import { allocateCode, dial, listCodes, revokeCode, setActivation } from "@/engine/ussdapps";
 import { BANKS, BANK_IDS, PARTICIPANTS, SimError, TELCOS, TELCO_INFO, TRUST_BANK, amountOf, bankName, isTelco, need, normalizeMsisdn, participantName, type Telco } from "@/engine/util";
 import { applyPatch, setConfig } from "@/engine/config/store";
@@ -291,6 +292,8 @@ function telcoSystem(t: Telco): System {
           merchants: sum(w, "SELECT COUNT(*) AS n FROM merchants m JOIN wallets w ON w.id = m.wallet_id WHERE w.telco = ?", t),
           eMoney: money(sum(w, "SELECT COALESCE(SUM(balance),0) AS n FROM wallets WHERE telco = ?", t)),
           revenue: money(balanceOf(w, `fee:${t}`)),
+          airtimeSales: money(balanceOf(w, `airtime:${t}`)),
+          owedToBillers: money(balanceOf(w, `billers:${t}`)),
           onHold: money(balanceOf(w, `hold:${t}`)),
           openTickets: sum(w, "SELECT COUNT(*) AS n FROM tickets WHERE telco = ? AND status NOT IN ('resolved','rejected')", t),
           trustBalance: money(trust?.balance ?? 0),
@@ -315,6 +318,10 @@ function telcoSystem(t: Telco): System {
         sms: smsRecords(w, t),
         apiPartners: listClients(w, t),
         ...pluginView(w, t),
+        services: { cashOut: telcoOps.cashOutMode(w, t), bundles: bundlesOf(w, t), billers: billersOf(w, t), atmBanks: offersAtm(w, t) ? atmOf(w, t).banks.map(bankName) : [], registration: getConfig(w.db, `telco.${t}`).registration ?? {} },
+        bills: (w.db.prepare("SELECT * FROM bill_payments WHERE telco = ? ORDER BY at DESC LIMIT 100").all(t) as { txn_id: string; at: number; biller: string; account_ref: string; amount: number; token: string | null; msisdn: string }[]).map((b) => ({
+          id: b.txn_id, at: iso(b.at), biller: b.biller, account: b.account_ref, amount: money(b.amount), token: b.token, from: b.msisdn,
+        })),
         shortCodes: listCodes(w).map((c) => ({ ...c, on: c.networks.includes(t) })),
         simEvents: (w.db.prepare("SELECT e.* FROM sim_events e JOIN sims s ON s.msisdn = e.msisdn WHERE s.telco = ? ORDER BY e.id DESC LIMIT 80").all(t) as { id: number; msisdn: string; at: number; kind: string; by: string; detail: string }[]).map((e) => ({ ...e, at: iso(e.at) })),
         activity: auditFeed(w, t),
@@ -483,12 +490,17 @@ function momoAgentSystem(t: Telco): System {
             }
           : null,
         fees: getConfig(w.db, `telco.${t}`).fees.cashout,
+        // Who starts a withdrawal here, and whether a new customer's PIN is texted to them rather than chosen at the counter.
+        cashOut: telcoOps.cashOutMode(w, t),
+        pinBySms: !!getConfig(w.db, `telco.${t}`).registration?.pinBySms,
       };
     },
     actions: {
       register_customer(w, b) {
-        const x = telcoOps.agentRegisterWallet(w, t, b.agent, { msisdn: str(b.msisdn), card: str(b.card), fingerprint: str(b.fingerprint), pin: str(b.pin) });
-        return ok(`${x.display_name} (${x.msisdn}) has a ${brand.wallet} wallet on ${x.kyc_tier} KYC.`);
+        const sent = !!getConfig(w.db, `telco.${t}`).registration?.pinBySms && !str(b.pin);
+        const had = !!walletByMsisdn(w, normalizeMsisdn(str(b.msisdn) ?? ""));
+        const x = telcoOps.agentRegisterWallet(w, t, b.agent, { msisdn: str(b.msisdn), card: str(b.card), fingerprint: str(b.fingerprint), pin: str(b.pin) || undefined });
+        return ok(`${x.display_name} (${x.msisdn}) has a ${brand.wallet} wallet on ${x.kyc_tier} KYC.${sent && !had ? ` A starting PIN was texted to them. They dial ${brand.shortcode} to create their own.` : ""}`);
       },
       cash_in(w, b) {
         return ok(telcoOps.agentCashIn(w, t, b.agent, { msisdn: str(b.msisdn), amount: b.amount, pin: str(b.pin) }).message);
@@ -673,6 +685,8 @@ const phone: System = {
         shortcode: getConfig(w.db, `telco.${sim.telco}`).menu.shortcode,
         codes: [
           { code: getConfig(w.db, `telco.${sim.telco}`).menu.shortcode, label: brand.wallet },
+          ...(!wallet && getConfig(w.db, `telco.${sim.telco}`).selfRegistration && getConfig(w.db, `telco.${sim.telco}`).registration?.code ? [{ code: getConfig(w.db, `telco.${sim.telco}`).registration!.code!, label: `Register for ${brand.wallet}` }] : []),
+          { code: AIRTIME_CODE, label: "Airtime and data" },
           { code: REGISTRATION_CHECK_CODE, label: "SIM registration status" },
           { code: LINKED_SIMS_CODE, label: "Numbers on my Ghana Card" },
           { code: OWN_NUMBER_CODE[sim.telco], label: "My number" },
@@ -736,11 +750,14 @@ function bankSystem(bank: string): System {
         config: getConfig(w.db, `bank.${bank}`),
         apiPartners: listClients(w, bank),
         ...pluginView(w, bank),
+        // Which wallets' vouchers this bank's cash machines pay out against.
+        atm: { wallets: TELCOS.filter((t) => offersAtm(w, t) && atmOf(w, t).banks.includes(bank)).map((t) => TELCO_INFO[t].wallet), paid: sum(w, "SELECT COUNT(*) AS n FROM atm_vouchers WHERE bank = ? AND status = 'used'", bank) },
       };
     },
     actions: {
       ...partnerActions(bank),
       ...pluginActions(bank),
+      atm_withdraw: (w, b) => ok(atmWithdraw(w, bank, { msisdn: str(b.msisdn), code: str(b.code) }).message),
       open_account(w, b) {
         const a = openAccount(w, bank, { card: str(b.card), fingerprint: str(b.fingerprint) });
         return ok(`Account opened for ${a.name}. Account number: ${a.account_no}`);
@@ -826,10 +843,14 @@ const bog: System = {
         const position = balanceOf(w, `switch:${t}`);
         // Customers' money held during a dispute has left their wallets but is still e-money the issuer owes.
         const held = balanceOf(w, `hold:${t}`);
+        // Money customers spent on airtime is the issuer's own; money they paid for bills is owed to the billers. Both are still e-money.
+        const airtime = balanceOf(w, `airtime:${t}`);
+        const billers = balanceOf(w, `billers:${t}`);
         return {
-          telco: t, name: TELCO_INFO[t].wallet, trustBank: bankName(TRUST_BANK[t]), customerFunds: money(wallets), onHold: money(held), issuerFunds: money(revenue), eMoney: money(wallets + held + revenue), trustBalance: money(trust), unsettled: money(position),
+          telco: t, name: TELCO_INFO[t].wallet, trustBank: bankName(TRUST_BANK[t]), customerFunds: money(wallets), onHold: money(held), issuerFunds: money(revenue + airtime), billers: money(billers), eMoney: money(wallets + held + revenue + airtime + billers),
+          trustBalance: money(trust), unsettled: money(position),
           // Every cedi of e-money must be backed: by the trust account, or by money still owed to the issuer through the switch.
-          backed: wallets + held + revenue === trust - position,
+          backed: wallets + held + revenue + airtime + billers === trust - position,
         };
       }),
       banks: BANK_IDS.map((b) => ({

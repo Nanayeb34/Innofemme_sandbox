@@ -194,6 +194,9 @@ interface MomoPointView {
     requests: { ref: string; customer: string; amount: number; status: string; reason: string | null; at: string }[];
     txns: TxnRow[];
   } | null;
+  /** Who starts a withdrawal on this network. */
+  cashOut: "agent_requests" | "customer_starts";
+  pinBySms: boolean;
 }
 
 const MOMO_TABS = [["cashin", "Cash-in (deposit)"], ["cashout", "Cash-out (withdrawal)"], ["register", "Register a customer"], ["float", "Float and till"], ["txns", "Transactions"]] as const;
@@ -259,7 +262,27 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
             </Section>
           )}
 
-          {tab === "cashout" && (
+          {tab === "cashout" && data.cashOut === "customer_starts" && (
+            <>
+              <Section title="Cash-out" hint={`On ${b.wallet} the customer starts the withdrawal on their own phone. You do not send a request.`}>
+                <ol className="list-decimal space-y-1 pl-5 text-sm text-gray-800">
+                  <li>
+                    Give the customer your agent number: <span className="font-mono font-semibold">{me.code}</span>.
+                  </li>
+                  <li>
+                    They dial <span className="font-mono">{b.shortcode}</span>, choose to withdraw cash from an agent, and enter your agent number, the amount and their PIN.
+                  </li>
+                  <li>You get a text and the withdrawal appears below. Check the amount, then hand over the cash. Your till goes down and your float goes up.</li>
+                </ol>
+                <p className="mt-2 text-xs text-gray-500">Never ask for the customer&apos;s PIN, and never enter it for them.</p>
+              </Section>
+              <Section title="Withdrawals at this agent">
+                <TxnTable team={team} path={path} rows={me.txns.filter((t) => t.type === "cashout")} empty="No withdrawals yet." />
+              </Section>
+            </>
+          )}
+
+          {tab === "cashout" && data.cashOut !== "customer_starts" && (
             <>
               <Section
                 title="Cash-out"
@@ -293,7 +316,7 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
           {tab === "register" && (
             <Section
               title={`Register a customer for ${b.wallet}`}
-              hint="The customer must own a registered SIM on this network. You verify their Ghana Card and fingerprint, so the wallet opens on medium KYC. For a customer who opened a wallet from their phone, the same check upgrades it from minimum to medium (leave the PIN empty)."
+              hint={`The customer must own a registered SIM on this network. You verify their Ghana Card and fingerprint, so the wallet opens on medium KYC. ${data.pinBySms ? `You never see the PIN: a starting PIN is texted to the customer, who dials ${b.shortcode} to create their own.` : "For a customer who opened a wallet from their phone, the same check upgrades it from minimum to medium (leave the PIN empty)."}`}
             >
               <ActionForm
                 team={team}
@@ -302,7 +325,11 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
                 submit="Verify and register"
                 extra={extra}
                 onDone={done}
-                fields={[{ name: "msisdn", label: "Customer's number" }, ...ID_FIELDS, { name: "pin", label: "Customer chooses a 4-digit PIN", type: "password", optional: true, hint: "Not needed when upgrading an existing wallet." }]}
+                fields={[
+                  { name: "msisdn", label: "Customer's number" },
+                  ...ID_FIELDS,
+                  ...(data.pinBySms ? [] : [{ name: "pin", label: "Customer chooses a 4-digit PIN", type: "password" as const, optional: true, hint: "Not needed when upgrading an existing wallet." }]),
+                ]}
               />
             </Section>
           )}

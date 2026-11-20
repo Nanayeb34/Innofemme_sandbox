@@ -121,3 +121,9 @@ export function checkPin(w: World, wallet: WalletRow, pin: string | undefined, a
   w.db.prepare("UPDATE wallets SET pin_fails = ? WHERE id = ?").run(fails, wallet.id);
   throw new SimError(`Wrong PIN. ${attemptsBeforeLock - fails} attempt(s) left.`);
 }
+
+// A PIN issued by the network (after a reset, or when an agent opens a wallet on a network that texts a starting PIN)
+// must be replaced by the customer the next time they open the menu.
+export const hasTemporaryPin = (w: World, walletId: string) => !!w.db.prepare("SELECT 1 FROM pin_temporary WHERE wallet_id = ?").get(walletId);
+export const markTemporaryPin = (w: World, walletId: string) => void w.db.prepare("INSERT OR REPLACE INTO pin_temporary(wallet_id, at) VALUES(?, ?)").run(walletId, w.now);
+export const clearTemporaryPin = (w: World, walletId: string) => void w.db.prepare("DELETE FROM pin_temporary WHERE wallet_id = ?").run(walletId);

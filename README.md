@@ -205,6 +205,37 @@ POST /api/w/{team}/fraud-simulator  {"application": "Swap Alert", "incidents": 2
 It needs people to act as victims, so the simulated country must be loaded first. Loading it keeps what
 a team has set up: plugged-in APIs, connected applications, API partners, short codes and settings.
 
+## Each network's wallet menu
+
+The three networks no longer share one menu. Each has its own, and they differ where the real ones do.
+
+| | MTN MoMo `*170#` | Telecel Cash `*110#` | AT Money `*110#` |
+| --- | --- | --- | --- |
+| Opening a wallet | from `*170#`, or at an agent | from `*558#`, or at an agent | from `*110#`, or at an agent, who never sees the PIN: a starting PIN is texted and must be replaced on first use |
+| Cash at an agent | the agent sends a request, the customer allows it (option 4) | the customer starts it: agent number, amount, PIN | the customer starts it: agent number, amount, PIN |
+| Cash at a cash machine | not on the menu | voucher from the phone, used at Ecobank or Absa | voucher from the phone, used at Ecobank or Absa |
+| Sending money | number typed twice | number typed once | number typed once |
+| Requests to approve | option 4 | My Wallet, then My Approvals | My Wallet, then My Approvals |
+
+On every network the menu also has: sending to other networks and to bank accounts, paying a merchant,
+airtime for the caller's own or another number, data bundles, bill payments (prepaid electricity comes
+back with a token), moving money in from the owner's own bank account, checking an agent's number
+before trusting one, balance, mini statement, PIN change and reporting a problem. `*124#` shows a
+line's airtime and data.
+
+A PIN issued by a network (after a reset, or by an AT agent) must be replaced before the menu opens.
+A bank's console has a "Cash machine" panel where a voucher is used. A network's back office has a
+Services tab, and its menu, bundles, billers and partner banks are in its settings.
+
+Savings, loans and insurance appear on the menus but answer that they are run by a partner: they are
+not simulated. Airtime is not used up by calls or texts.
+
+The Telecel and AT menus are built from published guides, not from the operators: neither publishes its
+menu, and the guides disagree on some labels and numbers. The flows are right in kind (who starts a
+withdrawal, vouchers for cash machines); the exact wording and numbering may differ from a live phone.
+A world made before this change gets the new menus when it is next opened, unless a team had edited
+its menu.
+
 ## Customer care and disputes
 
 A customer raises a complaint by calling 100 (a real voice call to their network's care console, when an agent there is on line) or from the phone: wallet short code → My Wallet → Report a Problem. Either way a ticket is opened and the customer is told by SMS.

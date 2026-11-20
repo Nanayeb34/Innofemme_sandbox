@@ -45,8 +45,13 @@ export const ConditionSchema: z.ZodType<Condition> = z.lazy(() =>
 
 // ---------- USSD menu ----------
 
-export const USSD_ACTIONS = ["send_money", "pay_merchant", "to_bank", "check_balance", "mini_statement", "approvals", "change_pin", "report_problem"] as const;
-export const INPUT_KINDS = ["msisdn", "amount", "text", "pin", "till", "account"] as const;
+export const USSD_ACTIONS = [
+  "send_money", "pay_merchant", "to_bank", "check_balance", "mini_statement", "approvals", "change_pin", "report_problem",
+  // Services beyond sending money.
+  "withdraw_at_agent", "atm_voucher", "buy_airtime", "buy_bundle", "pay_bill", "from_bank", "verify_agent", "airtime_balance",
+] as const;
+/** "agent" takes a mobile money agent's number (or the agent's line); "biller_ref" an account, meter or smartcard number. */
+export const INPUT_KINDS = ["msisdn", "amount", "text", "pin", "till", "account", "agent", "biller_ref"] as const;
 
 const NodeId = z.string().min(1).max(60);
 
@@ -60,6 +65,8 @@ export const MenuNodeSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("input"), text: z.string(), var: z.string().regex(/^[a-z_]+$/), kind: z.enum(INPUT_KINDS), next: NodeId }).strict(),
   z.object({ type: z.literal("branch"), if: ConditionSchema, then: NodeId, else: NodeId }).strict(),
+  // Remembers a choice (which bundle, which biller) and moves on without showing anything.
+  z.object({ type: z.literal("set"), var: z.string().regex(/^[a-z_]+$/), value: z.string().max(60), next: NodeId }).strict(),
   z.object({ type: z.literal("warning"), text: z.string(), next: NodeId }).strict(),
   z.object({ type: z.literal("action"), action: z.enum(USSD_ACTIONS) }).strict(),
   z.object({ type: z.literal("message"), text: z.string() }).strict(),
@@ -81,7 +88,7 @@ export const MenuSchema = z
     for (const [id, node] of Object.entries(menu.nodes)) {
       const targets: string[] = [];
       if (node.type === "menu") targets.push(...node.options.map((o) => o.next));
-      if (node.type === "input" || node.type === "warning") targets.push(node.next);
+      if (node.type === "input" || node.type === "warning" || node.type === "set") targets.push(node.next);
       if (node.type === "branch") targets.push(node.then, node.else);
       for (const t of targets) if (!ids.has(t)) ctx.addIssue({ code: "custom", message: `node "${id}" points to missing node "${t}"` });
     }
@@ -156,6 +163,27 @@ export const TelcoSchema = z
     selfRegistration: z.boolean(),
     /** No wallet-to-bank fee when the bank account belongs to the wallet's owner. On unless set to false. */
     ownBankAccountFree: z.boolean().optional(),
+    /**
+     * Who starts a cash withdrawal at an agent. "agent_requests": the agent sends a request and the customer approves it
+     * on their phone (MTN). "customer_starts": the customer enters the agent's number on their own phone (Telecel, AT).
+     */
+    cashOut: z.enum(["agent_requests", "customer_starts"]).optional(),
+    /** How a wallet is opened, beyond the short code. */
+    registration: z
+      .object({
+        /** A separate code that opens a wallet, where the network has one. */
+        code: z.string().regex(/^\*\d+(\*\d+)*#$/).optional(),
+        /** A wallet opened by an agent gets a starting PIN by text, which the customer must replace on first use. */
+        pinBySms: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    /** Data bundles sold from the wallet. */
+    bundles: z.array(z.object({ id: z.string().regex(/^[a-z0-9_]+$/), name: z.string().min(1).max(40), price: z.number().positive(), mb: z.number().int().positive(), days: z.number().int().positive() }).strict()).max(12).optional(),
+    /** Companies whose bills can be paid from the wallet. */
+    billers: z.array(z.object({ id: z.string().regex(/^[a-z0-9_]+$/), name: z.string().min(1).max(40), ask: z.string().min(1).max(60), token: z.boolean().optional() }).strict()).max(12).optional(),
+    /** Banks whose cash machines pay out against a voucher from the wallet, and how long a voucher lasts. */
+    atm: z.object({ banks: z.array(z.string()).min(1), minutes: z.number().int().min(1).max(120) }).strict().optional(),
   })
   .strict();
 export type TelcoConfig = z.infer<typeof TelcoSchema>;

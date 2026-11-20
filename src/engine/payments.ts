@@ -235,6 +235,75 @@ export function walletPay(w: World, req: WalletPayment): Receipt {
   return { txnId: id, fee, commission, message: `GHS ${cedis(req.amount)} ${verb} ${to.display_name}. Fee GHS ${cedis(fee)}. Trans ID ${shortId(id)}.` };
 }
 
+export interface WalletSpend {
+  /** What it is: "airtime", "bill", "atm_withdrawal". */
+  type: string;
+  channel: "ussd" | "atm" | "api" | "console";
+  from: string;
+  amount: number;
+  fee: number;
+  /** Checked when given. */
+  pin?: string;
+  /** The institution the money goes to, and whether it gets there through the national switch. */
+  toParty: string;
+  /** What the money is for, as told to an API plugged in at "payment.authorize". */
+  payee: Record<string, unknown>;
+  /** Tells one payee from another when a payment is paused: "airtime:0241234567". */
+  payeeKey: string;
+  /** Where the amount goes, beyond leaving the wallet and paying the fee. */
+  entries: [string, number][];
+  reference?: string;
+  acknowledged?: boolean;
+  /** Only check that the wallet could make this payment now; move nothing. */
+  checkOnly?: boolean;
+  /** Skip asking plugged-in APIs: for a payment the customer already authorised at an earlier step. */
+  authorised?: boolean;
+  /** Runs with the payment, so that both happen or neither does. */
+  then?: (txnId: string) => void;
+}
+
+/**
+ * Money leaving a wallet for something other than another wallet or a bank account: airtime, a bill,
+ * cash from a bank's machine. The same rules apply as to any payment (PIN, a frozen wallet, the pause
+ * after a SIM replacement, KYC limits, balance, and any API plugged in at "payment.authorize").
+ */
+export function walletSpend(w: World, req: WalletSpend): { txnId: string; fee: number; balance: number } {
+  const from = getWallet(w, req.from);
+  if (!from) throw new SimError("Wallet not found");
+  if (!Number.isInteger(req.amount) || req.amount <= 0) throw new SimError("Invalid amount");
+  const cfg = getConfig(w.db, `telco.${from.telco}`);
+  if (req.pin !== undefined) checkPin(w, from, req.pin, cfg.pinAttemptsBeforeLock);
+  const id = newId("tx");
+  const cross = req.toParty !== from.telco;
+  const base = { type: req.type, channel: req.channel, from_wallet: from.id, from_party: from.telco, to_party: req.toParty, rail: cross ? "switch" : "onnet", amount: req.amount, reference: req.reference ?? null };
+  const no = (why: string) => refuse(w, base, why, id);
+  const problem = senderProblem(w, from);
+  if (problem) no(problem);
+  const limit = checkSendLimits(w, from, req.amount);
+  if (limit) no(limit);
+  if (from.balance < req.amount + req.fee) no("Insufficient balance");
+  const about = { type: req.type, channel: req.channel, amount: req.amount / 100, fee: req.fee / 100, reference: req.reference ?? null, payer: describePayer(w, from), payee: req.payee, paymentsToThisPayeeBefore: 0 };
+  if (!req.authorised) authorize(w, from, req.payeeKey, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
+  if (req.checkOnly) return { txnId: "", fee: req.fee, balance: from.balance };
+  if (cross) {
+    try {
+      route(w, id, from.telco, req.toParty, req.amount, String(req.payee.kind ?? req.type));
+    } catch (e) {
+      if (e instanceof Ask) throw e;
+      no((e as Error).message);
+    }
+  }
+  tx(w.db, () => {
+    insertTxn(w, { ...base, id, fee: req.fee, status: "success" });
+    post(w, id, [[`w:${from.id}`, -(req.amount + req.fee)], [`fee:${from.telco}`, req.fee], ...(cross ? positionEntries(from.telco, req.toParty, req.amount) : []), ...req.entries]);
+    if (cross) commit(w, id, from.telco, req.toParty, req.amount);
+    req.then?.(id);
+  });
+  w.cooldowns.delete(`${from.id}>${req.payeeKey}`);
+  emit(w, from.telco, "payment.completed", { ...about, transactionId: id, continuedAfterWarning: !!req.acknowledged });
+  return { txnId: id, fee: req.fee, balance: getWallet(w, from.id)!.balance };
+}
+
 /** A bank asks any API plugged in at "transfer.authorize" before money leaves one of its accounts. */
 function authorizeTransfer(w: World, bank: string, about: Record<string, unknown>, no: (why: string) => never) {
   const d = consult(w, bank, "transfer.authorize", about);

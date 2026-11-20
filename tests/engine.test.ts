@@ -92,12 +92,13 @@ describe("a country built from nothing", () => {
     setConfig(w.db, "nca", { ...getConfig(w.db, "nca"), maxSimsPerCard: 10, primaryNumberApproval: true }, "test", "api");
   });
 
-  it("a subscriber opens a wallet from the phone on MTN, but Telecel sends them to an agent", () => {
+  it("a subscriber opens a wallet from the phone: on MTN from the wallet's code, on Telecel from its own registration code", () => {
     expect(dial(w, amaNo, "*170#").text).toMatch(/no wallet yet/);
     expect(dial(w, amaNo, "*170#", "1", "1234", "1234").text).toMatch(/now registered/);
     expect(walletByMsisdn(w, amaNo)!.kyc_tier).toBe("minimum");
     expect(dial(w, amaNo, "*170#").text).toMatch(/^MTN MoMo\n1\) Transfer Money/);
-    expect(dial(w, kofiNo, "*110#").text).toMatch(/Visit a Telecel Cash agent/);
+    expect(dial(w, kofiNo, "*110#").text).toMatch(/Dial \*558# to register, or visit a Telecel Cash agent/);
+    expect(dial(w, kofiNo, "*558#").text).toMatch(/no wallet yet\.\n1\) Register now/);
   });
 
   it("telcos onboard mobile money agents on dedicated lines; agents register customers on medium KYC", () => {
@@ -173,15 +174,21 @@ describe("a country built from nothing", () => {
     expect(dial(w, kofiNo, "*110#", "6", "1", "2222").text).toMatch(/locked/);
     telco.resetPin(w, "telecel", telecelPoint, { msisdn: kofiNo, card: kofi.ghana_card, fingerprint: kofi.fingerprint });
     const temp = lastSms(w, kofiNo).match(/temporary PIN is (\d{4})/)![1];
-    expect(dial(w, kofiNo, "*110#", "6", "1", temp).text).toMatch(/balance is GHS/);
+    // A PIN the network issued must be replaced before the wallet can be used: the menu does not open until it is.
+    expect(dial(w, kofiNo, "*110#").text).toMatch(/Enter the PIN sent to you by SMS/);
+    expect(dial(w, kofiNo, "*110#", "0000").text).toMatch(/Wrong PIN/);
+    expect(dial(w, kofiNo, "*110#", temp, temp).text).toMatch(/different from the one sent to you/);
+    expect(dial(w, kofiNo, "*110#", temp, "6802", "6802").text).toMatch(/Your PIN is set/);
+    expect(dial(w, kofiNo, "*110#", "6", "1", temp).text).toMatch(/Wrong PIN/);
+    expect(dial(w, kofiNo, "*110#", "6", "1", "6802").text).toMatch(/balance is GHS/);
   });
 
   it("after a SIM replacement the wallet cannot send for the hold period", () => {
     telco.swapSim(w, "telecel", telecelPoint, { msisdn: kofiNo, card: kofi.ghana_card, fingerprint: kofi.fingerprint });
     const pin = walletByMsisdn(w, kofiNo)!.pin;
-    expect(dial(w, kofiNo, "*110#", "1", "2", amaNo, amaNo, "5", "x", pin).text).toMatch(/paused for 24 hours after a SIM swap/);
+    expect(dial(w, kofiNo, "*110#", "1", "2", amaNo, "5", "x", pin).text).toMatch(/paused for 24 hours after a SIM swap/);
     setConfig(w.db, "telco.telecel", applyPatch(getConfig(w.db, "telco.telecel"), [{ op: "replace", path: "/simSwapMomoHoldHours", value: 0 }]), "No hold", "api");
-    expect(dial(w, kofiNo, "*110#", "1", "2", amaNo, amaNo, "5", "x", pin).text).toMatch(/GHS 5.00 sent to Ama Owusu/);
+    expect(dial(w, kofiNo, "*110#", "1", "2", amaNo, "5", "x", pin).text).toMatch(/GHS 5.00 sent to Ama Owusu/);
   });
 
   it("a blocked SIM has no service", () => {
@@ -1243,8 +1250,12 @@ describe("fraud simulator: incidents played live against what a team has built",
     unplug();
 
     // Catching it late: the victim has paid, but the money is refused at the agent and can still be returned.
+    // On MTN the agent's request is the step to watch; on Telecel and AT the customer starts the withdrawal, so it is the payment itself.
     everywhere("payment.request", "Cash-out watch");
-    answer = (p, d) => (p === "payment.request" && d.kind === "cash_out" && Date.now() - Date.parse(d.customer.walletOpenedAt) < 86_400_000 ? { decision: "reject", message: "New wallet." } : { decision: "allow" });
+    everywhere("payment.authorize", "Cash-out watch");
+    const fresh = (iso: string) => Date.now() - Date.parse(iso) < 86_400_000;
+    answer = (p, d) =>
+      (p === "payment.request" && d.kind === "cash_out" && fresh(d.customer.walletOpenedAt)) || (p === "payment.authorize" && d.type === "cashout" && fresh(d.payer.walletOpenedAt)) ? { decision: "reject", message: "New wallet." } : { decision: "allow" };
     r = await run({ kinds: "relative_impersonation", incidents: 5, ordinary: 10 });
     expect(r.fraud).toMatchObject({ stopped: 0, contained: 5, through: 0 });
     expect(r.lost).toBe(0);
@@ -1278,5 +1289,254 @@ describe("fraud simulator: incidents played live against what a team has built",
     expect(view.running).toBe(false);
     sim.disconnectApp(w, app.id);
     expect(sim.listApps(w)).toEqual([]);
+  });
+});
+
+describe("each network's own wallet menu and services", () => {
+  let w: World;
+  const net: Record<string, { code: string; a: string; b: string; agent: string; agentLine: string; point: string; pa: Person; pb: Person }> = {};
+  const PIN = "4826";
+  const bal = (m: string) => walletByMsisdn(w, m)!.balance;
+  const agentRow = (code: string) => w.db.prepare("SELECT a.cash, x.balance FROM momo_agents a JOIN wallets x ON x.id = a.wallet_id WHERE a.code = ?").get(code) as { cash: number; balance: number };
+  const backed = () => JSON.stringify(view(w, "bog")).includes('"backed":false') === false;
+  /** Walks a session to its last screen, stopping when the session ends. */
+  const walk = (msisdn: string, ...inputs: string[]) => {
+    let sessionId: string | undefined;
+    let last = { text: "", end: false, sessionId: "" };
+    for (const input of inputs) {
+      last = ussd(w, { sessionId, msisdn, input });
+      sessionId = last.sessionId;
+      if (last.end) break;
+    }
+    return last.text;
+  };
+
+  beforeAll(async () => {
+    w = await resetWorld("team-02");
+    const owner = person(w, "Yaw", "Asante", "1979-11-30");
+    for (const t of ["mtn", "telecel", "at"] as const) {
+      telco.generateSims(w, t, 6);
+      const point = telco.onboardSimAgent(w, t, { card: owner.ghana_card, name: "Centre", kind: "service_centre", town: "Kumasi" }).id;
+      const [pa, pb, pg] = [person(w, "Ama", `Owusu ${t}`), person(w, "Kofi", `Mensah ${t}`, "1985-01-02"), person(w, "Esi", `Agent ${t}`, "1980-02-02")];
+      const [a, b, g] = [pa, pb, pg].map((p) => telco.registerSim(w, t, point, { card: p.ghana_card, fingerprint: p.fingerprint }).sim.msisdn);
+      const agent = telco.onboardMomoAgent(w, t, { msisdn: g, name: `${t} Agent Shop`, town: "Kumasi", pin: "1357" }).code;
+      pay.bankToWallet(w, { bank: "gcb", msisdn: g, amount: 2_000_000 });
+      telco.adjustTill(w, t, agent, 1_000_000);
+      net[t] = { code: getConfig(w.db, `telco.${t}`).menu.shortcode, a, b, agent, agentLine: g, point, pa, pb };
+    }
+  });
+
+  it("the three networks have different menus, and each opens wallets its own way", () => {
+    // MTN: from *170#. Telecel: from *558#, not from *110#. AT: an agent opens it and a starting PIN is texted.
+    expect(walk(net.mtn.a, "*170#", "1", PIN, PIN)).toMatch(/now registered for MTN MoMo/);
+    expect(walk(net.telecel.a, "*110#")).toMatch(/Dial \*558# to register/);
+    expect(walk(net.telecel.a, "*558#", "1", PIN, PIN)).toMatch(/now registered for Telecel Cash/);
+    expect(walk(net.telecel.a, "*558#")).toMatch(/already registered/);
+    telco.agentRegisterWallet(w, "at", net.at.agent, { msisdn: net.at.a, card: net.at.pa.ghana_card, fingerprint: net.at.pa.fingerprint });
+    const starting = lastSms(w, net.at.a).match(/starting AT Money PIN is (\d{4})/)![1];
+    expect(walk(net.at.a, "*110#")).toMatch(/Enter the PIN sent to you by SMS/);
+    expect(walk(net.at.a, "*110#", starting, PIN, PIN)).toMatch(/Your PIN is set/);
+    expect(walletByMsisdn(w, net.at.a)).toMatchObject({ pin: PIN, kyc_tier: "medium" });
+    for (const t of ["mtn", "telecel", "at"] as const) telco.agentRegisterWallet(w, t, net[t].agent, { msisdn: net[t].b, card: net[t].pb.ghana_card, fingerprint: net[t].pb.fingerprint, pin: "9753" });
+
+    expect(walk(net.mtn.a, "*170#")).toBe("MTN MoMo\n1) Transfer Money\n2) MoMoPay & Pay Bill\n3) Airtime & Bundles\n4) Allow Cash Out\n5) Financial Services\n6) My Wallet");
+    expect(walk(net.telecel.a, "*110#")).toBe("Telecel Cash\n1) Send Money\n2) Withdraw Cash\n3) Airtime & Bundles\n4) Make Payments\n5) Financial Services\n6) My Wallet\n7) Self Service");
+    expect(walk(net.at.a, "*110#")).toBe("AT Money\n1) Send Money\n2) Cash Out\n3) Airtime & Bundles\n4) Pay Bill\n5) Buy Goods\n6) Financial Services\n7) My Wallet");
+    // Every option on every menu leads somewhere that exists.
+    for (const t of ["mtn", "telecel", "at"] as const) expect(validateSurface(`telco.${t}`, defaultTelco(t))).toMatchObject({ ok: true });
+    for (const t of ["mtn", "telecel", "at"] as const) telco.agentCashIn(w, t, net[t].agent, { msisdn: net[t].a, amount: 3000, pin: "1357" });
+  });
+
+  it("money is sent the same way on each, with the network's own steps and fees", () => {
+    // MTN asks for the number twice; Telecel and AT do not.
+    expect(walk(net.mtn.a, "*170#", "1", "1", net.mtn.b, net.mtn.b, "50", "lunch", PIN)).toMatch(/GHS 50.00 sent to Kofi Mensah mtn. Fee GHS 0.38/);
+    expect(walk(net.telecel.a, "*110#", "1", "1", net.telecel.b, "50", "lunch", PIN)).toMatch(/GHS 50.00 sent to Kofi Mensah telecel. Fee GHS 0.00/);
+    expect(walk(net.at.a, "*110#", "1", "1", net.at.b, "50", "lunch", PIN)).toMatch(/GHS 50.00 sent to Kofi Mensah at. Fee GHS 0.38/);
+    // Across networks, through the switch.
+    expect(walk(net.telecel.a, "*110#", "1", "2", net.mtn.b, "200", "rent", PIN)).toMatch(/GHS 200.00 sent to Kofi Mensah mtn. Fee GHS 1.00/);
+    expect(walk(net.at.a, "*110#", "1", "2", net.telecel.b, "20", "x", PIN)).toMatch(/sent to Kofi Mensah telecel/);
+    expect(walk(net.telecel.a, "*110#", "1", "1", net.telecel.b, "50", "x", "0000")).toMatch(/Wrong PIN/);
+  });
+
+  it("on Telecel and AT the customer starts a cash withdrawal with the agent's number; on MTN the agent asks", () => {
+    for (const t of ["telecel", "at"] as const) {
+      const n = net[t];
+      const [before, shop] = [bal(n.a), agentRow(n.agent)];
+      // The screen before the PIN names the agent and the fee.
+      expect(walk(n.a, n.code, "2", "1", n.agent, "200")).toMatch(new RegExp(`Withdraw GHS200.00 from ${t} Agent Shop, Kumasi\\nFee: GHS2.00`));
+      expect(walk(n.a, n.code, "2", "1", n.agent, "200", PIN)).toMatch(new RegExp(`GHS 200.00 cashed out at ${t} Agent Shop. Fee GHS 2.00`));
+      expect(bal(n.a)).toBe(before - 20200);
+      // The agent's till pays out, its float rises by the amount and its commission, and it is told by text.
+      expect(agentRow(n.agent)).toEqual({ cash: shop.cash - 20000, balance: shop.balance + 20000 + 80 });
+      expect(lastSms(w, n.agentLine)).toMatch(/Cash out of GHS 200.00 approved by Ama Owusu/);
+      // The agent's phone number works as well as the agent number; anything else is refused before the amount is asked.
+      expect(walk(n.a, n.code, "2", "1", n.agentLine, "50", PIN)).toMatch(/GHS 50.00 cashed out/);
+      expect(walk(n.a, n.code, "2", "1", "999999")).toMatch(/That is not a .* agent number\nEnter agent number/);
+      expect(walk(n.a, n.code, "2", "1", net.mtn.agent)).toMatch(/not a .* agent number/);
+      // An agent cannot pull money from a customer here.
+      expect(() => telco.agentRequestCashOut(w, t, n.agent, { msisdn: n.a, amount: 50, card: n.pa.ghana_card })).toThrow(/the customer starts the withdrawal on their own phone/);
+    }
+    // MTN: the agent sends the request, the customer allows it under option 4.
+    telco.agentRequestCashOut(w, "mtn", net.mtn.agent, { msisdn: net.mtn.a, amount: 100, card: net.mtn.pa.ghana_card });
+    expect(lastSms(w, net.mtn.a)).toMatch(/Dial \*170# and choose option 4 to approve/);
+    expect(walk(net.mtn.a, "*170#", "4", "1", "1", PIN)).toMatch(/GHS 100.00 cashed out at mtn Agent Shop/);
+    expect(walk(net.mtn.a, "*170#", "2")).not.toMatch(/Withdraw/);
+  });
+
+  it("cash machines pay out against a voucher from the phone, once, at the banks that accept it", async () => {
+    const svc = await import("../src/engine/services");
+    const n = net.telecel;
+    const before = bal(n.a);
+    expect(walk(n.a, "*110#", "2", "2", "305", PIN)).toMatch(/multiples of GHS 10/);
+    expect(walk(n.a, "*110#", "2", "2", "300", PIN)).toMatch(/Voucher \d{6} for GHS 300.00. Fee GHS 3.00. Use it at any Ecobank Ghana or Absa Bank Ghana cash machine/);
+    const code = lastSms(w, n.a).match(/voucher is (\d{6})/)![1];
+    // Nothing has left the wallet yet.
+    expect(bal(n.a)).toBe(before);
+    expect(() => svc.atmWithdraw(w, "gcb", { msisdn: n.a, code })).toThrow(/work at Ecobank Ghana and Absa Bank Ghana cash machines/);
+    expect(() => svc.atmWithdraw(w, "ecobank", { msisdn: n.b, code })).toThrow(/do not match/);
+    const vault = balanceOf(w, "vault:ecobank");
+    expect(svc.atmWithdraw(w, "ecobank", { msisdn: n.a, code }).message).toBe("Take your cash: GHS 300.00.");
+    expect(bal(n.a)).toBe(before - 30300);
+    expect(balanceOf(w, "vault:ecobank")).toBe(vault + 30000);
+    expect(lastSms(w, n.a)).toMatch(/You withdrew GHS 300.00 at a Ecobank Ghana cash machine/);
+    expect(() => svc.atmWithdraw(w, "ecobank", { msisdn: n.a, code })).toThrow(/already been used/);
+    // A new voucher replaces an unused one, and a voucher runs out.
+    walk(n.a, "*110#", "2", "2", "100", PIN);
+    const first = lastSms(w, n.a).match(/voucher is (\d{6})/)![1];
+    walk(n.a, "*110#", "2", "2", "100", PIN);
+    expect(() => svc.atmWithdraw(w, "absa", { msisdn: n.a, code: first })).toThrow(/expired/);
+    w.db.prepare("UPDATE atm_vouchers SET expires_at = 1 WHERE status = 'active'").run();
+    expect(() => svc.atmWithdraw(w, "absa", { msisdn: n.a, code: lastSms(w, n.a).match(/voucher is (\d{6})/)![1] })).toThrow(/expired/);
+    // From the bank's console, and on AT too.
+    walk(net.at.a, "*110#", "2", "2", "50", PIN);
+    const r = resolveSystem(["bank", "absa"]).actions.atm_withdraw(w, { msisdn: net.at.a, code: lastSms(w, net.at.a).match(/voucher is (\d{6})/)![1] }) as { message: string };
+    expect(r.message).toBe("Take your cash: GHS 50.00.");
+    expect(view<{ atm: { wallets: string[]; paid: number } }>(w, "bank", "absa").atm).toEqual({ wallets: ["Telecel Cash", "AT Money"], paid: 1 });
+    // A bank that is not one of a network's partners accepts none.
+    expect(view<{ atm: { wallets: string[] } }>(w, "bank", "gcb").atm.wallets).toEqual([]);
+  });
+
+  it("airtime, data bundles and bills are bought from the wallet on every network", async () => {
+    const svc = await import("../src/engine/services");
+    const path = { mtn: { bills: ["2", "2"], fin: "5", wallet: "6" }, telecel: { bills: ["4", "2"], fin: "5", wallet: "6" }, at: { bills: ["4"], fin: "6", wallet: "7" } };
+    for (const t of ["mtn", "telecel", "at"] as const) {
+      const n = net[t];
+      const before = bal(n.a);
+      expect(walk(n.a, n.code, "3", "1", "1", "10", PIN)).toMatch(/GHS 10.00 airtime bought for your number/);
+      expect(walk(n.a, n.code, "3", "1", "2", n.b, "5", PIN)).toMatch(new RegExp(`GHS 5.00 airtime bought for ${n.b}`));
+      expect(lastSms(w, n.b)).toMatch(/You have received GHS 5.00 airtime/);
+      // Airtime is for the network's own numbers.
+      expect(walk(n.a, n.code, "3", "1", "2", net[t === "mtn" ? "at" : "mtn"].b, "5", PIN)).toMatch(/Enter an active .* number/);
+      expect(walk(n.a, n.code, "3", "2")).toMatch(/Buy Data Bundle\n1\) Daily 450MB GHS3\n2\) Weekly 1.2GB GHS10/);
+      expect(walk(n.a, n.code, "3", "2", "2")).toMatch(/Buy Weekly 1.2GB for GHS10.00\nEnter PIN/);
+      expect(walk(n.a, n.code, "3", "2", "2", PIN)).toMatch(/Weekly 1.2GB bought for your number/);
+      expect(svc.lineBalance(w, n.a)).toMatchObject({ airtime: 1000, dataMb: 1200 });
+      expect(svc.lineBalance(w, n.b)).toMatchObject({ airtime: 500, dataMb: 0 });
+      expect(walk(n.a, "*124#")).toMatch(/Airtime: GHS 10.00\nData: 1200MB/);
+      expect(walk(n.a, n.code, "3", "3")).toMatch(/Airtime: GHS 10.00/);
+      // A bill: the biller, the account, the amount. Prepaid electricity comes back with a token.
+      expect(walk(n.a, n.code, ...path[t].bills)).toMatch(/Pay Bill\n1\) ECG Prepaid\n2\) Ghana Water\n3\) DStv/);
+      expect(walk(n.a, n.code, ...path[t].bills, "1")).toBe("Enter meter number");
+      expect(walk(n.a, n.code, ...path[t].bills, "1", "24178833", "60", PIN)).toMatch(/GHS 60.00 paid to ECG Prepaid for 24178833. Token: \d{4}-\d{4}-\d{4}-\d{4}-\d{4}/);
+      expect(lastSms(w, n.a)).toMatch(/You paid GHS 60.00 to ECG Prepaid for 24178833. Token:/);
+      expect(walk(n.a, n.code, ...path[t].bills, "3", "x")).toMatch(/Invalid number\nEnter smartcard number/);
+      expect(walk(n.a, n.code, ...path[t].bills, "3", "7023456789", "150", PIN)).toMatch(/GHS 150.00 paid to DStv for 7023456789/);
+      expect(bal(n.a)).toBe(before - 1000 - 500 - 1000 - 6000 - 15000);
+      // The network has the airtime money as its own, and owes the billers theirs.
+      expect(balanceOf(w, `airtime:${t}`)).toBe(2500);
+      expect(balanceOf(w, `billers:${t}`)).toBe(21000);
+      expect(view<{ bills: { biller: string; account: string; amount: number }[] }>(w, "telco", t).bills.map((b) => b.biller).sort()).toEqual(["DStv", "ECG Prepaid"]);
+      // Checking an agent before trusting one.
+      const verify = t === "mtn" ? ["6", "6"] : t === "telecel" ? ["7", "1"] : ["7", "5"];
+      expect(walk(n.a, n.code, ...verify, n.agent)).toMatch(new RegExp(`Agent ${n.agent}: ${t} Agent Shop, Kumasi. Registered`));
+      expect(walk(n.a, n.code, ...verify, "123456")).toMatch(/is NOT a registered/);
+      // Bank to wallet needs a bank account in the same name.
+      expect(walk(n.a, n.code, path[t].fin, "1", "2", "100", PIN)).toMatch(/No bank account is linked to your wallet/);
+      const acct = openAccount(w, "fidelity", { card: n.pa.ghana_card, fingerprint: n.pa.fingerprint });
+      pay.bankCash(w, { bank: "fidelity", account: acct.id, amount: 50000, kind: "deposit" });
+      expect(walk(n.a, n.code, path[t].fin, "1", "2")).toMatch(new RegExp(`Move money from Fidelity Bank ${acct.account_no} to your wallet`));
+      const had = bal(n.a);
+      expect(walk(n.a, n.code, path[t].fin, "1", "2", "100", PIN)).toMatch(/GHS 100.00 sent to Ama Owusu/);
+      expect(bal(n.a)).toBe(had + 10000);
+      expect(walk(n.a, n.code, path[t].fin, "2")).toMatch(/run by a partner/);
+      expect(walk(n.a, n.code, path[t].wallet, "2", PIN)).toMatch(/\+100.00/);
+    }
+    // Every cedi is still backed, with airtime and bill money counted, and the books balance.
+    expect(backed()).toBe(true);
+    expect(count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)")).toBe(0);
+  });
+
+  it("an API plugged into a network is asked about these too, and a warning waits for the customer", async () => {
+    const http = await import("node:http");
+    const integrations = await import("../src/engine/integrations");
+    const asked: { point: string; data: { type: string; payee: Record<string, unknown> } }[] = [];
+    const api = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const j = JSON.parse(body);
+        asked.push(j);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(j.data.type === "cashout" ? { decision: "warn", message: "Are you at the agent's shop?" } : j.data.type === "airtime" && j.data.amount > 100 ? { decision: "reject", message: "Large airtime purchase blocked." } : { decision: "allow" }));
+      });
+    });
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    integrations.addIntegration(w, "telecel", { point: "payment.authorize", name: "Guard", url: `http://127.0.0.1:${(api.address() as import("node:net").AddressInfo).port}/` });
+    const n = net.telecel;
+    const step = (input: string, sessionId?: string) => integrations.locked(w, () => ussd(w, { sessionId, msisdn: n.a, input }));
+    const run = async (...inputs: string[]) => {
+      let s = await step("*110#");
+      for (const i of inputs) s = await step(i, s.sessionId);
+      return s;
+    };
+    const before = bal(n.a);
+    // A withdrawal: the warning is shown, and nothing moves until the customer continues.
+    let s = await run("2", "1", n.agent, "100", PIN);
+    expect(s).toMatchObject({ end: false });
+    expect(s.text).toBe("Are you at the agent's shop?\n1) Continue\n2) Cancel");
+    expect(bal(n.a)).toBe(before);
+    s = await step("1", s.sessionId);
+    expect(s.text).toMatch(/GHS 100.00 cashed out/);
+    // Airtime and bills are payments like any other to the API.
+    expect((await run("3", "1", "1", "150", PIN)).text).toBe("Large airtime purchase blocked.");
+    expect((await run("3", "1", "1", "20", PIN)).text).toMatch(/GHS 20.00 airtime bought/);
+    expect((await run("4", "2", "2", "ACC-778", "35", PIN)).text).toMatch(/GHS 35.00 paid to Ghana Water/);
+    expect((await run("2", "2", "50", PIN)).text).toMatch(/Voucher \d{6}/);
+    expect(asked.map((a) => `${a.data.type}:${a.data.payee.kind ?? a.data.payee.walletType}`)).toEqual(["cashout:agent", "airtime:airtime", "airtime:airtime", "bill:bill", "atm_withdrawal:cash_machine"]);
+    for (const p of integrations.listIntegrations(w, "telecel")) integrations.removeIntegration(w, "telecel", p.id);
+    api.close();
+  });
+
+  it("a world made before each network had its own menu is brought up to date, unless its menu was edited", async () => {
+    const { EARLIER_MENUS } = await import("../src/engine/config/defaults");
+    const worlds = await import("../src/engine/worlds");
+    const { setMeta } = await import("../src/engine/db");
+    const old = await resetWorld("team-01");
+    // Put the world back as it was: the shared menu on every network, and the old wording of the request text.
+    for (const t of ["mtn", "telecel", "at"] as const) {
+      const cfg = structuredClone(getConfig(old.db, `telco.${t}`)) as Record<string, unknown> & ReturnType<typeof defaultTelco>;
+      cfg.menu = structuredClone(EARLIER_MENUS[t]);
+      if (t === "at") (cfg.menu.nodes.not_available as { text: string }).text = "Edited by the team.";
+      cfg.notifications.approval_prompt = { enabled: true, template: "Dial and choose option 4 to approve." };
+      for (const k of ["cashOut", "registration", "bundles", "billers", "atm"]) delete cfg[k];
+      old.db.prepare("UPDATE config SET value = ?, version = version + 1 WHERE surface = ?").run(JSON.stringify(cfg), `telco.${t}`);
+    }
+    setMeta(old.db, "menus", 1);
+    worlds.upgradeMenus(old.db);
+    const main = (t: string) => (getConfig(old.db, `telco.${t}`).menu.nodes.main as { options: { label: string }[] }).options.map((o) => o.label);
+    expect(main("telecel")).toContain("Self Service");
+    expect(getConfig(old.db, "telco.telecel")).toMatchObject({ cashOut: "customer_starts", registration: { code: "*558#" }, selfRegistration: true });
+    expect(getConfig(old.db, "telco.telecel").notifications.approval_prompt!.template).toMatch(/choose 6 \(My Wallet\), then 4 \(My Approvals\)/);
+    expect(main("mtn")).toEqual(["Transfer Money", "MoMoPay & Pay Bill", "Airtime & Bundles", "Allow Cash Out", "Financial Services", "My Wallet"]);
+    // AT's menu had been edited, so it is left as the team made it; it still gets the lists the new services read.
+    expect(main("at")).toContain("Approve Cash Out");
+    expect(getConfig(old.db, "telco.at").cashOut).toBeUndefined();
+    expect(getConfig(old.db, "telco.at").bundles).toHaveLength(4);
+    // Running it again changes nothing.
+    const again = JSON.stringify(getConfig(old.db, "telco.telecel"));
+    worlds.upgradeMenus(old.db);
+    expect(JSON.stringify(getConfig(old.db, "telco.telecel"))).toBe(again);
+    await resetWorld("team-01");
   });
 });
