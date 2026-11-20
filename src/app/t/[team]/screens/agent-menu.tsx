@@ -17,9 +17,13 @@ export default function AgentMenu({ team, role, logos }: { team: string; role: s
           <div className="text-[11px] font-semibold uppercase tracking-wider text-[#3b1f6e]">{teamName(team)}</div>
           <h1 className="text-lg font-semibold text-gray-900">Agent phone</h1>
         </div>
-        {role === "team" && (
+        {role === "team" ? (
           <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700">
             ← All systems
+          </Link>
+        ) : (
+          <Link href={`/t/${team}/console`} className="text-xs text-gray-500 underline">
+            Use this device for the consoles
           </Link>
         )}
       </div>

@@ -14,7 +14,7 @@ import NoAccess from "../no-access";
 
 export default async function Docs(props: PageProps<"/t/[team]/docs">) {
   const { team } = await props.params;
-  if (!(await canViewTeam(team))) return <NoAccess />;
+  if (!(await canViewTeam(team))) return <NoAccess team={team} />;
   const key = teamById(team)?.key ?? "<organiser key>";
   const base = `${await pageOrigin()}/api/w/${team}`;
   const auth = `-H "x-team-key: ${key}"`;

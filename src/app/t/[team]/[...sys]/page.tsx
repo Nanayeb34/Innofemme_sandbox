@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { teamRole } from "@/server/guard";
 import { telcoLogos } from "@/server/logos";
 import { BANK_IDS, isTelco } from "@/engine/util";
 import { roleHome, type Role } from "@/engine/worlds";
 import NoAccess from "../no-access";
+import TeamKey from "../team-key";
 import AgentMenu from "../screens/agent-menu";
 import { MomoPoint, SimPoint } from "../screens/agents";
 import Bank from "../screens/bank";
@@ -27,7 +28,7 @@ function allowed(role: Role, system: string): boolean {
 export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">) {
   const { team, sys } = await props.params;
   const role = await teamRole(team);
-  if (!role) return <NoAccess />;
+  if (!role) return <NoAccess team={team} />;
   const [system, which] = sys;
   if (!allowed(role, system)) {
     return (
@@ -37,9 +38,12 @@ export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">)
         <Link href={roleHome(team, role)} className="btn btn-dark mt-4">
           {role === "customer" ? "Back to the phone" : "Back to the agent screens"}
         </Link>
+        <TeamKey team={team} label="To use this device for the consoles instead, enter your team key" />
       </main>
     );
   }
+  // Where a phone-only device is sent to switch to the consoles. A device that already has them goes to the home page.
+  if (system === "console") redirect(`/t/${team}`);
   if (sys.length === 1) {
     if (system === "nia") return <Nia team={team} />;
     if (system === "fraud") return <Fraud team={team} />;

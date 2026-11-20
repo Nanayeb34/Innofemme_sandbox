@@ -104,9 +104,13 @@ export default function Phone({ team, role }: { team: string; role: string }) {
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{teamName(team)} · Phone</div>
-        {role === "team" && (
+        {role === "team" ? (
           <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
             ← All systems
+          </Link>
+        ) : (
+          <Link href={`/t/${team}/console`} className="text-xs text-gray-500 underline">
+            Use this device for the consoles
           </Link>
         )}
       </div>

@@ -26,7 +26,7 @@ interface PhoneCode {
   qr: string;
 }
 
-export default function Hub({ team, logos, phones }: { team: string; logos: Record<string, string | null>; phones: PhoneCode[] }) {
+export default function Hub({ team, logos, phones, consoles }: { team: string; logos: Record<string, string | null>; phones: PhoneCode[]; consoles?: PhoneCode & { key: string } }) {
   const { data, error, refresh } = useView<HubView>(team, "/s/hub", 4000);
   const base = `/t/${team}`;
   const next = data?.steps.find((s) => !s.done);
@@ -72,7 +72,7 @@ export default function Hub({ team, logos, phones }: { team: string; logos: Reco
               </ol>
             </section>
 
-            {phones.length > 0 && <PhoneCodes phones={phones} />}
+            {phones.length > 0 && <PhoneCodes phones={phones} consoles={consoles} />}
 
             <Group title="Testing what you have built">
               <Tile
@@ -148,35 +148,54 @@ export default function Hub({ team, logos, phones }: { team: string; logos: Reco
   );
 }
 
-/** The codes people scan with their own phones. Each opens one screen only, never the consoles. */
-function PhoneCodes({ phones }: { phones: PhoneCode[] }) {
+/** How other devices join: a phone as a customer's or an agent's phone, another laptop as a second console. Any number can be open at once. */
+function PhoneCodes({ phones, consoles }: { phones: PhoneCode[]; consoles?: PhoneCode & { key: string } }) {
   const [copied, setCopied] = useState<string | null>(null);
+  const [showConsoles, setShowConsoles] = useState(false);
+  const card = (p: PhoneCode, extra?: React.ReactNode) => (
+    <div key={p.role} className="flex items-center gap-4 rounded-lg border border-gray-200 p-3">
+      <div className="w-[150px] shrink-0" dangerouslySetInnerHTML={{ __html: p.qr }} />
+      <div className="min-w-0">
+        <div className="font-semibold text-gray-900">{p.title}</div>
+        <div className="text-sm text-gray-600">{p.hint}</div>
+        {extra}
+        <button
+          className="mt-2 text-xs underline"
+          onClick={() => {
+            void navigator.clipboard?.writeText(p.url);
+            setCopied(p.role);
+          }}
+        >
+          {copied === p.role ? "Link copied" : "Copy link instead"}
+        </button>
+      </div>
+    </div>
+  );
   return (
     <section className="card mb-5 p-4">
-      <h2 className="font-semibold text-gray-900">Scan to use your own phone</h2>
+      <h2 className="font-semibold text-gray-900">Open on another device</h2>
       <p className="mt-0.5 max-w-3xl text-sm text-gray-600">
-        Point a phone camera at a code. The customer code opens only the phone simulator; the agent code opens only the agent screens. Neither can reach the consoles on this page, so they are safe to show on a projector.
+        Any number of devices can be open at once: this page stays as it is while a phone is used as a customer&apos;s or an agent&apos;s phone. Point the phone&apos;s camera at a code. The customer code opens only the phone simulator; the agent code opens only the
+        agent screens. Neither can reach the consoles, so they are safe to show on a projector.
       </p>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        {phones.map((p) => (
-          <div key={p.role} className="flex items-center gap-4 rounded-lg border border-gray-200 p-3">
-            <div className="w-[150px] shrink-0" dangerouslySetInnerHTML={{ __html: p.qr }} />
-            <div className="min-w-0">
-              <div className="font-semibold text-gray-900">{p.title}</div>
-              <div className="text-sm text-gray-600">{p.hint}</div>
-              <button
-                className="mt-2 text-xs underline"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(p.url);
-                  setCopied(p.role);
-                }}
-              >
-                {copied === p.role ? "Link copied" : "Copy link instead"}
-              </button>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">{phones.map((p) => card(p))}</div>
+      {consoles && (
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <button className="text-sm font-medium text-gray-900 underline" onClick={() => setShowConsoles(!showConsoles)}>
+            {showConsoles ? "Hide the code for the consoles" : "Open these consoles on another laptop or tablet"}
+          </button>
+          {showConsoles && (
+            <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              {card(
+                { ...consoles, title: "The consoles (this page)", hint: "Opens every system, like this device. Only for your own team: do not show it on a projector." },
+                <div className="mt-1 text-xs text-gray-600">
+                  Team key: <span className="select-all break-all font-mono text-gray-900">{consoles.key}</span>
+                </div>,
+              )}
             </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
