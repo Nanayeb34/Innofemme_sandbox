@@ -83,3 +83,21 @@ export function withLock<T>(w: World, fn: () => Promise<T> | T): Promise<T> {
 export function audit(w: World, system: string, action: string, summary: string) {
   w.db.prepare("INSERT INTO audit(at, system, action, summary) VALUES(?,?,?,?)").run(w.now, system, action, summary);
 }
+
+const remembered = new WeakMap<World, { at: number; values: Map<string, unknown> }>();
+
+/**
+ * Keeps the answer to a question that depends only on what is stored, until something stored changes.
+ * Many screens ask the same totals every few seconds; a world nobody is changing answers them once.
+ * Nothing is kept from inside a transaction, which may yet be undone.
+ */
+export function remember<T>(w: World, key: string, fn: () => T): T {
+  if (w.db.isTransaction) return fn();
+  const at = Number((w.db.prepare("SELECT total_changes() AS n").get() as { n: number }).n);
+  let kept = remembered.get(w);
+  if (!kept || kept.at !== at) remembered.set(w, (kept = { at, values: new Map() }));
+  if (kept.values.has(key)) return kept.values.get(key) as T;
+  const value = fn();
+  kept.values.set(key, value);
+  return value;
+}

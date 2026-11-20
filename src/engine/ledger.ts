@@ -67,9 +67,22 @@ export function feeFor(fee: Fee, amount: number): number {
   return Math.round(band.max === undefined ? f : Math.min(f, band.max * 100));
 }
 
-/** Balance of any ledger account, from its postings. */
+/** What each account added up to at the last look, and the last posting counted. A replaced world is a new World, so starts again. */
+const balances = new WeakMap<World, Map<string, { top: number; sum: number }>>();
+
+/**
+ * Balance of any ledger account, from its postings. Postings are only ever added, so this keeps the total
+ * as of the last posting it counted and adds what has been written since, instead of adding the account up
+ * from the start every time. Nothing is kept from inside a transaction, which may yet be undone.
+ */
 export function balanceOf(w: World, account: string): number {
-  return Number((w.db.prepare("SELECT COALESCE(SUM(amount),0) AS n FROM postings WHERE account = ?").get(account) as { n: number }).n);
+  let known = balances.get(w);
+  if (!known) balances.set(w, (known = new Map()));
+  const last = known.get(account) ?? { top: 0, sum: 0 };
+  const row = w.db.prepare("SELECT COALESCE(SUM(amount),0) AS n, COALESCE(MAX(id),0) AS top FROM postings WHERE account = ? AND id > ?").get(account, last.top) as { n: number; top: number };
+  const sum = last.sum + Number(row.n);
+  if (!w.db.isTransaction && Number(row.top) > last.top) known.set(account, { top: Number(row.top), sum });
+  return sum;
 }
 
 /**

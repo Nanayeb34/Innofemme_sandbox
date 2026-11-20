@@ -71,7 +71,7 @@ export interface Position {
 export function positions(w: World): Position[] {
   const cfg = getConfig(w.db, "switch");
   const sent: Record<string, number> = {}, received: Record<string, number> = {};
-  const rows = w.db.prepare("SELECT from_party, to_party, COUNT(*) AS n FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type != 'reversal' GROUP BY from_party, to_party").all() as { from_party: string | null; to_party: string | null; n: number }[];
+  const rows = w.db.prepare("SELECT from_party, to_party, SUM(n) AS n FROM txn_totals WHERE rail = 'switch' AND status IN ('success','reversed') AND type != 'reversal' GROUP BY from_party, to_party").all() as { from_party: string; to_party: string; n: number }[];
   for (const r of rows) {
     if (r.from_party) sent[r.from_party] = (sent[r.from_party] ?? 0) + Number(r.n);
     if (r.to_party) received[r.to_party] = (received[r.to_party] ?? 0) + Number(r.n);

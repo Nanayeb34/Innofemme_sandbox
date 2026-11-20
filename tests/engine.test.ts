@@ -34,6 +34,11 @@ function dial(w: World, msisdn: string, ...inputs: string[]) {
   return last;
 }
 const view = <T>(w: World, ...p: string[]) => resolveSystem(p).view(w, new URLSearchParams()) as T;
+/** The payment totals the database keeps as it goes, beside a fresh count of the whole history: the two must agree. */
+const totals = (w: World) => ({
+  kept: w.db.prepare("SELECT status, type, rail, from_party AS f, to_party AS t, n, amount FROM txn_totals WHERE n != 0 OR amount != 0 ORDER BY 1, 2, 3, 4, 5").all(),
+  counted: w.db.prepare("SELECT status, type, rail, COALESCE(from_party, '') AS f, COALESCE(to_party, '') AS t, COUNT(*) AS n, SUM(amount) AS amount FROM txns GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5").all(),
+});
 
 describe("a country built from nothing", () => {
   let w: World;
@@ -448,6 +453,9 @@ describe("customer care", () => {
     expect(v.ticket!.can.close).toBe(false);
     expect(v.customer).toMatchObject({ found: true, identity: { name: "Abena Darko" } });
     expect(count(w.db, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)")).toBe(0);
+    // Payments were made, refused and reversed here: the running totals kept pace with all of it.
+    expect(totals(w).kept).toEqual(totals(w).counted);
+    expect(totals(w).counted.some((r) => r.status === "reversed")).toBe(true);
   });
 });
 
@@ -1105,6 +1113,7 @@ describe("simulated data: a ready-made country with labelled fraud", () => {
     const again = await worlds.loadSimulated("team-02");
     const first = (x: World) => JSON.stringify(x.db.prepare("SELECT txn_id, is_fraud, scenario FROM dataset ORDER BY seq LIMIT 200").all());
     expect(first(again)).toBe(first(w));
+    expect(totals(again).kept).toEqual(totals(again).counted);
     await resetWorld("team-01");
     await resetWorld("team-02");
   }, 180_000);
@@ -1506,6 +1515,36 @@ describe("each network's own wallet menu and services", () => {
     expect(asked.map((a) => `${a.data.type}:${a.data.payee.kind ?? a.data.payee.walletType}`)).toEqual(["cashout:agent", "airtime:airtime", "airtime:airtime", "bill:bill", "atm_withdrawal:cash_machine"]);
     for (const p of integrations.listIntegrations(w, "telecel")) integrations.removeIntegration(w, "telecel", p.id);
     api.close();
+  });
+
+  it("the totals the consoles keep stay right when a payment is undone part-way, and move the moment money moves", async () => {
+    const { tx } = await import("../src/engine/db");
+    const { post } = await import("../src/engine/ledger");
+    const added = (account: string) => count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings WHERE account = ?", account);
+    const mtn = () => view<{ stats: { revenue: number } }>(w, "telco", "mtn").stats.revenue;
+    const switchRouted = () => view<{ stats: { routed: number } }>(w, "switch").stats.routed;
+    const fees = balanceOf(w, "fee:mtn");
+    expect(fees).toBe(added("fee:mtn"));
+    const [revenue, routed] = [mtn(), switchRouted()];
+    // A payment that fails after its entries were written leaves nothing behind, in the ledger or in what was kept.
+    expect(() =>
+      tx(w.db, () => {
+        post(w, "tx_undone", [["fee:mtn", 500], ["emoney:mtn", -500]]);
+        expect(balanceOf(w, "fee:mtn")).toBe(fees + 500);
+        throw new Error("stopped part-way");
+      }),
+    ).toThrow("stopped part-way");
+    expect(balanceOf(w, "fee:mtn")).toBe(fees);
+    expect(mtn()).toBe(revenue);
+    // A real payment shows at once: the fee on the network's screen, the payment on the switch's.
+    expect(walk(net.mtn.a, "*170#", "1", "2", net.telecel.b, net.telecel.b, "40", "x", PIN)).toMatch(/GHS 40.00 sent to Kofi Mensah telecel/);
+    expect(balanceOf(w, "fee:mtn")).toBeGreaterThan(fees);
+    expect(balanceOf(w, "fee:mtn")).toBe(added("fee:mtn"));
+    expect(mtn()).toBeGreaterThan(revenue);
+    expect(switchRouted()).toBe(routed + 1);
+    for (const account of ["switch:mtn", "switch:telecel", "emoney:mtn", "hold:mtn"]) expect(balanceOf(w, account)).toBe(added(account));
+    expect(totals(w).kept).toEqual(totals(w).counted);
+    expect(backed()).toBe(true);
   });
 
   it("a world made before each network had its own menu is brought up to date, unless its menu was edited", async () => {

@@ -19,8 +19,18 @@ export function useView<T>(team: string, path: string, everyMs = 3000) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- polls the sandbox server, an external system
     refresh();
-    const t = setInterval(refresh, everyMs);
-    return () => clearInterval(t);
+    // A tab nobody is looking at stops asking, and catches up the moment it is looked at again.
+    const t = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, everyMs);
+    const seen = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", seen);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", seen);
+    };
   }, [refresh, everyMs]);
   return { data, error, refresh };
 }

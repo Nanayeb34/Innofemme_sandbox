@@ -29,6 +29,8 @@ interface State {
 const g = globalThis as unknown as { __sandbox?: State };
 const state: State = (g.__sandbox ??= { worlds: new Map() });
 
+let read: { changed: number; reg: Registry } | undefined;
+
 export function registry(): Registry {
   if (!fs.existsSync(REGISTRY)) {
     const teamCount = Number(process.env.SANDBOX_TEAMS || 10);
@@ -43,9 +45,14 @@ export function registry(): Registry {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(REGISTRY, JSON.stringify(reg, null, 2));
   }
-  const reg: Registry = JSON.parse(fs.readFileSync(REGISTRY, "utf8"));
-  // ORGANISER_KEY, when set, always wins over the key stored at first start.
-  return { ...reg, organiserKey: process.env.ORGANISER_KEY || reg.organiserKey };
+  // Every request checks a key against this list, so the file is read again only when it has changed.
+  const changed = fs.statSync(REGISTRY).mtimeMs;
+  if (!read || read.changed !== changed) {
+    const reg: Registry = JSON.parse(fs.readFileSync(REGISTRY, "utf8"));
+    // ORGANISER_KEY, when set, always wins over the key stored at first start.
+    read = { changed, reg: { ...reg, organiserKey: process.env.ORGANISER_KEY || reg.organiserKey } };
+  }
+  return read.reg;
 }
 
 /**

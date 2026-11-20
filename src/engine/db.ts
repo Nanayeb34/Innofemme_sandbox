@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS sims (
 );
 CREATE INDEX IF NOT EXISTS sims_person ON sims(person_id);
 CREATE INDEX IF NOT EXISTS sims_telco ON sims(telco, status);
+-- The newest numbers, for the lists on the phone, the network's and the NCA's screens; and how many each point registered.
+CREATE INDEX IF NOT EXISTS sims_registered ON sims(registered_at);
+CREATE INDEX IF NOT EXISTS sims_telco_registered ON sims(telco, registered_at);
+CREATE INDEX IF NOT EXISTS sims_registered_by ON sims(registered_by);
 
 CREATE TABLE IF NOT EXISTS sim_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +100,7 @@ CREATE TABLE IF NOT EXISTS wallets (
   balance INTEGER NOT NULL DEFAULT 0,    -- pesewas
   created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS wallets_telco_created ON wallets(telco, created_at);
 
 CREATE TABLE IF NOT EXISTS momo_agents (
   wallet_id TEXT PRIMARY KEY,
@@ -157,6 +162,35 @@ CREATE INDEX IF NOT EXISTS txns_created ON txns(created_at);
 CREATE INDEX IF NOT EXISTS txns_from ON txns(from_wallet, created_at);
 CREATE INDEX IF NOT EXISTS txns_to ON txns(to_wallet, created_at);
 
+-- How many payments of each kind there are and what they add up to. The database keeps these itself as payments
+-- are written, changed or removed, so the totals on the screens never mean counting the whole history again.
+CREATE TABLE IF NOT EXISTS txn_totals (
+  status TEXT NOT NULL,
+  type TEXT NOT NULL,
+  rail TEXT NOT NULL,
+  from_party TEXT NOT NULL,          -- '' where the payment has none
+  to_party TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  amount INTEGER NOT NULL,
+  PRIMARY KEY (status, type, rail, from_party, to_party)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS txns_added AFTER INSERT ON txns BEGIN
+  INSERT INTO txn_totals(status, type, rail, from_party, to_party, n, amount)
+    VALUES(NEW.status, NEW.type, NEW.rail, COALESCE(NEW.from_party, ''), COALESCE(NEW.to_party, ''), 1, NEW.amount)
+    ON CONFLICT(status, type, rail, from_party, to_party) DO UPDATE SET n = n + 1, amount = amount + excluded.amount;
+END;
+CREATE TRIGGER IF NOT EXISTS txns_removed AFTER DELETE ON txns BEGIN
+  UPDATE txn_totals SET n = n - 1, amount = amount - OLD.amount
+    WHERE status = OLD.status AND type = OLD.type AND rail = OLD.rail AND from_party = COALESCE(OLD.from_party, '') AND to_party = COALESCE(OLD.to_party, '');
+END;
+CREATE TRIGGER IF NOT EXISTS txns_changed AFTER UPDATE ON txns BEGIN
+  UPDATE txn_totals SET n = n - 1, amount = amount - OLD.amount
+    WHERE status = OLD.status AND type = OLD.type AND rail = OLD.rail AND from_party = COALESCE(OLD.from_party, '') AND to_party = COALESCE(OLD.to_party, '');
+  INSERT INTO txn_totals(status, type, rail, from_party, to_party, n, amount)
+    VALUES(NEW.status, NEW.type, NEW.rail, COALESCE(NEW.from_party, ''), COALESCE(NEW.to_party, ''), 1, NEW.amount)
+    ON CONFLICT(status, type, rail, from_party, to_party) DO UPDATE SET n = n + 1, amount = amount + excluded.amount;
+END;
+
 -- Double-entry ledger: the postings of every transaction add up to zero.
 CREATE TABLE IF NOT EXISTS postings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,7 +200,9 @@ CREATE TABLE IF NOT EXISTS postings (
   at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS postings_txn ON postings(txn_id);
-CREATE INDEX IF NOT EXISTS postings_account ON postings(account);
+-- An account's balance is read from this alone: its postings in the order they were written, with their amounts.
+CREATE INDEX IF NOT EXISTS postings_balance ON postings(account, id, amount);
+DROP INDEX IF EXISTS postings_account;
 
 -- ===== National switch =====
 CREATE TABLE IF NOT EXISTS switch_log (
@@ -178,6 +214,7 @@ CREATE TABLE IF NOT EXISTS switch_log (
   detail TEXT,
   at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS switch_log_step ON switch_log(step);
 
 CREATE TABLE IF NOT EXISTS settlements (
   id TEXT PRIMARY KEY,
@@ -228,6 +265,9 @@ CREATE TABLE IF NOT EXISTS calls (
 );
 CREATE INDEX IF NOT EXISTS calls_from ON calls(from_msisdn, started_at);
 CREATE INDEX IF NOT EXISTS calls_to ON calls(to_msisdn, started_at);
+CREATE INDEX IF NOT EXISTS calls_started ON calls(started_at);
+-- Every open phone asks once a second whether a call is ringing or in progress.
+CREATE INDEX IF NOT EXISTS calls_status ON calls(status);
 
 -- ===== Customer care =====
 -- Complaints and disputes handled by a telco's call centre.
@@ -249,6 +289,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tickets_telco ON tickets(telco, status);
+-- A call centre's list: open complaints first, then the most recently touched.
+CREATE INDEX IF NOT EXISTS tickets_open_first ON tickets(telco, (status IN ('resolved','rejected')), updated_at DESC);
 CREATE INDEX IF NOT EXISTS tickets_txn ON tickets(txn_id);
 
 CREATE TABLE IF NOT EXISTS ticket_events (
@@ -513,6 +555,12 @@ export function openDb(file: string): DB {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;");
   db.exec(SCHEMA);
+  // A world made before the running totals existed has them worked out once, here.
+  if (getMeta(db, "txn_totals") !== "1") {
+    db.exec(`BEGIN; DELETE FROM txn_totals;
+      INSERT INTO txn_totals SELECT status, type, rail, COALESCE(from_party, ''), COALESCE(to_party, ''), COUNT(*), SUM(amount) FROM txns GROUP BY 1, 2, 3, 4, 5;
+      INSERT INTO meta(key, value) VALUES('txn_totals', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value; COMMIT;`);
+  }
   return db;
 }
 
