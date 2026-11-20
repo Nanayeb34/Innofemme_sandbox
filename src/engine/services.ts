@@ -62,8 +62,10 @@ export function withdrawAtAgent(w: World, from: WalletRow, o: { agent: string; a
  * network, "choose 6 (My Wallet), then 4 (My Approvals)" on another. Read from the menu as it is now, so it
  * stays true when a team rearranges the menu. The shortest way is given.
  */
-export function approvalsPath(w: World, telco: Telco): string {
-  const menu = cfgOf(w, telco).menu;
+export const approvalsPath = (w: World, telco: Telco): string => approvalsPathIn(cfgOf(w, telco).menu);
+
+/** The same, for any menu: used where there is no world to read, such as the public documentation. */
+export function approvalsPathIn(menu: ReturnType<typeof cfgOf>["menu"]): string {
   const seen = new Set<string>([menu.start]);
   let level: { id: string; steps: string[] }[] = [{ id: menu.start, steps: [] }];
   while (level.length) {

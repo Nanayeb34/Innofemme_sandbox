@@ -37,3 +37,10 @@ body {
     @apply rounded-xl border border-gray-200 bg-white;
   }
 }
+
+/* The assistant's panel sits beside the page, not over it, wherever there is room for both. */
+@media (min-width: 640px) {
+  html.assistant-open body {
+    padding-right: 26rem;
+  }
+}

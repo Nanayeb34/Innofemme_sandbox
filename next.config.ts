@@ -5,6 +5,8 @@ const nextConfig: NextConfig = {
   // The MTN MoMo API uses trailing slashes (e.g. /collection/token/); keep them working.
   skipTrailingSlashRedirect: true,
   output: "standalone",
+  // The starter kits in examples/ are read at run time by the documentation page, so they travel with the built server.
+  outputFileTracingIncludes: { "/*": ["./examples/**/*"] },
   // Logos are small PNGs; serve them as-is rather than through the image optimiser.
   images: { unoptimized: true },
   // A team's own web page, served from anywhere, may call their world's API straight from the browser.

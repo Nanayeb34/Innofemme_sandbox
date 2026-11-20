@@ -64,7 +64,8 @@ A Codespace holds the code as it was when the Codespace was created. To bring in
 | `/t/{team}/switch` | The national switch (GhIPSS in real life) | Connect and disconnect participants, watch the message log, see each participant's position, run net settlement, follow disputes between networks. |
 | `/t/{team}/bog` | Bank of Ghana | KYC tier limits for all networks; check that every telco's e-money is backed by its trust account. |
 | `/t/{team}/nca` | National Communications Authority | SIM registration rules (SIMs per Ghana Card, minimum age, approval from the first number); the central SIM register across networks. |
-| `/t/{team}/docs` | | API reference with the team's own base URL and key. |
+| `/docs` | | The documentation, open to anyone: getting started, starter kits, every API, troubleshooting. |
+| `/t/{team}/docs` | | The same documentation with the team's own base URL and key filled into every example. |
 
 There are **two kinds of agent**, as in real life. SIM registration points are authorised by a telco to register and fix SIMs; the telco is answerable for them. Mobile money agents handle cash and e-money on a dedicated agent line with its own float.
 
@@ -101,6 +102,65 @@ These are the main design decisions:
 - **Settlement is deferred.** Payments between institutions clear at once but move money only when the switch settles. A telco settles through its trust account at its partner bank; banks settle across their accounts at the Bank of Ghana.
 - **One SQLite file per world** (Node's built-in `node:sqlite`). Save points, rollback and reset are file operations, and the offline back-up needs no database server.
 - **Biometrics are a code.** NIA gives each person a fingerprint code that stands in for their fingerprints. It must be presented wherever a biometric check is done.
+
+## Documentation and starter kits
+
+The documentation is part of the sandbox, so it cannot fall out of step with it. `/docs` is open to
+anyone, with placeholders where a team's address and key would be, so participants can read it before
+they have a team link. `/t/{team}/docs` is the same page with that team's own address and key filled in.
+It has four parts: getting started (including a first 15 minutes), the starter kits, the full API
+reference, and what to do when something goes wrong.
+
+The starter kits are in `examples/`, are shown on that page and can be downloaded from it. They need
+nothing installed beyond Python or Node.js, and show how to connect, not what to build.
+
+| File | What it is |
+| --- | --- |
+| `plugin_api.py`, `plugin-api.mjs` | An API an institution plugs into its own steps. Answers "allow" and prints what it was sent. The Fraud API can send incidents to it too. |
+| `app.py`, `app.mjs` | An application of your own: signs in to a network with partner credentials, then makes one call of each kind, including a request to pay. |
+| `bridge.py`, `bridge.mjs` | The bridge: lets a shared sandbox reach an API running on a laptop. Run as it is, beside the API. |
+
+**A ready test customer.** The team home page has a button, and the console API a call
+(`POST /api/w/{team}/s/hub {"action":"test_customer","network":"mtn"}`), that makes a new person, registers
+a number for them, opens a wallet on medium KYC with GHS 500 and tells you the PIN. Each part is done the
+way the institutions do it, so it works in an empty world and in the simulated country alike.
+
+## The assistant
+
+A small team of AI agents that works in a team's world on the team's instructions, the way this kind of
+assistant works for a programmer: it is told what is wanted, does it step by step with tools, shows each
+step as it happens, asks before anything that cannot be put back, and reports what happened. It is on every
+team page (a button in the corner opens it beside the console) and at `/t/{team}/assistant`.
+
+| Who | Does |
+| --- | --- |
+| Assistant (the lead) | Talks with the person, decides what needs doing, hands each piece of work to a specialist, checks the result. |
+| Builder | Sets up and changes the institutions: people, SIMs, registration points, agents, merchants, accounts, float, settings. |
+| Operator | Uses the system the way people do: dials codes on a phone, pays, approves, texts; serves at an agent's or a bank's counter. |
+| Integrator | Plugs a team's API into an institution, checks their bridge, issues API credentials, runs the fraud simulator. |
+| Analyst | Finds things in the data and adds them up. Reads only. |
+| Guide | Explains the sandbox from its documentation. |
+
+- **Everything the consoles can do, it can do.** Its tools go through the same console actions a person
+  uses (`src/server/assistant/catalogue.ts` lists them all, and a test fails if a console gains an action
+  the list lacks), plus phones, settings, save points, the fraud simulator, searching the stored data and
+  reading the documentation. So the same checks apply, and APIs plugged into the steps are asked as usual.
+- **One team only.** Every tool is bound to the team's own world. Conversations are kept per team in
+  `assistant.db` beside the worlds, so a conversation survives the world being wiped or rolled back.
+- **Asks first.** Wiping the world, rolling back, loading the simulated country over existing work, and
+  removing things are shown to the person with Approve and Decline. On approval the sandbox itself carries
+  out exactly what was shown.
+- **Never shows a wallet PIN**, other than that of a customer it created or one the person gave it.
+- **Switched on by a key.** Set `ANTHROPIC_API_KEY` (Claude, default model `claude-opus-5-5`) or
+  `OPENAI_API_KEY` (default `gpt-6.2-sol`) on the server; see `.env.example`. With neither, the assistant is
+  not shown. `deploy/gcp.sh secrets` copies the key to the VM from `.env.production`. Each team may call the
+  model `ASSISTANT_DAILY_CALLS` times a day (default 600).
+- **What leaves the server.** The conversation and what the tools return (the world's data, which is all
+  made up) go to the AI service chosen. The team key does not.
+- `POST /api/w/{team}/assistant {"text": "…"}` talks to it from a script; the answer is a stream of events.
+
+`tests/assistant.test.ts` runs whole conversations against a scripted stand-in for the model, so the tests
+need no AI service.
 
 ## Partner APIs
 
@@ -147,8 +207,8 @@ answer, and acts on it.
 | `switch.route` | national switch | a payment is about to pass between two institutions | allow, reject |
 | `events` | all | after something has happened | nothing: it is only told |
 
-`examples/starter-api.mjs` is a starting point: it answers "allow" to everything and prints what it was
-sent. The API reference inside the app (section 7) shows exactly what is sent at each step.
+`examples/plugin_api.py` and `examples/plugin-api.mjs` are starting points: they answer "allow" to
+everything and print what they were sent. The documentation (section 7) shows exactly what is sent at each step.
 
 With nothing plugged in, the sandbox behaves exactly as it did before.
 
@@ -158,6 +218,15 @@ there, every address a team types in (plug-in APIs, USSD applications, callbacks
 API) must be reachable from the internet, and addresses on the server's own machine or private network are
 refused. The address is checked when it is typed and again at the moment of connecting, and redirects are
 not followed.
+
+**The bridge: an API on a laptop.** A sandbox on the internet cannot call a laptop, so a team working from
+one runs `examples/bridge.py` or `examples/bridge.mjs` beside their API, with their team key. It calls the
+sandbox (`POST /api/w/{team}/bridge`) and is held until the sandbox has something for the API; the request
+is passed to the API on the laptop and the answer sent back. The team then types `bridge://laptop` wherever
+an address is asked for: a plug-in, an application for the Fraud API, a USSD application, a callback. The
+API itself is an ordinary API in any language and runs unchanged once hosted. A bridge belongs to one
+team's world, keeps nothing on disk, and counts as "not answering" the moment its program stops.
+`GET /api/w/{team}/bridge` lists a team's bridges and whether each is connected.
 
 ## Simulated data
 

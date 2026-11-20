@@ -28,6 +28,12 @@ export default async function Home() {
             Build and run Ghana&apos;s mobile money system from the ground up: identity, SIM registration, telcos, agents, banks and the national switch. Every team works in its own copy, from a browser and from code.
           </p>
 
+          <div className="mt-5">
+            <Link href="/docs" className="btn">
+              Read the documentation
+            </Link>
+          </div>
+
           <div className="mt-6 flex items-center justify-center gap-3">
             <TelcoMark telco="mtn" logo={logos.mtn} height={44} />
             <TelcoMark telco="telecel" logo={logos.telecel} height={44} />

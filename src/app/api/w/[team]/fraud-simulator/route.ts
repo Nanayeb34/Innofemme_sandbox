@@ -24,7 +24,7 @@ export const GET = handle(async (req: Request, ctx: Ctx) => {
     running: isRunning(w),
     lastRun: last ? { run: last.id, startedAt: new Date(last.started_at).toISOString(), finishedAt: last.finished_at ? new Date(last.finished_at).toISOString() : null, status: isRunning(w) ? "running" : last.status === "running" ? "interrupted" : last.status, incidents: last.planned, ordinary: last.ordinary } : null,
     results: `Shown in the team console, under "Fraud API results": ${publicOrigin(req)}/t/${team}/fraud`,
-    whatAnApplicationIsSent: { steps: Object.keys(POINTS).filter((p) => p !== "events"), format: "The same as a plugged-in API receives at each step. See the API reference, section 7." },
+    whatAnApplicationIsSent: { steps: Object.keys(POINTS).filter((p) => p !== "events"), format: "The same as a plugged-in API receives at each step. See the documentation, section 7." },
   };
 });
 

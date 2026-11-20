@@ -45,7 +45,7 @@ case "${1:-}" in
     [ -f "$SRC" ] || { echo "Create $SRC with ORGANISER_KEY first (see .env.example)"; exit 1; }
     TMP=$(mktemp)
     trap 'rm -f "$TMP"' EXIT
-    grep -E '^(ORGANISER_KEY|SANDBOX_TEAMS|CLOUDFLARE_TURN_KEY_ID|CLOUDFLARE_TURN_API_TOKEN)=' "$SRC" >"$TMP" || true
+    grep -E '^(ORGANISER_KEY|SANDBOX_TEAMS|CLOUDFLARE_TURN_KEY_ID|CLOUDFLARE_TURN_API_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|ASSISTANT_PROVIDER|ASSISTANT_MODEL|ASSISTANT_EFFORT|ASSISTANT_DAILY_CALLS)=' "$SRC" >"$TMP" || true
     printf 'DOMAIN=%s\nPUBLIC_URL=https://%s\n' "$DOMAIN" "$DOMAIN" >>"$TMP"
     $G compute scp "$TMP" "$VM:/tmp/momo.env" --zone="$ZONE" --quiet
     ssh_vm "sudo install -m 600 /tmp/momo.env /etc/momo-sandbox.env && rm /tmp/momo.env && cd /opt/momo-sandbox && [ -f .env ] && sudo docker compose up -d --force-recreate || true"

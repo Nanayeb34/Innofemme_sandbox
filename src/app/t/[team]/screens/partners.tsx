@@ -45,7 +45,7 @@ export function ApiPartners({
           <>
             {what} The company gets a client ID and an API key that work only on {institution}&apos;s API (<code className="text-xs">/api/w/{team}{apiPath}</code>). It does not get your team key. See the{" "}
             <Link className="underline" href={`/t/${team}/docs`}>
-              API reference
+              documentation
             </Link>
             .
           </>

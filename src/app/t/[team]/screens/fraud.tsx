@@ -281,7 +281,7 @@ export default function Fraud({ team }: { team: string }) {
           <>
             For a product that is its own application, not an API plugged into an institution. Connect it here (or let it connect itself, see the{" "}
             <Link className="underline" href={`/t/${team}/docs#fraud`}>
-              API reference
+              documentation
             </Link>
             ) with the kinds of fraud it is built to stop. Chosen above, it is sent every step of each incident, in the same format a plugged-in API receives, and answers allow, warn, delay or reject.
           </>
@@ -295,7 +295,7 @@ export default function Fraud({ team }: { team: string }) {
           onDone={refresh}
           fields={[
             { name: "name", label: "Application", placeholder: "My team's application" },
-            { name: "url", label: "Its address", placeholder: "https://my-app.example.com/fraud", hint: "Must be reachable from this sandbox. Requests are sent as POST with a JSON body." },
+            { name: "url", label: "Its address", placeholder: "https://my-app.example.com/fraud", hint: "An address on the internet, or bridge://laptop for an application on a laptop running the bridge. Requests are sent as POST with a JSON body." },
             { name: "kinds", label: "Built to stop", type: "select", options: [["all", "Every kind of fraud"], ...data.kinds.map((k) => [k.id, label(k.id)] as const)] },
           ]}
         />

@@ -71,10 +71,10 @@ export function requirePartner(req: Request, team: string, institution: string) 
 }
 
 /** Tells a partner the outcome of something it started. Best effort, like the real thing. */
-export async function notifyPartner(url: string | null | undefined, body: unknown, method: "PUT" | "POST" = "PUT") {
+export async function notifyPartner(world: string, url: string | null | undefined, body: unknown, method: "PUT" | "POST" = "PUT") {
   if (!url) return;
   try {
-    await callOut(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body), timeoutMs: 3000 });
+    await callOut(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body), timeoutMs: 3000, world });
   } catch {
     // The partner's server was unreachable. It can still ask for the status.
   }

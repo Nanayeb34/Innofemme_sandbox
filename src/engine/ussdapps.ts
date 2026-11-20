@@ -72,6 +72,7 @@ async function forward(w: World, session: { id: string; msisdn: string; telco: s
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: session.id, serviceCode: ext.code, msisdn: session.msisdn, network: session.telco, newSession, input, text: ext.inputs.join("*") }),
       timeoutMs: TIMEOUT_MS,
+      world: w.id,
     });
     const raw = res.body.trim();
     if (!res.ok || !raw) throw new Error(`status ${res.status}`);

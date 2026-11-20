@@ -15,6 +15,8 @@ export interface Plugin {
   failOpen: boolean;
   timeoutMs: number;
   calls: number;
+  /** Set when the API is on a laptop, reached through the team's bridge. */
+  bridge?: { name: string; connected: boolean };
 }
 export interface PluginPoint {
   id: string;
@@ -62,10 +64,15 @@ export function Plugins({ team, path, institution, view, onChange }: { team: str
         title="Plug in an API"
         hint={
           <>
-            A team builds an API and puts it online. Enter its address here and choose the step it should be asked at. From then on {institution} sends it the details every time that step happens, and does what it answers. Nothing changes for anyone
+            A team builds an API. Enter its address here and choose the step it should be asked at. An API running on a laptop is reached through the bridge: start the bridge program there and enter <code className="text-xs">bridge://laptop</code> as the address
+            (see{" "}
+            <Link className="underline" href={`/t/${team}/docs#reach`}>
+              where your API has to be
+            </Link>
+            ). From then on {institution} sends it the details every time that step happens, and does what it answers. Nothing changes for anyone
             until an API is plugged in. The{" "}
             <Link className="underline" href={`/t/${team}/docs#plugins`}>
-              API reference
+              documentation
             </Link>{" "}
             shows what is sent at each step and how to answer.
           </>
@@ -80,7 +87,7 @@ export function Plugins({ team, path, institution, view, onChange }: { team: str
           fields={[
             { name: "name", label: "Name", placeholder: "My team's API" },
             { name: "point", label: "Ask it when…", type: "select", options: pointOptions },
-            { name: "url", label: "The API's address", placeholder: "https://my-api.example.com/check", hint: "Must be reachable from this sandbox. Requests are sent as POST with a JSON body." },
+            { name: "url", label: "The API's address", placeholder: "https://my-api.example.com/check", hint: "An address on the internet, or bridge://laptop for an API on a laptop running the bridge. Requests are sent as POST with a JSON body." },
             {
               name: "ifDown",
               label: "If the API does not answer",
@@ -105,6 +112,11 @@ export function Plugins({ team, path, institution, view, onChange }: { team: str
                 <>
                   <span className="font-medium text-gray-900">{p.name}</span>
                   <div className="break-all font-mono text-[11px] text-gray-500">{p.url}</div>
+                  {p.bridge && (
+                    <div className={`mt-0.5 text-[11px] font-medium ${p.bridge.connected ? "text-green-700" : "text-amber-700"}`}>
+                      {p.bridge.connected ? "Laptop connected through the bridge" : "Bridge not connected: start the bridge program on the laptop"}
+                    </div>
+                  )}
                   {tested[p.id] && <div className="mt-1 text-xs text-gray-700">{tested[p.id]}</div>}
                 </>
               ),
