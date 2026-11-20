@@ -1,76 +1,305 @@
-# MoMo Fraud Sandbox
+# Mobile Money Sandbox
 
-The sandbox for the Innofemme Mobile Money Fraud Hackathon (26–28 November, KNUST). It is a fully synthetic replica of Ghana's mobile money system: customers, agents and merchants on MTN MoMo, Telecel Cash and AT Money, banks, and a national switch, with scam bots running the ten draft fraud scenarios. Each team gets its own copy, opens it on their phone through a QR code, and changes it through an AI assistant (non-coders) or an HTTP API (coders).
+The sandbox for the Innofemme Mobile Money Fraud Hackathon (26–28 November, KNUST). It simulates the systems behind Ghana's mobile money, each as its own console, working together the way the real ones do. Every team gets its own copy.
+
+**A new world is empty.** There are no people, SIM cards, wallets or money. The institutions exist with their starting settings, and everything else is created by going through the real processes: NIA issues a Ghana Card, a registration point registers a SIM against it, the customer opens a wallet, an agent buys float at a bank, and so on. Each step fails if the one before it was not done.
 
 ## Run it
 
 ```bash
 pnpm install
-cp .env.example .env.local   # add OPENAI_API_KEY to enable the assistant
+cp .env.example .env.local
 pnpm dev                     # http://localhost:3000
 pnpm sandbox:info            # prints the organiser access key and every team's join link
 ```
 
-The first request builds the base world (about 1,400 people, 60 agents, 80 merchants, fraudsters and mules) in `~/.momo-sandbox`, and each team world is a copy of it. Go to `/organiser`, sign in with the organiser access key, then **Print team QR cards**.
+Go to `/organiser`, sign in with the organiser access key, then **Print team QR cards**. World files live in `~/.momo-sandbox` unless `SANDBOX_DATA_DIR` is set.
 
-**Telco logos.** Put the official files from the partners in `public/brand/telcos/` as `mtn.svg`, `telecel.svg` and `at.svg` (PNG also works). They appear on the home page and the phone automatically; until then, brand-coloured wordmarks are shown.
+Each team has three QR codes, and each opens something different:
+
+| Code | Opens | For |
+| --- | --- | --- |
+| Team systems | Every console, at `/t/{team}` | The team's laptops. Keep it within the team. |
+| Customer phone | Only the phone simulator | Anyone playing a customer, on their own phone. |
+| Agent phone | Only the agent screens: mobile money agent and SIM registration, for any network | Anyone playing an agent, on their own phone. |
+
+The two phone codes are also shown on the team's own systems page, so a team can put them on a screen for people to scan. A phone code cannot reach the consoles or the settings, in the browser or through the API.
+
+**Telco logos.** Put the official files from the partners in `public/brand/telcos/` as `mtn.svg`, `telecel.svg` and `at.svg` (PNG also works). Until then, brand-coloured wordmarks are shown.
 
 ```bash
-pnpm test            # engine and assistant tests
-pnpm sandbox:smoke   # simulates a day in a throwaway world and walks a *170# transfer
+pnpm test            # the whole journey, from an empty world to settlement
+pnpm sandbox:smoke   # builds a small world in a throwaway directory and prints each step
 pnpm typecheck && pnpm lint
 ```
 
-## What participants get
+## Test it in GitHub Codespaces
 
-| Where | What |
-| --- | --- |
-| `/t/{team}/phone` | Sandbox phone. Dial `*170#` (MTN) or `*110#` (Telecel, AT); SMS inbox with scam messages; MoMo wallet; scam calls. Five personas, PIN `1234`. |
-| `/t/{team}/console` | Simulated clock with pause, speed and fast-forward (6h, 1d, 3d), KPIs, AI assistant with review, apply and undo, live feed, change impact, controls, snapshots and reset. |
-| `/t/{team}/docs` | API reference with the team's own base URL and key. |
-| `/api/w/{team}/momo/{mtn,telecel,at}/…` | Telco API in the MTN MoMo Open API shape: token, Request to Pay, transfers, balance, account holder. |
+A Codespace is a computer in your browser. Opening one on this repository installs, builds and starts the sandbox for you, with an HTTPS address that phones can open (needed for the QR codes and for voice calls).
+
+1. On the repository's GitHub page, choose the branch, then **Code → Codespaces → Create codespace**.
+2. Wait for the terminal to print the organiser key and each team's link (a few minutes the first time).
+3. Open a team link on a laptop. Its page shows the customer and agent phone QR codes.
+
+Things to know:
+
+- **The address must be public.** The start script tries to make port 3000 public. If the terminal says it could not, open the **Ports** tab, right-click port 3000, and choose **Port Visibility → Public**.
+- **First visit.** GitHub shows each new visitor a one-time notice that they are opening someone's Codespace. They continue past it.
+- **It sleeps.** A Codespace stops after 30 minutes without activity in the Codespace itself; phones using the app do not count. Raise the limit under GitHub **Settings → Codespaces → Default idle timeout**, or keep the Codespace tab in use. Reopening it starts the sandbox again with the same worlds.
+- **The address belongs to that Codespace.** A new Codespace has a new address and so new QR codes.
+
+A Codespace holds the code as it was when the Codespace was created. To bring in changes pushed since then, run `bash .devcontainer/start.sh update` in its terminal: it fetches the latest code, rebuilds and restarts, and keeps the team worlds. `bash .devcontainer/start.sh stop` stops the sandbox and `bash .devcontainer/start.sh` starts it. This is for testing; for the event use the server under Deploying.
+
+## The systems
+
+| Where | Who it is | What you do there |
+| --- | --- | --- |
+| `/t/{team}/nia` | National Identification Authority | Enrol people and issue Ghana Cards. Answer identity checks from telcos and banks; every check is logged. |
+| `/t/{team}/telco/{mtn,telecel,at}` | A telco's back office | SIM stock, SIM registration points, wallets and KYC tiers, mobile money agents, merchants, transactions and reversals, fees, agent commission, the USSD menu, SMS notifications. |
+| `/t/{team}/care/{telco}` | A telco's customer care (call centre) | Answer calls to 100, check the caller against their record, open and work tickets, hold and return disputed money, send disputes to other networks, block a lost SIM. |
+| `/t/{team}/sim-agent/{telco}` | SIM registration point (service centre or registration agent) | Register a new SIM with Ghana Card and fingerprint, replace a SIM, block and unblock, reset a wallet PIN, enhanced KYC. No cash. |
+| `/t/{team}/momo-agent/{telco}` | Mobile money agent | Cash-in, cash-out (the customer approves on their phone), register customers on medium KYC, move float, count the till. |
+| `/t/{team}/phone` | Any registered SIM | Dial the wallet short code (`*170#` MTN, `*110#` Telecel and AT), `*400#`, `*402*1#`; voice calls and text messages to other phones; wallet. |
+| `/t/{team}/bank/{gcb,ecobank,fidelity,calbank,absa,stanbic}` | A bank | Open accounts against the Ghana Card, cash deposits and withdrawals, transfers to banks and wallets, agent float, the telcos' trust accounts. |
+| `/t/{team}/switch` | The national switch (GhIPSS in real life) | Connect and disconnect participants, watch the message log, see each participant's position, run net settlement, follow disputes between networks. |
+| `/t/{team}/bog` | Bank of Ghana | KYC tier limits for all networks; check that every telco's e-money is backed by its trust account. |
+| `/t/{team}/nca` | National Communications Authority | SIM registration rules (SIMs per Ghana Card, minimum age, approval from the first number); the central SIM register across networks. |
+| `/t/{team}/docs` | | API reference with the team's own base URL and key. |
+
+There are **two kinds of agent**, as in real life. SIM registration points are authorised by a telco to register and fix SIMs; the telco is answerable for them. Mobile money agents handle cash and e-money on a dedicated agent line with its own float.
 
 ## How it is built
 
 ```
 src/engine/            all simulation logic, no web code
-  config/schemas.ts    the five control surfaces (zod) and the condition language
-  config/defaults.ts   starting menus, BoG KYC limits, telco fee schedules, notifications, checks, scenarios
-  config/store.ts      validated config with history, undo and JSON Patch
-  population.ts        deterministic synthetic population (Ghana Card IDs, SIMs, wallets, contacts)
-  payments.ts          the payment pipeline: limits → fees → fraud checks → switch → ledger
-  ussd.ts              USSD session engine over the editable menu trees
-  rtp.ts               Request to Pay
-  fraud.ts             the ten scam scenarios, with hidden ground-truth labels
-  sim.ts               clock, genuine traffic, scheduled scam steps, fast-forward
-  scoring.ts           metrics and before/after impact of each change
-  assistant.ts         AI assistant (AI SDK + OpenAI) restricted to proposing validated patches
-  worlds.ts            team registry, one SQLite file per world, snapshots, real-time ticker
+  nia.ts               Ghana Card register and the identity verification service
+  telco.ts             SIM stock, SIM registration and replacement, wallets, KYC, agents, merchants
+  payments.ts          wallet payments, cash-in/out, bank transfers, teller cash, reversals
+  approvals.ts         cash-out requests and Request to Pay, approved on the payer's phone
+  care.ts              customer care tickets and the dispute process (hold, consent, return)
+  calls.ts             voice calls: ringing, busy, switched off, the 100 queue, call records
+  sms.ts               text messages between people and from businesses' apps; conversations and records
+  partners.ts          API partners: the credentials each institution issues to outside companies
+  signals.ts           what a network tells a partner about a number: subscriber details, SIM swap, KYC match
+  ussdapps.ts          third-party USSD services on short codes the NCA allocates
+  ussd.ts              USSD session engine over each telco's editable menu tree
+  bank.ts              bank accounts and the telcos' trust accounts
+  switch.ts            routing (lookup, quote, commit), positions and net settlement
+  ledger.ts            double-entry postings behind every movement of money
+  config/              each institution's settings: schemas, defaults, history, undo, JSON Patch
+  worlds.ts            team registry, one SQLite file per world, save points
+src/server/systems.ts  one view and one set of actions per institution's console
+src/app/api/w/[team]/  momo, network, bank, ghipss, nia: the partner APIs; s: the console API
 src/app/               Next.js pages and API routes
 ```
 
 These are the main design decisions:
 
-- **Rules are data.** Teams, the assistant and the API change only the five control surfaces: menus, rules, notifications, fraud checks and scenarios. Each change is validated against a schema, recorded, and can be undone. The assistant cannot touch code or other teams' worlds.
-- **One SQLite file per world** (Node's built-in `node:sqlite`). Snapshot, reset and rollback are file copies, and the offline back-up needs no database server.
-- **Ground truth stays hidden.** Each scam payment carries `scenario` and `is_fraud` labels: 1 for a payment the victim made, 2 for a mule laundering hop. Teams see aggregate counts and the scams customers report after the fact. Organisers see everything.
-- **Behaviour responds to controls.** Warnings talk some victims out of paying. Holds give victims time to report and get their money back. A second factor stops impostors, but an SMS code does not stop a SIM swap. Every control also adds friction for genuine users, and the score counts that cost.
-- **National switch** built in-house, following Mojaloop's three steps: look up the recipient's network, quote, commit. Every step is logged in `switch_log`.
+- **Institutions are separate.** Each has its own console, its own settings document and its own audit trail. They reach each other only through real interfaces: a telco asks NIA to verify a card, a bank pushes money to a wallet through the switch.
+- **Settings are data.** Menus, fees, limits, commissions, notifications and switch rules are validated against a schema, recorded, and can be undone.
+- **One ledger, always balanced.** Every movement of money is a set of postings that adds up to zero. E-money exists only against real money: a telco's wallet balances always equal its trust account, adjusted for what is waiting to settle.
+- **Settlement is deferred.** Payments between institutions clear at once but move money only when the switch settles. A telco settles through its trust account at its partner bank; banks settle across their accounts at the Bank of Ghana.
+- **One SQLite file per world** (Node's built-in `node:sqlite`). Save points, rollback and reset are file operations, and the offline back-up needs no database server.
+- **Biometrics are a code.** NIA gives each person a fingerprint code that stands in for their fingerprints. It must be presented wherever a biometric check is done.
+
+## Partner APIs
+
+Besides the consoles, each institution has the API it would give an outside company, such as a licensed payments or messaging business. A company calls it with a client ID and API key that institution issued (its console → **API partners**), not with the team key. The API reference at `/t/{team}/docs` lists every endpoint.
+
+| API | At | What it offers |
+| --- | --- | --- |
+| Mobile money | `/api/w/{team}/momo/{telco}` | The MTN MoMo Open API shape: request to pay, request to withdraw, pre-approval, delivery notification, balance, account-holder checks, profile with the customer's consent, transfer, deposit, refund, callbacks. |
+| Network | `/api/w/{team}/network/{telco}` | Texts under a sender name, subscriber details, SIM-swap check, KYC match. |
+| USSD services | NCA console, then each network | The NCA allocates a short code to a provider; each network switches it on and forwards sessions to the provider's application. |
+| Bank | `/api/w/{team}/bank/{bank}` | Balance, statement, name enquiry, transfers to bank accounts and wallets, from the partner's own account. |
+| National switch | `/api/w/{team}/ghipss` | Participants, name enquiry across banks and networks, status of a routed payment. |
+| NIA | `/api/w/{team}/nia` | Ghana Card verification: valid or not with the card number, the holder's details on a fingerprint match. |
+
+A team's own web page can call any of these, and the console API, straight from the browser: every address
+under `/api/w/` answers requests from other sites, as long as the key or credentials are sent in a header.
+
+Subscriber details, texts, payments and identity checks are what licensed partners get in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries and could not be confirmed for Ghana. Not included: an outside company cannot see a network's full transaction feed, freeze a wallet or block a SIM; those stay inside the institution (the console API).
+
+## Plug-in points
+
+A team's product can be an API that a network, a bank or the national switch adds to its own system. Each
+of their consoles has a **Plug-ins** tab: enter the API's address and choose the step it should be asked
+at. From then on the institution sends the details to that API every time the step happens, waits for the
+answer, and acts on it.
+
+| Step | Who asks | Asked when | The API can answer |
+| --- | --- | --- | --- |
+| `pin.set` | network | a customer chooses or changes a wallet PIN | allow, reject |
+| `wallet.open` | network | a wallet is about to be opened | allow, reject |
+| `menu.open` | network | a customer opens the mobile money menu | allow, warn, reject |
+| `payment.authorize` | network | a payment is about to leave a wallet | allow, warn, delay, reject |
+| `payment.receive` | network, bank | money is about to arrive in a wallet or account | allow, reject |
+| `payment.request` | network | a business or agent asks a customer to approve a payment | allow, reject |
+| `kyc.upgrade` | network | a wallet's KYC level is about to be raised | allow, reject |
+| `pin.reset` | network | a PIN is about to be reset at a service point | allow, reject |
+| `business.onboard` | network | an agent or merchant is about to be signed up | allow, reject |
+| `sim.register` | network | a SIM is about to be registered | allow, reject |
+| `sim.swap` | network | a number is about to move to a replacement SIM | allow, reject |
+| `sms.deliver` | network | a text is about to reach a subscriber | allow, warn, reject |
+| `call.connect` | network | a call is about to ring a subscriber | allow, warn, reject |
+| `transfer.authorize` | bank | a transfer is about to leave an account | allow, reject |
+| `account.open` | bank | an account is about to be opened | allow, reject |
+| `switch.route` | national switch | a payment is about to pass between two institutions | allow, reject |
+| `events` | all | after something has happened | nothing: it is only told |
+
+`examples/starter-api.mjs` is a starting point: it answers "allow" to everything and prints what it was
+sent. The API reference inside the app (section 7) shows exactly what is sent at each step.
+
+With nothing plugged in, the sandbox behaves exactly as it did before.
+
+**Where the API may live.** Run on your own machine or in a Codespace, the sandbox will call an API on
+`localhost`. The Docker image, which is what a shared server runs, sets `SANDBOX_PRIVATE_ADDRESSES=block`:
+there, every address a team types in (plug-in APIs, USSD applications, callbacks, applications for the Fraud
+API) must be reachable from the internet, and addresses on the server's own machine or private network are
+refused. The address is checked when it is typed and again at the moment of connecting, and redirects are
+not followed.
+
+## Simulated data
+
+A world starts empty. It can instead be filled with a simulated country and 90 days of history, from a
+team's home page ("Load the simulated country") or from the organiser dashboard for several teams at once.
+
+- **100,023 transactions**, of which **22,005 (22%) are fraud**, in about 7,700 cases.
+- About 4,200 people with Ghana Cards, 4,700 registered numbers and wallets, 140 agents, 250 merchants,
+  1,650 bank accounts, 43,000 calls, 40,000 texts and 4,000 complaints.
+- Ten kinds of fraud, each played out step by step: `reversal_scam`, `pin_phishing`, `sim_swap`,
+  `agent_fraud`, `mule_chain`, `fake_promo`, `rtp_abuse`, `fake_merchant`, `relative_impersonation`,
+  `limit_splitting`. A case has its lure (a text or a call), the victim's loss, the money moving through
+  other wallets, and the cash-out; some attempts are refused by the sandbox's own rules.
+- Every transaction is written through the same ledger as live activity, so fees, KYC limits, agent
+  tills, switch positions and daily settlement are all consistent, and whatever a team does next is
+  added on top.
+- It downloads as CSV files (`/api/w/{team}/dataset`), with the answers (`is_fraud`, `fraud_scenario`,
+  `fraud_role`, `fraud_case`) or without them (`?answers=0`).
+
+Every team gets the same country. An organiser can load a different one by passing another `seed` to
+`POST /api/org/action {"action":"simulate","worlds":[...],"seed":7}`, for example to keep one back for
+judging. The history always ends at the start of the day it was first built on that server.
+
+Loading takes about 15 seconds the first time on a server each day (the sandbox pauses for everyone
+while it builds), and a second or two after that. A loaded world is about 115 MB on disk; fewer save
+points are kept for worlds that size.
+
+## Fraud console and Fraud API
+
+Where a team tests what it has built. The fraud simulator plays fraud incidents of a chosen kind, live,
+through the sandbox's own processes: the fraudster registers a line, texts or calls the victim, the
+victim's money leaves, moves through another wallet and is withdrawn at an agent. At each step the
+team's service is asked, exactly as for real activity, and what it answers decides whether the incident
+goes on. Honest activity is played alongside, so a service that stops everything is not mistaken for a
+good one.
+
+- **An API plugged into an institution** is asked at its own step. Nothing else needs doing: start a run.
+- **A standalone application** connects itself to the Fraud API with its address and the kinds of fraud
+  it is built to stop. During a run it is sent every step of each incident, in the plug-in format.
+- **Results** are shown only in the team's console, on the Fraud console page under **Fraud API
+  results**: incidents stopped before any money moved, held before cash-out, or got through; at which
+  step and by which API or application; money kept from fraudsters; honest activity wrongly stopped.
+  The service under test is never told which requests were fraud.
+
+Eleven kinds of fraud can be sent: the ten in the simulated data, plus `pin_guessing` (a thief with the
+victim's phone tries the PINs people usually choose). With nothing plugged in, every incident gets
+through: that is the baseline to improve on.
+
+```
+POST /api/w/{team}/fraud-simulator  {"kinds": "sim_swap", "incidents": 20}
+POST /api/w/{team}/fraud-simulator  {"action": "connect", "name": "Swap Alert", "url": "https://…", "kinds": ["sim_swap"]}
+POST /api/w/{team}/fraud-simulator  {"application": "Swap Alert", "incidents": 20}
+```
+
+It needs people to act as victims, so the simulated country must be loaded first. Loading it keeps what
+a team has set up: plugged-in APIs, connected applications, API partners, short codes and settings.
+
+## Each network's wallet menu
+
+The three networks no longer share one menu. Each has its own, and they differ where the real ones do.
+
+| | MTN MoMo `*170#` | Telecel Cash `*110#` | AT Money `*110#` |
+| --- | --- | --- | --- |
+| Opening a wallet | from `*170#`, or at an agent | from `*558#`, or at an agent | from `*110#`, or at an agent, who never sees the PIN: a starting PIN is texted and must be replaced on first use |
+| Cash at an agent | the agent sends a request, the customer allows it (option 4) | the customer starts it: agent number, amount, PIN | the customer starts it: agent number, amount, PIN |
+| Cash at a cash machine | not on the menu | voucher from the phone, used at Ecobank or Absa | voucher from the phone, used at Ecobank or Absa |
+| Sending money | number typed twice | number typed once | number typed once |
+| Requests to approve | option 4 | My Wallet, then My Approvals | My Wallet, then My Approvals |
+
+On every network the menu also has: sending to other networks and to bank accounts, paying a merchant,
+airtime for the caller's own or another number, data bundles, bill payments (prepaid electricity comes
+back with a token), moving money in from the owner's own bank account, checking an agent's number
+before trusting one, balance, mini statement, PIN change and reporting a problem. `*124#` shows a
+line's airtime and data.
+
+A PIN issued by a network (after a reset, or by an AT agent) must be replaced before the menu opens.
+A bank's console has a "Cash machine" panel where a voucher is used. A network's back office has a
+Services tab, and its menu, bundles, billers and partner banks are in its settings.
+
+Savings, loans and insurance appear on the menus but answer that they are run by a partner: they are
+not simulated. Airtime is not used up by calls or texts.
+
+The Telecel and AT menus are built from published guides, not from the operators: neither publishes its
+menu, and the guides disagree on some labels and numbers. The flows are right in kind (who starts a
+withdrawal, vouchers for cash machines); the exact wording and numbering may differ from a live phone.
+A world made before this change gets the new menus when it is next opened, unless a team had edited
+its menu.
+
+## Customer care and disputes
+
+A customer raises a complaint by calling 100 (a real voice call to their network's care console, when an agent there is on line) or from the phone: wallet short code → My Wallet → Report a Problem. Either way a ticket is opened and the customer is told by SMS.
+
+A dispute over a wallet-to-wallet payment is worked where the money now is, on the recipient's network:
+
+1. **Hold.** Care moves whatever the recipient still has of the disputed amount out of their wallet, so it cannot be spent.
+2. **Ask the recipient.** The recipient gets an SMS and answers on their own phone, where their network's menu keeps requests to approve (see the table above): agree with their PIN, or refuse.
+3. **Return or reject.** Held money goes back to the sender, with the fee when everything is recovered; or the claim is rejected and the hold is released.
+
+When the recipient is on another network, the sender's network cannot touch the money. It sends the dispute through the national switch; the recipient's network gets a ticket of its own and decides, and the sender's ticket follows along. Returned money travels back through the switch. A disputed cash-out is reversed in full, including the agent's till and commission.
+
+Care cannot reset a PIN or replace a SIM: those need the customer in person at a service centre. Worlds created before this feature keep their old USSD menu; add a `report_problem` action node to the menu in the telco's settings, or reset the world.
+
+## Text messages
+
+Every phone has a Messages app with conversations. There are three kinds of text, and each network keeps a record of all of them in its back office (SMS tab):
+
+- **Person to person.** Write to any number on any network and reply in the thread. A blocked SIM cannot send, and a text to a number that is not in service, or is blocked, is recorded as not delivered. A phone that is not open still receives its texts: they wait in the inbox.
+- **From the network.** The texts a telco sends about its own services (registration, payments, approvals, tickets). Their wording is editable in the telco's settings. Nobody can reply to them.
+- **From a business's app.** `POST /api/w/{team}/network/{telco}/v1/sms/messages` with `{ to, text }` and the partner's credentials. The text arrives under the company's registered name, shortened to 11 letters and digits, with no reply.
+
+A text is at most 480 characters and is counted in 160-character parts. Texts are free: there is no airtime yet.
+
+## Voice calls
+
+Dial another registered number from the phone and that phone rings; the two people then talk with real audio. The server plays the network (ringing, busy, switched off, the telco's call records) and the audio goes directly between the two browsers over WebRTC.
+
+- **The other phone must be open.** A number rings only while someone has its phone screen open. Otherwise the caller hears that it is switched off, and the owner gets a missed-call SMS.
+- **HTTPS is required.** Browsers allow the microphone only on a secure address (or `localhost`).
+- **Relay.** On Wi-Fi that stops devices reaching each other, audio needs a relay. Set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` (Cloudflare dashboard → Realtime → TURN → create a key) and the sandbox issues short-lived Cloudflare relay credentials to each phone. Without them, calls try to connect directly.
+
+## Where the simulation simplifies
+
+- Each telco keeps its float in one trust account at one bank (MTN at GCB, Telecel at Ecobank, AT at Fidelity). Real issuers use many partner banks, and these pairings are not the real ones.
+- Agent commission bands start from commonly reported MTN rates; the telcos publish no official rate card. The 24-hour pause on sending after a SIM replacement is a sandbox default, not a confirmed rule.
+- The world runs on the real clock, so daily limits reset at midnight GMT.
+- Calls are free: there is no airtime yet. 100 is the only short number that connects.
+- Not modelled: airtime and bundles, number porting, master agents and sub-agents, merchant KYC tiers, interest on float, guardians for under-18s, self-service SIM replacement.
 
 ## Deploying (GCP)
 
-All worlds run in a single process: the real-time ticker and USSD sessions live in memory, and the worlds are SQLite files. Run it on **one Compute Engine VM** (e2-standard-2 is plenty for 10 teams) with a persistent disk, not on autoscaled Cloud Run.
+All worlds run in a single process: USSD sessions live in memory and the worlds are SQLite files. Run it on **one Compute Engine VM** with a persistent disk (e2-standard-2: with 20 teams each on the simulated country, 100 phones and 80 consoles open at once used about half of one processor core, and screens answered in under a tenth of a second), not on autoscaled Cloud Run. `deploy/gcp.sh` sets this up.
 
 ```bash
 docker build -t momo-sandbox .
 docker run -d -p 80:3000 -v /mnt/disks/sandbox:/data --env-file .env momo-sandbox
 ```
 
-The same image runs the venue's offline back-up server. OpenAI is not reachable offline, so set `OPENAI_BASE_URL` to a local OpenAI-compatible server such as Ollama and `OPENAI_MODEL` to a local model. Copy `/data` from the cloud VM to move the teams' worlds across.
+The same image runs the venue's offline back-up server. Copy `/data` from the cloud VM to move the teams' worlds across.
 
-## Still open (from the design doc)
+## Still open
 
 - Telecel and AT API specs: both telcos currently use the MTN API shape.
+- GhIPSS products not yet modelled: the national QR code, Proxy Pay and its own Request to Pay.
 - Menu trees: wording approximates the live menus. Replace it with the telcos' trees when they arrive.
-- Whether teams can attack each other: worlds are fully isolated for now.
-- Final judging weights: the score in `scoring.ts` is provisional.
+- An AI assistant to help non-coders find their way around the systems.

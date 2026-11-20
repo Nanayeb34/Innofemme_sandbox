@@ -9,7 +9,9 @@ RUN pnpm build
 
 FROM node:24-slim
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 SANDBOX_DATA_DIR=/data
+# One server for every team: addresses teams type in (plug-in APIs, USSD applications, callbacks) must be out on
+# the internet, never this machine or its private network.
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 SANDBOX_DATA_DIR=/data SANDBOX_PRIVATE_ADDRESSES=block
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public

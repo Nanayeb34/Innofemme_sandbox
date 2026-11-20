@@ -2,15 +2,17 @@ import Link from "next/link";
 import { InnofemmeLogo } from "@/components/brand";
 import { TelcoMark } from "@/components/telco-mark";
 import { telcoLogos } from "@/server/logos";
-import { cookies } from "next/headers";
-import { registry } from "@/engine/worlds";
-import { teamCookie } from "@/server/http";
+import { headers } from "next/headers";
+import { registry, roleHome } from "@/engine/worlds";
+import { savedRole } from "@/server/http";
 
 export default async function Home() {
   const logos = telcoLogos();
   // Teams this browser has already joined by scanning their QR card.
-  const jar = await cookies();
-  const joined = registry().teams.filter((t) => jar.get(teamCookie(t.id))?.value === t.key);
+  const kept = (await headers()).get("cookie");
+  const joined = registry()
+    .teams.map((t) => ({ ...t, role: savedRole(t, kept) }))
+    .filter((t) => t.role);
   return (
     <main className="flex flex-1 flex-col">
       <section className="flex flex-1 items-center bg-gradient-to-b from-[#f3effa] to-[var(--background)]">
@@ -23,7 +25,7 @@ export default async function Home() {
           <p className="mt-2 text-gray-600">26–28 November 2026 · KNUST, Kumasi</p>
 
           <p className="mx-auto mt-6 max-w-xl text-gray-700">
-            Investigate, redesign and defend mobile money services across networks, banks and the national switch. Every team works in its own environment, from a phone and from code.
+            Build and run Ghana&apos;s mobile money system from the ground up: identity, SIM registration, telcos, agents, banks and the national switch. Every team works in its own copy, from a browser and from code.
           </p>
 
           <div className="mt-6 flex items-center justify-center gap-3">
@@ -38,12 +40,14 @@ export default async function Home() {
                 <div key={t.id} className="card p-5">
                   <div className="font-semibold text-gray-900">{t.name}</div>
                   <div className="mt-3 flex justify-center gap-2">
-                    <Link href={`/t/${t.id}/phone`} className="btn btn-dark">
-                      Open phone
+                    <Link href={roleHome(t.id, t.role!)} className="btn btn-dark">
+                      {t.role === "team" ? "Open your systems" : t.role === "customer" ? "Open the phone" : "Open the agent screens"}
                     </Link>
-                    <Link href={`/t/${t.id}/console`} className="btn">
-                      Open team console
-                    </Link>
+                    {t.role === "team" && (
+                      <Link href={`/t/${t.id}/phone`} className="btn">
+                        Open a phone
+                      </Link>
+                    )}
                   </div>
                 </div>
               ))}
@@ -56,7 +60,7 @@ export default async function Home() {
               </svg>
               <div>
                 <div className="font-semibold text-gray-900">Getting started</div>
-                <p className="mt-0.5 text-sm text-gray-600">Scan the QR code on your team card with your phone camera. It opens your team&apos;s phone and console.</p>
+                <p className="mt-0.5 text-sm text-gray-600">Scan the QR code on your team card with your phone camera. It opens your team&apos;s systems.</p>
               </div>
             </div>
           )}

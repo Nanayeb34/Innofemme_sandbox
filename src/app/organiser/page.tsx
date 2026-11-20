@@ -2,7 +2,6 @@ import { headers } from "next/headers";
 import QRCode from "qrcode";
 import { isOrganiser } from "@/server/http";
 import { registry } from "@/engine/worlds";
-import { SCENARIOS } from "@/engine/config/schemas";
 import { BrandBar, InnofemmeLogo } from "@/components/brand";
 import Dashboard from "./dashboard";
 
@@ -49,7 +48,7 @@ export default async function OrganiserPage(props: PageProps<"/organiser">) {
           </>
         }
       />
-      <Dashboard scenarios={SCENARIOS} access={teams} />
+      <Dashboard access={teams} />
     </>
   );
 }

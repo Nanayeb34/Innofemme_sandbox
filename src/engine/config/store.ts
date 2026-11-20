@@ -1,41 +1,33 @@
 import type { DB } from "../db";
-import { tx, getMeta } from "../db";
-import { DEFAULTS } from "./defaults";
-import { SURFACES, type Surface, type SurfaceTypes } from "./schemas";
+import { tx } from "../db";
+import { ALL_SURFACES, defaultsFor } from "./defaults";
+import { schemaFor, surfaceOwner, type SurfaceOf } from "./schemas";
 
-const cache = new WeakMap<DB, Map<Surface, { version: number; value: unknown }>>();
+const cache = new WeakMap<DB, Map<string, { version: number; value: unknown }>>();
 
 export function seedConfig(db: DB) {
   const ins = db.prepare("INSERT OR IGNORE INTO config(surface, value, version) VALUES(?, ?, 1)");
-  for (const s of Object.keys(DEFAULTS) as Surface[]) ins.run(s, JSON.stringify(DEFAULTS[s]));
+  for (const s of ALL_SURFACES) ins.run(s, JSON.stringify(defaultsFor(s)));
 }
 
-/** Brings configuration saved by older versions up to the current schemas. */
-export function migrateConfig(db: DB) {
-  const row = db.prepare("SELECT value FROM config WHERE surface = 'rules'").get() as { value: string } | undefined;
-  if (!row) return;
-  const rules = JSON.parse(row.value);
-  if (rules?.fees?.mtn?.p2p_onnet?.bands) return;
-  // Fees moved from a single percentage to amount bands when the telco tariffs were confirmed.
-  setConfig(db, "rules", { ...rules, fees: DEFAULTS.rules.fees }, "Applied the confirmed MTN, Telecel and AT fee schedules", "organiser");
-}
-
-export function getConfig<S extends Surface>(db: DB, surface: S): SurfaceTypes[S] {
+export function getConfig<S extends string>(db: DB, surface: S): SurfaceOf<S> {
   let m = cache.get(db);
   if (!m) cache.set(db, (m = new Map()));
   const row = db.prepare("SELECT value, version FROM config WHERE surface = ?").get(surface) as { value: string; version: number } | undefined;
-  if (!row) return DEFAULTS[surface];
+  if (!row) return defaultsFor(surface) as SurfaceOf<S>;
   const hit = m.get(surface);
-  if (hit && hit.version === row.version) return hit.value as SurfaceTypes[S];
-  const value = JSON.parse(row.value) as SurfaceTypes[S];
+  if (hit && hit.version === row.version) return hit.value as SurfaceOf<S>;
+  const value = JSON.parse(row.value) as SurfaceOf<S>;
   m.set(surface, { version: row.version, value });
   return value;
 }
 
 export type ValidationResult = { ok: true; value: unknown } | { ok: false; errors: string[] };
 
-export function validateSurface(surface: Surface, value: unknown): ValidationResult {
-  const parsed = SURFACES[surface].schema.safeParse(value);
+export function validateSurface(surface: string, value: unknown): ValidationResult {
+  const schema = schemaFor(surface);
+  if (!schema) return { ok: false, errors: [`unknown settings surface "${surface}"`] };
+  const parsed = schema.safeParse(value);
   if (parsed.success) return { ok: true, value: parsed.data };
   return {
     ok: false,
@@ -43,7 +35,7 @@ export function validateSurface(surface: Surface, value: unknown): ValidationRes
   };
 }
 
-export function setConfig(db: DB, surface: Surface, value: unknown, summary: string, author: string): number {
+export function setConfig(db: DB, surface: string, value: unknown, summary: string, author: string): number {
   const v = validateSurface(surface, value);
   if (!v.ok) throw new ConfigError(v.errors);
   return tx(db, () => {
@@ -51,15 +43,16 @@ export function setConfig(db: DB, surface: Surface, value: unknown, summary: str
     const after = JSON.stringify(v.value);
     db.prepare("UPDATE config SET value = ?, version = version + 1 WHERE surface = ?").run(after, surface);
     const r = db
-      .prepare("INSERT INTO config_history(surface, before, after, summary, author, at_real, at_sim) VALUES(?,?,?,?,?,?,?)")
-      .run(surface, before.value, after, summary, author, Date.now(), Number(getMeta(db, "sim_now")));
+      .prepare("INSERT INTO config_history(surface, before, after, summary, author, at) VALUES(?,?,?,?,?,?)")
+      .run(surface, before.value, after, summary, author, Date.now());
+    db.prepare("INSERT INTO audit(at, system, action, summary) VALUES(?,?,?,?)").run(Date.now(), surfaceOwner(surface), "settings", summary);
     return Number(r.lastInsertRowid);
   });
 }
 
 export function undoChange(db: DB, historyId: number, author: string): number {
   const row = db.prepare("SELECT * FROM config_history WHERE id = ?").get(historyId) as
-    | { surface: Surface; before: string; summary: string; undone_by: number | null }
+    | { surface: string; before: string; summary: string; undone_by: number | null }
     | undefined;
   if (!row) throw new ConfigError([`change ${historyId} not found`]);
   if (row.undone_by) throw new ConfigError([`change ${historyId} was already undone`]);

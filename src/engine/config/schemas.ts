@@ -1,36 +1,25 @@
 import { z } from "zod";
+import { BANK_IDS, PARTICIPANTS, TELCOS } from "../util";
 
 /**
- * The five control surfaces. Everything a team can change lives here as data,
- * validated by these schemas, so neither the AI assistant nor team code ever
- * edits engine code.
+ * Every institution's settings. Each institution owns one "surface": a JSON document,
+ * validated by these schemas, that its console (or the API) can change. Changes are
+ * recorded and can be undone.
  */
 
+// ---------- condition language used by USSD menu branches ----------
+
 export const FACTS = {
-  amount: "Transaction amount in GHS",
-  type: "Transaction type: p2p | merchant | cashout | to_bank | rtp",
-  channel: "ussd | app | api",
-  cross_network: "true when the recipient is on a different telco (goes through the national switch)",
-  recipient_is_new: "true when the sender has never paid this recipient before and they are not a saved contact",
+  amount: "Amount entered so far, in GHS",
+  cross_network: "true when the recipient is on a different network",
+  recipient_registered: "true when the recipient number has a mobile money wallet",
   recipient_type: "person | merchant | agent | bank",
-  recipient_account_age_days: "Days since the recipient wallet was opened",
-  recipient_distinct_senders_1h: "Number of different wallets that paid the recipient in the last hour",
-  recipient_inbound_count_24h: "Number of payments the recipient received in the last 24 hours",
-  recipient_kyc_tier: "minimum | medium | enhanced",
   sender_kyc_tier: "minimum | medium | enhanced",
-  sender_balance: "Sender balance in GHS before the transaction",
-  amount_to_balance_ratio: "amount / sender balance (0..1)",
-  sender_txn_count_1h: "Transactions the sender made in the last hour",
-  sender_new_recipients_1h: "Distinct new recipients the sender paid in the last hour",
-  sender_account_age_days: "Days since the sender wallet was opened",
-  hours_since_sim_swap: "Hours since the sender's SIM was last swapped (99999 if never)",
-  new_device: "true when the session comes from a device not seen before on this wallet",
-  hour_of_day: "Simulated local hour, 0-23",
-  recipient_reported_count: "Number of fraud reports filed against the recipient",
+  sender_balance: "Sender balance in GHS",
+  hour_of_day: "Hour of day, 0-23 (GMT, Ghana time)",
 } as const;
 export type FactName = keyof typeof FACTS;
 export const FACT_NAMES = Object.keys(FACTS) as [FactName, ...FactName[]];
-
 export const OPS = [">", ">=", "<", "<=", "==", "!=", "in"] as const;
 
 export type Condition =
@@ -54,10 +43,15 @@ export const ConditionSchema: z.ZodType<Condition> = z.lazy(() =>
   ]),
 );
 
-// ---------- 1. USSD menus ----------
+// ---------- USSD menu ----------
 
-export const USSD_ACTIONS = ["send_money", "check_balance", "cash_out", "pay_merchant", "to_bank", "approvals", "mini_statement", "report_fraud"] as const;
-export const INPUT_KINDS = ["msisdn", "amount", "text", "pin", "till", "agent", "account"] as const;
+export const USSD_ACTIONS = [
+  "send_money", "pay_merchant", "to_bank", "check_balance", "mini_statement", "approvals", "change_pin", "report_problem",
+  // Services beyond sending money.
+  "withdraw_at_agent", "atm_voucher", "buy_airtime", "buy_bundle", "pay_bill", "from_bank", "verify_agent", "airtime_balance",
+] as const;
+/** "agent" takes a mobile money agent's number (or the agent's line); "biller_ref" an account, meter or smartcard number. */
+export const INPUT_KINDS = ["msisdn", "amount", "text", "pin", "till", "account", "agent", "biller_ref"] as const;
 
 const NodeId = z.string().min(1).max(60);
 
@@ -71,8 +65,9 @@ export const MenuNodeSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("input"), text: z.string(), var: z.string().regex(/^[a-z_]+$/), kind: z.enum(INPUT_KINDS), next: NodeId }).strict(),
   z.object({ type: z.literal("branch"), if: ConditionSchema, then: NodeId, else: NodeId }).strict(),
+  // Remembers a choice (which bundle, which biller) and moves on without showing anything.
+  z.object({ type: z.literal("set"), var: z.string().regex(/^[a-z_]+$/), value: z.string().max(60), next: NodeId }).strict(),
   z.object({ type: z.literal("warning"), text: z.string(), next: NodeId }).strict(),
-  z.object({ type: z.literal("set"), vars: z.record(z.string(), z.string()), next: NodeId }).strict(),
   z.object({ type: z.literal("action"), action: z.enum(USSD_ACTIONS) }).strict(),
   z.object({ type: z.literal("message"), text: z.string() }).strict(),
 ]);
@@ -100,12 +95,8 @@ export const MenuSchema = z
   });
 export type Menu = z.infer<typeof MenuSchema>;
 
-export const MenusSchema = z.object({ mtn: MenuSchema, telecel: MenuSchema, at: MenuSchema }).strict();
-export type Menus = z.infer<typeof MenusSchema>;
+// ---------- fees ----------
 
-// ---------- 2. Rules and limits ----------
-
-const Tier = z.object({ maxBalance: z.number().positive(), daily: z.number().positive(), monthly: z.number().positive().nullable() }).strict();
 /**
  * A fee schedule as amount bands (GHS). The first band whose upTo covers the amount applies;
  * upTo null is the open-ended top band. Fee = flat + pct% of the amount, capped at max when set.
@@ -113,7 +104,7 @@ const Tier = z.object({ maxBalance: z.number().positive(), daily: z.number().pos
 const FeeBand = z
   .object({ upTo: z.number().positive().nullable(), pct: z.number().min(0).max(20), flat: z.number().min(0), max: z.number().min(0).optional() })
   .strict();
-const Fee = z
+export const FeeSchema = z
   .object({ bands: z.array(FeeBand).min(1) })
   .strict()
   .superRefine((fee, ctx) => {
@@ -125,123 +116,140 @@ const Fee = z
       if (prev !== null && cur !== null && cur <= prev) ctx.addIssue({ code: "custom", message: "bands must be in increasing order of upTo" });
     }
   });
-const TelcoFees = z.object({ p2p_onnet: Fee, p2p_offnet: Fee, cashout: Fee, merchant: Fee, to_bank: Fee }).strict();
+export type Fee = z.infer<typeof FeeSchema>;
 
-export const RulesSchema = z
-  .object({
-    kycTiers: z.object({ minimum: Tier, medium: Tier, enhanced: Tier }).strict(),
-    fees: z.object({ mtn: TelcoFees, telecel: TelcoFees, at: TelcoFees }).strict(),
-    secondFactor: z.object({ method: z.enum(["sms_otp", "ghana_card_selfie"]), friction_seconds: z.number().min(0).max(600) }).strict(),
-    pinAttemptsBeforeLock: z.number().int().min(1).max(10),
-    victimCanReverseHeldFunds: z.boolean(),
-  })
-  .strict();
-export type Rules = z.infer<typeof RulesSchema>;
-export type FeeKind = keyof z.infer<typeof TelcoFees>;
-
-// ---------- 3. Notifications ----------
+// ---------- telco ----------
 
 export const NOTIFICATION_EVENTS = {
+  sim_registered: "Subscriber, when their SIM is registered and activated",
+  sim_swapped: "Subscriber, when their number is moved to a replacement SIM",
+  wallet_opened: "Customer, when their mobile money wallet is opened",
+  kyc_upgraded: "Customer, when their wallet moves to a higher KYC tier",
+  pin_reset: "Customer, when their wallet PIN is reset",
   transfer_sent: "Sender, after a successful transfer",
   transfer_received: "Recipient, after money arrives",
+  cashin: "Customer, after an agent deposits cash into their wallet",
   cashout: "Customer, after a cash-out",
+  agent_cashin: "Agent, after depositing for a customer",
+  agent_cashout: "Agent, after a customer's cash-out is approved",
   merchant_payment: "Payer, after paying a merchant",
-  held: "Sender, when a transfer is put on hold",
-  blocked: "Sender, when a transfer is blocked",
-  warned: "Sender, after they continue past a warning",
-  sim_swap: "Wallet owner, when their SIM is swapped",
-  new_device: "Wallet owner, when their wallet is used from a new device",
-  rtp_prompt: "Payer, when a merchant requests a payment",
-  large_inbound: "Recipient, when they receive more than GHS 1,000",
+  approval_prompt: "Payer, when an agent or merchant asks them to approve a payment",
+  reversal: "Both sides, when a payment is reversed",
+  ticket_opened: "Customer, when customer care opens a ticket for them",
+  ticket_closed: "Customer, when their ticket is resolved or rejected",
+  dispute_hold: "Recipient, when money they received is put on hold during a dispute",
+  dispute_consent: "Recipient, when asked to return money sent to them by mistake",
 } as const;
 export type NotificationEvent = keyof typeof NOTIFICATION_EVENTS;
+const EVENT_NAMES = Object.keys(NOTIFICATION_EVENTS) as [NotificationEvent, ...NotificationEvent[]];
 
-export const NotificationsSchema = z
+const TelcoFees = z.object({ p2p_onnet: FeeSchema, p2p_offnet: FeeSchema, cashout: FeeSchema, merchant: FeeSchema, to_bank: FeeSchema }).strict();
+export type FeeKind = keyof z.infer<typeof TelcoFees>;
+
+export const TelcoSchema = z
   .object({
-    rules: z.array(
-      z
-        .object({
-          id: z.string().min(1),
-          event: z.enum(Object.keys(NOTIFICATION_EVENTS) as [NotificationEvent, ...NotificationEvent[]]),
-          enabled: z.boolean(),
-          template: z.string().min(1).max(320),
-        })
-        .strict(),
-    ),
+    menu: MenuSchema,
+    fees: TelcoFees,
+    /** What the telco pays its agents for each deposit and withdrawal they handle, as amount bands. */
+    agentCommission: z.object({ cashin: FeeSchema, cashout: FeeSchema }).strict(),
+    /** One SMS per event. An event left out uses the network's standard wording. */
+    notifications: z.partialRecord(z.enum(EVENT_NAMES), z.object({ enabled: z.boolean(), template: z.string().min(1).max(320) }).strict()),
+    pinAttemptsBeforeLock: z.number().int().min(1).max(10),
+    /** How long a customer has to approve a cash-out or payment request. */
+    approvalMinutes: z.number().int().min(1).max(60),
+    /** After a SIM swap the wallet cannot send money for this many hours. 0 switches the hold off. */
+    simSwapMomoHoldHours: z.number().int().min(0).max(168),
+    /** Whether subscribers can open a wallet themselves by dialling the short code. */
+    selfRegistration: z.boolean(),
+    /** No wallet-to-bank fee when the bank account belongs to the wallet's owner. On unless set to false. */
+    ownBankAccountFree: z.boolean().optional(),
+    /**
+     * Who starts a cash withdrawal at an agent. "agent_requests": the agent sends a request and the customer approves it
+     * on their phone (MTN). "customer_starts": the customer enters the agent's number on their own phone (Telecel, AT).
+     */
+    cashOut: z.enum(["agent_requests", "customer_starts"]).optional(),
+    /** How a wallet is opened, beyond the short code. */
+    registration: z
+      .object({
+        /** A separate code that opens a wallet, where the network has one. */
+        code: z.string().regex(/^\*\d+(\*\d+)*#$/).optional(),
+        /** A wallet opened by an agent gets a starting PIN by text, which the customer must replace on first use. */
+        pinBySms: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    /** Data bundles sold from the wallet. */
+    bundles: z.array(z.object({ id: z.string().regex(/^[a-z0-9_]+$/), name: z.string().min(1).max(40), price: z.number().positive(), mb: z.number().int().positive(), days: z.number().int().positive() }).strict()).max(12).optional(),
+    /** Companies whose bills can be paid from the wallet. */
+    billers: z.array(z.object({ id: z.string().regex(/^[a-z0-9_]+$/), name: z.string().min(1).max(40), ask: z.string().min(1).max(60), token: z.boolean().optional() }).strict()).max(12).optional(),
+    /** Banks whose cash machines pay out against a voucher from the wallet, and how long a voucher lasts. */
+    atm: z.object({ banks: z.array(z.string()).min(1), minutes: z.number().int().min(1).max(120) }).strict().optional(),
   })
   .strict();
-export type Notifications = z.infer<typeof NotificationsSchema>;
+export type TelcoConfig = z.infer<typeof TelcoSchema>;
 
-// ---------- 4. Fraud checks ----------
+// ---------- bank ----------
 
-export const CHECK_ACTIONS = ["block", "hold", "warn", "require_second_factor", "flag"] as const;
-export type CheckAction = (typeof CHECK_ACTIONS)[number];
-export const TXN_TYPES = ["p2p", "merchant", "cashout", "to_bank", "rtp"] as const;
+export const BankSchema = z.object({ fees: z.object({ toWallet: FeeSchema, interbank: FeeSchema }).strict() }).strict();
+export type BankConfig = z.infer<typeof BankSchema>;
 
-export const FraudChecksSchema = z
+// ---------- Bank of Ghana ----------
+
+const Tier = z.object({ maxBalance: z.number().positive(), daily: z.number().positive(), monthly: z.number().positive().nullable() }).strict();
+export const TIERS = ["minimum", "medium", "enhanced"] as const;
+export type KycTier = (typeof TIERS)[number];
+export const BogSchema = z.object({ kycTiers: z.object({ minimum: Tier, medium: Tier, enhanced: Tier }).strict() }).strict();
+export type BogConfig = z.infer<typeof BogSchema>;
+
+// ---------- National Communications Authority ----------
+
+export const NcaSchema = z
   .object({
-    checks: z.array(
-      z
-        .object({
-          id: z.string().min(1).max(60),
-          name: z.string().min(1).max(120),
-          enabled: z.boolean(),
-          appliesTo: z.array(z.enum(TXN_TYPES)).min(1),
-          when: ConditionSchema,
-          action: z.enum(CHECK_ACTIONS),
-          holdMinutes: z.number().int().min(1).max(10080).optional(),
-          message: z.string().max(300).optional(),
-        })
-        .strict(),
-    ),
-    webhook: z
-      .object({ enabled: z.boolean(), url: z.string(), timeoutMs: z.number().int().min(50).max(3000), failOpen: z.boolean() })
-      .strict(),
+    /** Across all networks. */
+    maxSimsPerCard: z.number().int().min(1).max(50),
+    minimumAge: z.number().int().min(0).max(21),
+    /** A second or later SIM on a Ghana Card needs a code sent to the holder's first (primary) number. */
+    primaryNumberApproval: z.boolean(),
   })
   .strict();
-export type FraudChecks = z.infer<typeof FraudChecksSchema>;
+export type NcaConfig = z.infer<typeof NcaSchema>;
 
-// ---------- 5. Scenarios ----------
+// ---------- national switch ----------
 
-export const SCENARIOS = {
-  reversal_scam: "\"Sent to you by mistake\" reversal scam",
-  pin_phishing: "Fake MoMo staff call or SMS to phish the PIN",
-  sim_swap: "SIM swap leading to account takeover",
-  agent_fraud: "Agent float and cash-out fraud",
-  mule_chain: "Mule account chains across networks and banks",
-  fake_promo: "Fake promotion or lottery SMS",
-  rtp_abuse: "Abuse of payment approval prompts (Request to Pay)",
-  fake_merchant_qr: "Fake merchant or payment QR code",
-  relative_impersonation: "Impersonation of a relative in distress",
-  limit_splitting: "Splitting transfers to stay under KYC limits",
-} as const;
-export type ScenarioId = keyof typeof SCENARIOS;
-export const SCENARIO_IDS = Object.keys(SCENARIOS) as [ScenarioId, ...ScenarioId[]];
-
-export const ScenariosSchema = z
+export const SwitchSchema = z
   .object({
-    scenarios: z.array(z.object({ id: z.enum(SCENARIO_IDS), enabled: z.boolean(), perDay: z.number().min(0).max(500) }).strict()),
-    legitTxnsPerDay: z.number().int().min(0).max(20000),
+    participants: z.object(Object.fromEntries(PARTICIPANTS.map((p) => [p, z.object({ connected: z.boolean() }).strict()]))).strict(),
+    /** Billed by the switch to the sending institution for each transaction it routes (GHS). */
+    feePerTxn: z.number().min(0).max(10),
+    /** Largest single payment the switch will route (GHS). */
+    maxAmount: z.number().positive(),
   })
   .strict();
-export type Scenarios = z.infer<typeof ScenariosSchema>;
+export type SwitchConfig = { participants: Record<string, { connected: boolean }>; feePerTxn: number; maxAmount: number };
 
 // ---------- registry ----------
 
-export const SURFACES = {
-  menus: { schema: MenusSchema, label: "USSD menus" },
-  rules: { schema: RulesSchema, label: "Rules and limits" },
-  notifications: { schema: NotificationsSchema, label: "Notifications" },
-  fraudChecks: { schema: FraudChecksSchema, label: "Fraud checks" },
-  scenarios: { schema: ScenariosSchema, label: "Scenarios" },
-} as const;
-export type Surface = keyof typeof SURFACES;
-export const SURFACE_NAMES = Object.keys(SURFACES) as [Surface, ...Surface[]];
+export type SurfaceOf<S extends string> = S extends "bog"
+  ? BogConfig
+  : S extends "nca"
+    ? NcaConfig
+    : S extends "switch"
+      ? SwitchConfig
+      : S extends `telco.${string}`
+        ? TelcoConfig
+        : S extends `bank.${string}`
+          ? BankConfig
+          : never;
 
-export interface SurfaceTypes {
-  menus: Menus;
-  rules: Rules;
-  notifications: Notifications;
-  fraudChecks: FraudChecks;
-  scenarios: Scenarios;
+export const SURFACE_NAMES: string[] = ["bog", "nca", "switch", ...TELCOS.map((t) => `telco.${t}`), ...BANK_IDS.map((b) => `bank.${b}`)];
+
+export function schemaFor(surface: string): z.ZodType | undefined {
+  if (!SURFACE_NAMES.includes(surface)) return undefined;
+  if (surface === "bog") return BogSchema;
+  if (surface === "nca") return NcaSchema;
+  if (surface === "switch") return SwitchSchema;
+  return surface.startsWith("telco.") ? TelcoSchema : BankSchema;
 }
+
+/** Which institution's console a surface belongs to, for the audit trail. */
+export const surfaceOwner = (surface: string) => surface.replace(/^(telco|bank)\./, "");

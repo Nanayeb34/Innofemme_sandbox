@@ -2,10 +2,39 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { ConfigError } from "@/engine/config/store";
-import { getWorld, registry, startTicker, teamById, ORGANISER_WORLD } from "@/engine/worlds";
+import { getWorld, registry, roleOfKey, teamById, ORGANISER_WORLD, type Role, type Team } from "@/engine/worlds";
+import { SimError } from "@/engine/util";
 import type { World } from "@/engine/world";
 
-export const teamCookie = (team: string) => `momo_${team}`;
+/**
+ * What a browser keeps after opening a team's link or scanning a phone code. The consoles and the
+ * phone screens are kept under different names, so opening one can never replace or hide the other:
+ * a device that has ever opened the team link is a console, whatever else it has opened.
+ */
+export const consoleCookie = (team: string) => `momo_${team}_console`;
+export const phoneCookie = (team: string) => `momo_${team}_phone`;
+/** The single name used before the two were kept apart. Still honoured. */
+const earlierCookie = (team: string) => `momo_${team}`;
+
+/** The role a browser holds for a team, from everything it has kept. The widest access wins. */
+export function savedRole(team: Team, cookieHeader: string | null | undefined): Role | undefined {
+  const names = [consoleCookie(team.id), phoneCookie(team.id), earlierCookie(team.id)];
+  const roles: Role[] = [];
+  // Read from the raw header, so that nothing is missed if a browser sends the same name twice.
+  for (const name of names) {
+    for (const part of (cookieHeader ?? "").split(";")) {
+      const eq = part.indexOf("=");
+      if (eq < 0 || part.slice(0, eq).trim() !== name) continue;
+      let value = part.slice(eq + 1).trim();
+      try {
+        value = decodeURIComponent(value);
+      } catch {}
+      const role = roleOfKey(team, value);
+      if (role) roles.push(role);
+    }
+  }
+  return roles.includes("team") ? "team" : roles[0];
+}
 export const ORG_COOKIE = "momo_org";
 
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -33,18 +62,28 @@ export async function isOrganiser(req?: Request): Promise<boolean> {
   return (!!c && same(c, key)) || (!!h && same(h, key));
 }
 
-/** Resolves the team world a request may act on: team key (header or cookie) or organiser access. */
-export async function authWorld(req: Request, team: string): Promise<World> {
-  startTicker();
+/** The role a request holds for a team: from its key (header or cookie), or full access for an organiser. */
+export async function requestRole(req: Request, team: string): Promise<Role | undefined> {
+  const t = teamById(team);
+  if (!t) return undefined;
+  const roles = [roleOfKey(t, presentedKey(req)), savedRole(t, req.headers.get("cookie"))].filter(Boolean) as Role[];
+  if (roles.includes("team") || (await isOrganiser(req))) return "team";
+  return roles[0];
+}
+
+/**
+ * Resolves the team world a request may act on. Most of the API needs the team key (or organiser access);
+ * the phone and agent endpoints also accept the narrower keys carried by the phone QR codes.
+ */
+export async function authWorld(req: Request, team: string, allowed: Role[] = ["team"]): Promise<World> {
   if (team === ORGANISER_WORLD) {
     if (!(await isOrganiser(req))) throw new HttpError(401, "Organiser access required");
     return getWorld(team);
   }
-  const t = teamById(team);
-  if (!t) throw new HttpError(404, "Unknown team");
-  const jar = await cookies();
-  const candidates = [presentedKey(req), jar.get(teamCookie(team))?.value].filter(Boolean) as string[];
-  if (!candidates.some((k) => same(k, t.key)) && !(await isOrganiser(req))) throw new HttpError(401, "Team key required. Scan your team QR code or send the x-team-key header.");
+  if (!teamById(team)) throw new HttpError(404, "Unknown team");
+  const role = await requestRole(req, team);
+  if (!role) throw new HttpError(401, "Team key required. Scan your team QR code or send the x-team-key header.");
+  if (!allowed.includes(role)) throw new HttpError(403, role === "customer" ? "This link only opens the customer phone." : "This link only opens the agent screens.");
   return getWorld(team);
 }
 
@@ -54,6 +93,7 @@ export function handle<C>(fn: (req: Request, ctx: C) => Promise<unknown>) {
       const out = await fn(req, ctx);
       return out instanceof Response ? out : NextResponse.json(out);
     } catch (e) {
+      if (e instanceof SimError) return NextResponse.json({ error: e.message }, { status: e.status });
       if (e instanceof HttpError) return NextResponse.json({ error: e.message }, { status: e.status });
       if (e instanceof ConfigError) return NextResponse.json({ error: "Invalid configuration", details: e.errors }, { status: 422 });
       console.error(e);
