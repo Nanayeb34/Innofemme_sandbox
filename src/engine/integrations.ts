@@ -1,7 +1,7 @@
 import { BANK_IDS, SimError, isTelco, need, newId } from "./util";
 import { count } from "./db";
 import { callOut, checkUrl } from "./outside";
-import { audit, withLock, type World } from "./world";
+import { audit, stepAside, withLock, type World } from "./world";
 
 /**
  * Plug-in points. An outside company can build an API and an institution can plug it into one of its
@@ -225,40 +225,56 @@ export function consult(w: World, institution: string, point: string, payload: u
   throw new Ask(institution, point, payload, key);
 }
 
-function record(w: World, i: Integration, point: string, request: unknown, decision: string, message: string | undefined, ms: number) {
-  // An application under test by the fraud simulator is not one of the institution's own plug-ins; the simulator keeps its own record.
-  if (i.id.startsWith("app_")) return;
-  w.db
-    .prepare("INSERT INTO integration_calls(at, integration_id, institution, point, request, decision, message, ms) VALUES(?,?,?,?,?,?,?,?)")
-    .run(w.now, i.id, i.institution, point, JSON.stringify(request).slice(0, 2000), decision, message?.slice(0, 300) ?? null, ms);
-  w.db.prepare("UPDATE integrations SET calls = calls + 1 WHERE id = ?").run(i.id);
-  // Keep the log short.
-  w.db.prepare("DELETE FROM integration_calls WHERE institution = ? AND id <= (SELECT MAX(id) FROM integration_calls WHERE institution = ?) - 500").run(i.institution, i.institution);
+/** What to write down about one call to a plugged-in API. */
+interface Note {
+  i: Integration;
+  point: string;
+  request: unknown;
+  decision: string;
+  message: string | undefined;
+  ms: number;
 }
 
-const post = (w: World, i: Integration, point: string, data: unknown) =>
+function record(w: World, n: Note) {
+  // An application under test by the fraud simulator is not one of the institution's own plug-ins; the simulator keeps its own record.
+  if (n.i.id.startsWith("app_")) return;
+  w.db
+    .prepare("INSERT INTO integration_calls(at, integration_id, institution, point, request, decision, message, ms) VALUES(?,?,?,?,?,?,?,?)")
+    .run(w.now, n.i.id, n.i.institution, n.point, JSON.stringify(n.request).slice(0, 2000), n.decision, n.message?.slice(0, 300) ?? null, n.ms);
+  w.db.prepare("UPDATE integrations SET calls = calls + 1 WHERE id = ?").run(n.i.id);
+  // Keep the log short.
+  w.db.prepare("DELETE FROM integration_calls WHERE institution = ? AND id <= (SELECT MAX(id) FROM integration_calls WHERE institution = ?) - 500").run(n.i.institution, n.i.institution);
+}
+
+const post = (world: string, i: Integration, point: string, data: unknown) =>
   callOut(i.url, {
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ point, institution: i.institution, world: w.id, at: new Date().toISOString(), data }),
+    body: JSON.stringify({ point, institution: i.institution, world, at: new Date().toISOString(), data }),
     timeoutMs: i.timeout_ms,
   });
 
-/** Asks one plugged-in API. An API that fails to answer is treated as its owner chose: carry on, or refuse. */
-async function ask(w: World, i: Integration, point: string, payload: unknown): Promise<Decision> {
+/**
+ * Asks one plugged-in API. An API that fails to answer is treated as its owner chose: carry on, or refuse.
+ * This touches nothing in the world, so other requests can be served while it waits; what to write down
+ * about the call is handed back with the answer.
+ */
+async function ask(world: string, i: Integration, point: string, payload: unknown): Promise<{ decision: Decision; note: Note }> {
   const started = Date.now();
   const allowed = POINTS[point].answers;
+  const note = (decision: string, message: string | undefined): Note => ({ i, point, request: payload, decision, message, ms: Date.now() - started });
   try {
-    const r = await post(w, i, point, payload);
+    const r = await post(world, i, point, payload);
     if (r.status < 200 || r.status >= 300) throw new Error(`answered with status ${r.status}`);
     const j = JSON.parse(r.body) as { decision?: string; message?: unknown; minutes?: unknown };
     if (!allowed.includes(j.decision as Answer)) throw new Error(`answered "${j.decision}", but this step accepts: ${allowed.join(", ")}`);
     const d: Decision = { decision: j.decision as Answer, message: typeof j.message === "string" ? j.message.slice(0, 300) : undefined, minutes: Number(j.minutes) > 0 ? Math.min(Number(j.minutes), 7 * 24 * 60) : undefined };
-    record(w, i, point, payload, d.decision, d.message, Date.now() - started);
-    return d;
+    return { decision: d, note: note(d.decision, d.message) };
   } catch (e) {
     const why = /^No answer within/.test((e as Error).message) ? `no answer within ${i.timeout_ms} ms` : (e as Error).message;
-    record(w, i, point, payload, "error", `${why}; ${i.fail_open ? "carried on" : "refused"}`, Date.now() - started);
-    return i.fail_open ? ALLOW : { decision: "reject", message: "This service is temporarily unavailable. Please try again later." };
+    return {
+      decision: i.fail_open ? ALLOW : { decision: "reject", message: "This service is temporarily unavailable. Please try again later." },
+      note: note("error", `${why}; ${i.fail_open ? "carried on" : "refused"}`),
+    };
   }
 }
 
@@ -268,7 +284,7 @@ export async function testIntegration(w: World, institution: string, id: unknown
   if (i.point === "events") {
     await flush(w, [{ institution, event: String(SAMPLES.events.event), data: SAMPLES.events }], [i], false);
   } else {
-    await ask(w, i, i.point, SAMPLES[i.point]);
+    record(w, (await ask(w.id, i, i.point, SAMPLES[i.point])).note);
   }
   const last = w.db.prepare("SELECT decision, message, ms FROM integration_calls WHERE integration_id = ? ORDER BY id DESC LIMIT 1").get(i.id) as { decision: string; message: string | null; ms: number };
   if (last.decision === "error") return `"${i.name}" did not answer properly: ${last.message}.`;
@@ -276,11 +292,28 @@ export async function testIntegration(w: World, institution: string, id: unknown
   return `"${i.name}" answered "${last.decision}"${last.message ? ` with the message "${last.message}"` : ""} in ${last.ms} ms.`;
 }
 
-/** Fetches the answer a step is waiting for. When several APIs are plugged into one step, the strictest answer wins. */
+/**
+ * Fetches the answer a step is waiting for. When several APIs are plugged into one step, the strictest answer wins.
+ *
+ * While the APIs are being asked, this request gives up its turn, so everything else on the world carries on:
+ * above all the API itself, which may well ask the sandbox something (was this SIM swapped lately?) before it
+ * answers. The request has undone everything it did, so nothing is half-finished while others are served. What
+ * belongs to it alone (the answers it has so far, and what the fraud simulator set up for its step) is put away
+ * for the wait and put back afterwards.
+ */
 async function settle(w: World, a: Ask) {
-  const answers = await Promise.all(active(w, a.institution, a.point).map(async (i) => ({ ...(await ask(w, i, a.point, a.payload)), by: i.name })));
-  const strictest = answers.reduce((x, y) => (STRICT.indexOf(y.decision) > STRICT.indexOf(x.decision) ? y : x), ALLOW);
-  w.answers.set(a.key, strictest);
+  const to = active(w, a.institution, a.point);
+  const mine = { answers: w.answers, watch: w.watch, direct: w.direct, clock: w.clock };
+  Object.assign(w, { answers: new Map(), watch: undefined, direct: undefined, clock: undefined, asking: false, outbox: [] });
+  let replies: Awaited<ReturnType<typeof ask>>[];
+  try {
+    replies = await stepAside(w, () => Promise.all(to.map((i) => ask(w.id, i, a.point, a.payload))));
+  } finally {
+    Object.assign(w, { ...mine, asking: true, outbox: [] });
+  }
+  for (const r of replies) record(w, r.note);
+  const answers = replies.map((r, n) => ({ ...r.decision, by: to[n].name }));
+  w.answers.set(a.key, answers.reduce((x, y) => (STRICT.indexOf(y.decision) > STRICT.indexOf(x.decision) ? y : x), ALLOW));
 }
 
 /** Tells plugged-in APIs that something happened. Queued until the request that caused it has succeeded. */
@@ -297,13 +330,13 @@ async function flush(w: World, events: World["outbox"], only?: Integration[], qu
       const payload = { event: e.event, ...(e.data as object) };
       let outcome: [string, string];
       try {
-        const r = await post(w, i, "events", payload);
+        const r = await post(w.id, i, "events", payload);
         outcome = r.status >= 200 && r.status < 300 ? ["sent", e.event] : ["error", `${e.event}: answered with status ${r.status}`];
       } catch (err) {
         outcome = ["error", `${e.event}: ${/^No answer within/.test((err as Error).message) ? "no answer in time" : (err as Error).message}`];
       }
       // Written in turn with everything else that touches this world.
-      const write = () => record(w, i, "events", payload, outcome[0], outcome[1], Date.now() - started);
+      const write = () => record(w, { i, point: "events", request: payload, decision: outcome[0], message: outcome[1], ms: Date.now() - started });
       if (queued) await withLock(w, write).catch(() => undefined);
       else write();
     }

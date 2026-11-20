@@ -693,7 +693,7 @@ describe("plug-in points: an outside API plugged into an institution's own steps
   let url = "";
   let amaNo = "", kofiNo = "", point = "";
   /** How the pretend outside API answers, and everything it was asked. */
-  let answer: (point: string, data: Record<string, unknown>) => Record<string, unknown> = () => ({ decision: "allow" });
+  let answer: (point: string, data: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({ decision: "allow" });
   const asked: { point: string; data: Record<string, unknown> }[] = [];
   let run: <T>(fn: () => T) => Promise<T>;
   let plug: (institution: string, point: string, extra?: Record<string, unknown>) => string;
@@ -708,8 +708,10 @@ describe("plug-in points: an outside API plugged into an institution's own steps
       req.on("end", () => {
         const j = JSON.parse(body) as { point: string; data: Record<string, unknown> };
         asked.push(j);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(answer(j.point, j.data)));
+        void Promise.resolve(answer(j.point, j.data)).then((a) => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(a));
+        });
       });
     });
     await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
@@ -820,6 +822,37 @@ describe("plug-in points: an outside API plugged into an institution's own steps
 
     // The books still balance after all of that.
     expect(count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings WHERE txn_id != 'seed'")).toBe(0);
+  });
+
+  it("an API can ask the sandbox a question before it answers, and the rest of the world carries on meanwhile", async () => {
+    const { simSwapCheck } = await import("../src/engine/signals");
+    const strong = walletByMsisdn(w, amaNo)!.pin;
+    w.cooldowns.clear();
+    const balance = () => walletByMsisdn(w, amaNo)!.balance;
+    // Before it answers, the API asks the network whether the payer's SIM was replaced lately (as it would over the
+    // partner API) and looks at a console. Both are requests on the same world as the payment that is waiting for it.
+    let sawWhileWaiting = "";
+    answer = async (p, d) => {
+      if (p !== "payment.authorize") return {};
+      const swap = await run(() => simSwapCheck(w, "mtn", { phoneNumber: (d.payer as { msisdn: string }).msisdn, maxAge: 24 }));
+      const hub = await run(() => view<{ counts: { wallets: number } }>(w, "hub"));
+      // The payment that is waiting has left nothing half-done for others to see.
+      sawWhileWaiting = `${balance()} ${w.db.isTransaction}`;
+      return { decision: "reject", message: `Checked first: swapped=${swap.swapped}, wallets=${hub.counts.wallets}.` };
+    };
+    const before = balance();
+    const started = Date.now();
+    let s = await run(() => ussd(w, { msisdn: amaNo, input: "*170#" }));
+    for (const input of ["1", "1", kofiNo, kofiNo, "45", "test", strong]) s = await run(() => ussd(w, { sessionId: s.sessionId, msisdn: amaNo, input }));
+    // The API got real answers from the sandbox and gave its own, well inside the two seconds it is allowed.
+    expect(s.text).toMatch(/Checked first: swapped=false, wallets=2\./);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(sawWhileWaiting).toBe(`${before} false`);
+    expect(balance()).toBe(before);
+    const last = view<{ pluginCalls: { decision: string; message: string | null }[] }>(w, "telco", "mtn").pluginCalls[0];
+    expect(last).toMatchObject({ decision: "reject" });
+    answer = () => ({ decision: "allow" });
+    w.cooldowns.clear();
   });
 
   it("an API that is down is treated as its owner chose: carry on, or refuse", async () => {

@@ -50,7 +50,8 @@ export interface World {
   asking: boolean;
   /** Events to tell plugged-in APIs about once the current request has succeeded. */
   outbox: { institution: string; event: string; data: unknown }[];
-  lock: Promise<unknown>;
+  /** Whose turn it is: one request at a time works on a world, the rest wait in line. */
+  lock: { held: boolean; waiting: (() => void)[] };
 }
 
 export function makeWorld(id: string, db: DB): World {
@@ -68,15 +69,47 @@ export function makeWorld(id: string, db: DB): World {
     answers: new Map(),
     asking: false,
     outbox: [],
-    lock: Promise.resolve(),
+    lock: { held: false, waiting: [] },
   };
 }
 
+function takeTurn(w: World): Promise<void> {
+  if (!w.lock.held) {
+    w.lock.held = true;
+    return Promise.resolve();
+  }
+  return new Promise((go) => w.lock.waiting.push(go));
+}
+
+function endTurn(w: World) {
+  // The turn passes straight to whoever has waited longest.
+  const next = w.lock.waiting.shift();
+  if (next) next();
+  else w.lock.held = false;
+}
+
 /** Serialises all work on one world so requests never interleave. */
-export function withLock<T>(w: World, fn: () => Promise<T> | T): Promise<T> {
-  const run = w.lock.then(fn, fn);
-  w.lock = run.catch(() => undefined);
-  return run;
+export async function withLock<T>(w: World, fn: () => Promise<T> | T): Promise<T> {
+  await takeTurn(w);
+  try {
+    return await fn();
+  } finally {
+    endTurn(w);
+  }
+}
+
+/**
+ * For the request whose turn it is, while it waits on something outside the sandbox: lets the others
+ * go ahead, then rejoins the line. The caller must have left the world exactly as it found it, with no
+ * transaction open, and must not touch the world inside fn.
+ */
+export async function stepAside<T>(w: World, fn: () => Promise<T>): Promise<T> {
+  endTurn(w);
+  try {
+    return await fn();
+  } finally {
+    await takeTurn(w);
+  }
 }
 
 /** Records what an institution did, for the activity log. */
