@@ -933,3 +933,139 @@ describe("plug-in points: an outside API plugged into an institution's own steps
     expect(() => integrations.addIntegration(w, "gcb", { point: "sim.swap", name: "x", url })).toThrow(/no such step/);
   });
 });
+
+describe("simulated data: a ready-made country with labelled fraud", () => {
+  const rows = <T>(w: World, sql: string, ...args: (string | number)[]) => w.db.prepare(sql).all(...args) as T[];
+  const one = <T>(w: World, sql: string, ...args: (string | number)[]) => w.db.prepare(sql).get(...args) as T;
+
+  it("builds people, lines, wallets and a history with the exact share of fraud, and the books balance", async () => {
+    const { simulate, SCENARIOS } = await import("../src/engine/simulate");
+    const w = await resetWorld("team-02");
+    const s = simulate(w, { total: 8000, seed: 7 });
+
+    // Exactly the number asked for, and exactly 22% of it fraud, spread over all ten kinds.
+    expect(s).toMatchObject({ transactions: 8000, fraud: 1760, legitimate: 6240 });
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM dataset")).toBe(8000);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM dataset WHERE is_fraud = 1")).toBe(1760);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM dataset d JOIN txns t ON t.id = d.txn_id")).toBe(8000);
+    const kinds = rows<{ scenario: string; n: number }>(w, "SELECT scenario, COUNT(*) AS n FROM dataset WHERE is_fraud = 1 GROUP BY scenario");
+    expect(kinds.map((k) => k.scenario).sort()).toEqual(Object.keys(SCENARIOS).sort());
+    expect(kinds.every((k) => k.n > 30)).toBe(true);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM dataset WHERE is_fraud = 0 AND scenario IS NOT NULL")).toBe(0);
+
+    // Everyone has a Ghana Card, every line was registered against one at a registration point, every wallet sits on a line.
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM persons WHERE ghana_card NOT GLOB 'GHA-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]'")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM sims s WHERE s.status = 'active' AND (NOT EXISTS (SELECT 1 FROM persons p WHERE p.id = s.person_id) OR NOT EXISTS (SELECT 1 FROM sim_agents a WHERE a.id = s.registered_by))")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM wallets x WHERE NOT EXISTS (SELECT 1 FROM sims s WHERE s.msisdn = x.msisdn AND s.status = 'active')")).toBe(0);
+    expect(count(w.db, "SELECT MAX(n) AS n FROM (SELECT COUNT(*) AS n FROM sims WHERE status = 'active' GROUP BY person_id)")).toBeLessThanOrEqual(10);
+
+    // The ledger: every transaction balances, no wallet or account is overdrawn, and balances are what the postings say.
+    expect(count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM wallets WHERE balance < 0")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM bank_accounts WHERE kind = 'personal' AND balance < 0")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM wallets x WHERE balance != (SELECT COALESCE(SUM(amount),0) FROM postings WHERE account = 'w:' || x.id)")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM bank_accounts a WHERE balance != (SELECT COALESCE(SUM(amount),0) FROM postings WHERE account = 'bank:' || a.id)")).toBe(0);
+    const bog = view<{ issuers: { backed: boolean }[]; ledgerBalanced: boolean }>(w, "bog");
+    expect(JSON.stringify(bog)).not.toContain('"backed":false');
+    expect(bog.ledgerBalanced).toBe(true);
+    // Refused transactions moved no money.
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM txns t WHERE t.status = 'failed' AND EXISTS (SELECT 1 FROM postings p WHERE p.txn_id = t.id)")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE status = 'failed'")).toBeGreaterThan(50);
+
+    // The scenarios leave the traces a real case would.
+    // SIM swap: the wallet is emptied only after the pause that follows the replacement; attempts before that were refused.
+    const drains = rows<{ at: number; swapped: number; status: string }>(
+      w,
+      `SELECT t.created_at AS at, t.status, (SELECT MAX(e.at) FROM sim_events e WHERE e.msisdn = x.msisdn AND e.kind = 'swapped' AND e.at <= t.created_at) AS swapped
+       FROM dataset d JOIN txns t ON t.id = d.txn_id JOIN wallets x ON x.id = t.from_wallet WHERE d.scenario = 'sim_swap' AND d.role IN ('unauthorised_transfer','unauthorised_cash_out','failed_attempt')`,
+    );
+    expect(drains.length).toBeGreaterThan(20);
+    for (const d of drains) expect(d.status === "success" ? d.at - d.swapped >= 24 * 3600_000 : d.at - d.swapped < 24 * 3600_000).toBe(true);
+    // Reversal scam: the victim pays while the fraudster is on the line, after a fake "payment received" text.
+    const reversal = rows<{ id: string; at: number; payer: string; payee: string }>(w, "SELECT t.id, t.created_at AS at, f.msisdn AS payer, p.msisdn AS payee FROM dataset d JOIN txns t ON t.id = d.txn_id JOIN wallets f ON f.id = t.from_wallet JOIN wallets p ON p.id = t.to_wallet WHERE d.scenario = 'reversal_scam' AND d.role = 'victim_payment'");
+    for (const r of reversal.slice(0, 40)) {
+      expect(count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE from_msisdn = ? AND to_msisdn = ? AND answered_at <= ? AND ended_at >= ?", r.payee, r.payer, r.at, r.at)).toBeGreaterThanOrEqual(1);
+      expect(count(w.db, "SELECT COUNT(*) AS n FROM sms_log WHERE sender = ? AND to_msisdn = ? AND at < ? AND body LIKE 'Payment received%'", r.payee, r.payer, r.at)).toBeGreaterThanOrEqual(1);
+    }
+    // Limit splitting: the pieces are each under the small wallets' daily limit.
+    expect(one<{ n: number }>(w, "SELECT MAX(t.amount) AS n FROM dataset d JOIN txns t ON t.id = d.txn_id WHERE d.role = 'splitting' AND t.status = 'success'").n).toBeLessThanOrEqual(300000);
+    // A case is the victim's loss followed by the money moving on, in order.
+    const chain = rows<{ role: string }>(w, "SELECT d.role FROM dataset d WHERE d.case_id = (SELECT case_id FROM dataset WHERE role = 'cashing_out' AND scenario = 'relative_impersonation' LIMIT 1) ORDER BY d.seq");
+    expect(chain[0].role).toBe("victim_payment");
+    expect(chain.at(-1)!.role).toBe("cashing_out");
+    // Many lines used to move the money sit on a few Ghana Cards.
+    expect(one<{ n: number }>(w, "SELECT MAX(n) AS n FROM (SELECT COUNT(*) AS n FROM sims GROUP BY person_id)").n).toBeGreaterThanOrEqual(5);
+
+    // It cannot be loaded on top of something else.
+    expect(() => simulate(w, { total: 8000 })).toThrow(/empty world/);
+  });
+
+  it("gives the same country for the same seed, and a different one for another", async () => {
+    const { simulate } = await import("../src/engine/simulate");
+    const end = Date.UTC(2026, 10, 1);
+    const sample = async (seed: number) => {
+      const w = await resetWorld("team-02");
+      simulate(w, { total: 3000, seed, end });
+      return JSON.stringify(rows(w, "SELECT t.id, t.type, t.amount, t.created_at, t.from_wallet, t.to_wallet, d.scenario FROM dataset d JOIN txns t ON t.id = d.txn_id ORDER BY d.seq LIMIT 400"));
+    };
+    const a = await sample(11);
+    expect(await sample(11)).toBe(a);
+    expect(await sample(12)).not.toBe(a);
+  });
+
+  it("can be downloaded, with or without the answers, and the live sandbox carries on from it", async () => {
+    const { simulate } = await import("../src/engine/simulate");
+    const { datasetCsv, DATASET_FILES } = await import("../src/engine/dataset");
+    const w = await resetWorld("team-02");
+    simulate(w, { total: 3000, seed: 3 });
+
+    const csv = [...datasetCsv(w, "transactions")].join("").trimEnd().split("\n");
+    expect(csv).toHaveLength(3001);
+    expect(csv[0]).toMatch(/^number,transaction_id,time,type,.*,is_fraud,fraud_scenario,fraud_role,fraud_case$/);
+    expect(csv.filter((l) => /,1,[a-z_]+,[a-z_]+,case_\d+$/.test(l))).toHaveLength(660);
+    const blind = [...datasetCsv(w, "transactions", false)].join("").trimEnd().split("\n");
+    expect(blind).toHaveLength(3001);
+    expect(blind[0]).not.toMatch(/fraud/);
+    expect(blind.join("\n")).not.toMatch(/case_\d+/);
+    for (const name of Object.keys(DATASET_FILES)) expect([...datasetCsv(w, name)].join("").split("\n").length).toBeGreaterThan(10);
+    // No PINs or fingerprints leave in the files.
+    expect([...datasetCsv(w, "wallets")].join("")).not.toMatch(/pin/i);
+    expect([...datasetCsv(w, "people")].join("")).not.toMatch(/FP-/);
+
+    // A simulated customer can use their phone and pay as anyone else does.
+    const a = one<{ id: string; msisdn: string; pin: string; balance: number }>(w, "SELECT id, msisdn, pin, balance FROM wallets WHERE owner_type = 'person' AND telco = 'mtn' AND kyc_tier = 'medium' AND balance > 5000 ORDER BY id LIMIT 1");
+    const b = one<{ id: string; msisdn: string; balance: number }>(w, "SELECT id, msisdn, balance FROM wallets WHERE owner_type = 'person' AND telco = 'mtn' AND kyc_tier = 'medium' AND id != ? ORDER BY id LIMIT 1", a.id);
+    expect(dial(w, a.msisdn, "*170#").text).toContain((getConfig(w.db, "telco.mtn").menu.nodes.main as { text: string }).text);
+    pay.walletPay(w, { type: "p2p", channel: "ussd", from: a.id, to: b.id, amount: 1000, pin: a.pin });
+    expect(walletByMsisdn(w, b.msisdn)!.balance).toBe(b.balance + 1000);
+    // And new people can still be registered from the blank SIMs in stock.
+    const p = person(w, "Nana", "Addae", "1999-09-09");
+    const point = one<{ id: string }>(w, "SELECT id FROM sim_agents WHERE telco = 'mtn' AND kind = 'service_centre' LIMIT 1").id;
+    expect(telco.registerSim(w, "mtn", point, { card: p.ghana_card, fingerprint: p.fingerprint }).sim.status).toBe("active");
+    // Consoles list the newest first, so the new person is at the top.
+    expect(view<{ sims: { owner: string }[] }>(w, "telco", "mtn").sims[0].owner).toBe("Nana Addae");
+    expect(view<{ sims: unknown[] }>(w, "telco", "mtn").sims.length).toBeLessThanOrEqual(200);
+  });
+
+  it("loads into a team's world at full size: 100,023 transactions, 22,005 of them fraud", async () => {
+    const worlds = await import("../src/engine/worlds");
+    const before = await resetWorld("team-01");
+    person(before, "Left", "Behind");
+    const w = await worlds.loadSimulated("team-01");
+    const s = worlds.simulatedSummary(w)!;
+    expect(s).toMatchObject({ transactions: 100023, fraud: 22005, legitimate: 78018 });
+    expect(Object.values(s.byScenario).reduce((n, x) => n + x.transactions, 0)).toBe(22005);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM dataset")).toBe(100023);
+    expect(count(w.db, "SELECT COALESCE(SUM(amount),0) AS n FROM postings")).toBe(0);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM persons WHERE surname = 'Behind'")).toBe(0);
+    // What the team had before is kept as a save point.
+    expect(worlds.listSnapshots("team-01")[0].label).toBe("Before loading simulated data");
+    // A second world gets the very same country.
+    const again = await worlds.loadSimulated("team-02");
+    const first = (x: World) => JSON.stringify(x.db.prepare("SELECT txn_id, is_fraud, scenario FROM dataset ORDER BY seq LIMIT 200").all());
+    expect(first(again)).toBe(first(w));
+    await resetWorld("team-01");
+    await resetWorld("team-02");
+  }, 180_000);
+});

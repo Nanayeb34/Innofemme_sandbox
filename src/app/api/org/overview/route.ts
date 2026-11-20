@@ -21,8 +21,8 @@ export const GET = handle(async (req: Request) => {
         wallets: n("SELECT COUNT(*) AS n FROM wallets"),
         agents: n("SELECT COUNT(*) AS n FROM momo_agents") + n("SELECT COUNT(*) AS n FROM sim_agents"),
         bankAccounts: n("SELECT COUNT(*) AS n FROM bank_accounts WHERE kind = 'personal'"),
-        payments: n("SELECT COUNT(*) AS n FROM txns WHERE status = 'success' AND type NOT IN ('settlement','reversal')"),
-        value: n("SELECT COALESCE(SUM(amount),0) AS n FROM txns WHERE status = 'success' AND type NOT IN ('settlement','reversal')") / 100,
+        payments: n("SELECT COUNT(*) AS n FROM txns WHERE status = 'success' AND type NOT IN ('settlement','reversal','opening')"),
+        value: n("SELECT COALESCE(SUM(amount),0) AS n FROM txns WHERE status = 'success' AND type NOT IN ('settlement','reversal','opening')") / 100,
         settingsChanges: n("SELECT COUNT(*) AS n FROM config_history"),
         lastActivity: (db.prepare("SELECT MAX(at) AS at FROM audit").get() as { at: number | null }).at,
       };

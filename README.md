@@ -149,6 +149,32 @@ sent. The API reference inside the app (section 7) shows exactly what is sent at
 
 With nothing plugged in, the sandbox behaves exactly as it did before.
 
+## Simulated data
+
+A world starts empty. It can instead be filled with a simulated country and 90 days of history, from a
+team's home page ("Load the simulated country") or from the organiser dashboard for several teams at once.
+
+- **100,023 transactions**, of which **22,005 (22%) are fraud**, in about 7,700 cases.
+- About 4,200 people with Ghana Cards, 4,700 registered numbers and wallets, 140 agents, 250 merchants,
+  1,650 bank accounts, 43,000 calls, 40,000 texts and 4,000 complaints.
+- Ten kinds of fraud, each played out step by step: `reversal_scam`, `pin_phishing`, `sim_swap`,
+  `agent_fraud`, `mule_chain`, `fake_promo`, `rtp_abuse`, `fake_merchant`, `relative_impersonation`,
+  `limit_splitting`. A case has its lure (a text or a call), the victim's loss, the money moving through
+  other wallets, and the cash-out; some attempts are refused by the sandbox's own rules.
+- Every transaction is written through the same ledger as live activity, so fees, KYC limits, agent
+  tills, switch positions and daily settlement are all consistent, and whatever a team does next is
+  added on top.
+- It downloads as CSV files (`/api/w/{team}/dataset`), with the answers (`is_fraud`, `fraud_scenario`,
+  `fraud_role`, `fraud_case`) or without them (`?answers=0`).
+
+Every team gets the same country. An organiser can load a different one by passing another `seed` to
+`POST /api/org/action {"action":"simulate","worlds":[...],"seed":7}`, for example to keep one back for
+judging. The history always ends at the start of the day it was first built on that server.
+
+Loading takes about 15 seconds the first time on a server each day (the sandbox pauses for everyone
+while it builds), and a second or two after that. A loaded world is about 115 MB on disk; fewer save
+points are kept for worlds that size.
+
 ## Customer care and disputes
 
 A customer raises a complaint by calling 100 (a real voice call to their network's care console, when an agent there is on line) or from the phone: wallet short code → My Wallet → Report a Problem. Either way a ticket is opened and the customer is told by SMS.

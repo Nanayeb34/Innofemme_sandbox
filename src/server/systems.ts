@@ -147,6 +147,23 @@ const pluginView = (w: World, institution: string) => ({
   pluginCalls: integrationLog(w, institution),
 });
 
+/**
+ * Whether every transaction's postings add up to zero. Postings are only ever added, so each check
+ * looks at the ones written since the last, not the whole ledger again.
+ */
+const checkedUpTo = new WeakMap<World, { id: number; ok: boolean }>();
+function ledgerBalanced(w: World): boolean {
+  const last = checkedUpTo.get(w) ?? { id: 0, ok: true };
+  const top = sum(w, "SELECT COALESCE(MAX(id),0) AS n FROM postings");
+  if (top < last.id) last.id = 0; // the world was replaced
+  if (top > last.id) {
+    // A transaction's postings are written together, so start from the first transaction not yet checked.
+    const bad = sum(w, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings WHERE txn_id IN (SELECT DISTINCT txn_id FROM postings WHERE id > ?) GROUP BY txn_id HAVING SUM(amount) != 0)", last.id);
+    checkedUpTo.set(w, { id: top, ok: (last.id === 0 || last.ok) && bad === 0 });
+  }
+  return checkedUpTo.get(w)?.ok ?? true;
+}
+
 // ---------- hub ----------
 
 const hub: System = {
@@ -161,7 +178,7 @@ const hub: System = {
       momoAgents: n("SELECT COUNT(*) AS n FROM momo_agents"),
       merchants: n("SELECT COUNT(*) AS n FROM merchants"),
       bankAccounts: n("SELECT COUNT(*) AS n FROM bank_accounts WHERE kind = 'personal'"),
-      payments: n("SELECT COUNT(*) AS n FROM txns WHERE status = 'success' AND type NOT IN ('settlement','reversal')"),
+      payments: n("SELECT COUNT(*) AS n FROM txns WHERE status = 'success' AND type NOT IN ('settlement','reversal','opening')"),
       crossNetwork: n("SELECT COUNT(*) AS n FROM txns WHERE status = 'success' AND rail = 'switch' AND type != 'settlement'"),
       settlements: n("SELECT COUNT(*) AS n FROM settlements"),
       agentFloat: n("SELECT COALESCE(SUM(w.balance),0) AS n FROM wallets w WHERE w.owner_type = 'agent'"),
@@ -190,7 +207,7 @@ const hub: System = {
 
 const nia: System = {
   view(w) {
-    const people = w.db.prepare("SELECT * FROM persons ORDER BY issued_at DESC LIMIT 500").all() as unknown as import("@/engine/nia").Person[];
+    const people = w.db.prepare("SELECT * FROM persons ORDER BY issued_at DESC LIMIT 200").all() as unknown as import("@/engine/nia").Person[];
     const log = w.db.prepare("SELECT * FROM nia_log ORDER BY id DESC LIMIT 150").all() as { id: number; at: number; requester: string; purpose: string; ghana_card: string; biometric: number; result: string }[];
     return {
       stats: {
@@ -227,10 +244,10 @@ function telcoSystem(t: Telco): System {
       const sims = w.db
         .prepare(
           `SELECT s.*, p.first_names, p.surname, p.ghana_card, (SELECT 1 FROM wallets w WHERE w.msisdn = s.msisdn) AS has_wallet
-           FROM sims s LEFT JOIN persons p ON p.id = s.person_id WHERE s.telco = ? AND s.status != 'in_stock' ORDER BY s.registered_at DESC LIMIT 400`,
+           FROM sims s LEFT JOIN persons p ON p.id = s.person_id WHERE s.telco = ? AND s.status != 'in_stock' ORDER BY s.registered_at DESC LIMIT 200`,
         )
         .all(t) as Record<string, string | number | null>[];
-      const wallets = w.db.prepare("SELECT w.*, p.ghana_card FROM wallets w JOIN persons p ON p.id = w.person_id WHERE w.telco = ? ORDER BY w.created_at DESC LIMIT 400").all(t) as Record<string, string | number>[];
+      const wallets = w.db.prepare("SELECT w.*, p.ghana_card FROM wallets w JOIN persons p ON p.id = w.person_id WHERE w.telco = ? ORDER BY w.created_at DESC LIMIT 200").all(t) as Record<string, string | number>[];
       return {
         telco: t,
         brand: { ...brand, logo: telcoLogo(t) },
@@ -599,18 +616,22 @@ const phone: System = {
     const lines = (w.db
       .prepare(
         `SELECT s.msisdn, s.telco, s.status, p.first_names || ' ' || p.surname AS owner, w.owner_type, w.display_name
-         FROM sims s JOIN persons p ON p.id = s.person_id LEFT JOIN wallets w ON w.msisdn = s.msisdn WHERE s.status IN ('active','blocked') ORDER BY s.registered_at`,
+         FROM sims s JOIN persons p ON p.id = s.person_id LEFT JOIN wallets w ON w.msisdn = s.msisdn WHERE s.status IN ('active','blocked')
+         ORDER BY (s.msisdn = ?) DESC, s.registered_at DESC LIMIT 200`,
       )
-      .all() as { msisdn: string; telco: Telco; status: string; owner: string; owner_type: string | null; display_name: string | null }[]).map((l) => ({
+      .all(q.get("msisdn") ? normalizeMsisdn(q.get("msisdn")!) : "") as { msisdn: string; telco: Telco; status: string; owner: string; owner_type: string | null; display_name: string | null }[]).map((l) => ({
       msisdn: l.msisdn, telco: l.telco, status: l.status, owner: l.owner, label: l.owner_type && l.owner_type !== "person" ? `${l.display_name} (${l.owner_type})` : l.owner, kind: l.owner_type ?? "no wallet",
     }));
+    const more = Math.max(0, sum(w, "SELECT COUNT(*) AS n FROM sims WHERE status IN ('active','blocked')") - lines.length);
     const msisdn = q.get("msisdn") ? normalizeMsisdn(q.get("msisdn")!) : undefined;
     const sim = msisdn ? telcoOps.getSim(w, msisdn) : undefined;
-    if (!sim || sim.status === "in_stock") return { lines, phone: null };
+    if (!sim || sim.status === "in_stock") return { lines, more, asked: msisdn ?? "", phone: null };
     const wallet = walletByMsisdn(w, sim.msisdn);
     const brand = TELCO_INFO[sim.telco];
     return {
       lines,
+      more,
+      asked: msisdn ?? "",
       phone: {
         msisdn: sim.msisdn,
         telco: sim.telco,
@@ -716,8 +737,8 @@ const switchSystem: System = {
     return {
       participants: pos.map((p) => ({ ...p, position: money(p.position), feesBilled: money(p.feesBilled), settlesVia: p.kind === "telco" ? bankName(TRUST_BANK[p.participant as Telco]) : "Bank of Ghana" })),
       stats: {
-        routed: sum(w, "SELECT COUNT(*) AS n FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type NOT IN ('settlement','reversal')"),
-        value: money(sum(w, "SELECT COALESCE(SUM(amount),0) AS n FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type NOT IN ('settlement','reversal')")),
+        routed: sum(w, "SELECT COUNT(*) AS n FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type NOT IN ('settlement','reversal','opening')"),
+        value: money(sum(w, "SELECT COALESCE(SUM(amount),0) AS n FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type NOT IN ('settlement','reversal','opening')")),
         rejected: sum(w, "SELECT COUNT(*) AS n FROM switch_log WHERE step = 'reject'"),
         unsettled: money(pos.filter((p) => p.position > 0).reduce((s, p) => s + p.position, 0)),
       },
@@ -788,7 +809,7 @@ const bog: System = {
         unsettled: money(balanceOf(w, `switch:${b}`)),
       })),
       wallets: TIERS.map((tier) => ({ tier, count: sum(w, "SELECT COUNT(*) AS n FROM wallets WHERE owner_type = 'person' AND kyc_tier = ?", tier) })),
-      ledgerBalanced: sum(w, "SELECT COUNT(*) AS n FROM (SELECT txn_id FROM postings GROUP BY txn_id HAVING SUM(amount) != 0)") === 0,
+      ledgerBalanced: ledgerBalanced(w),
       activity: auditFeed(w, "bog"),
     };
   },
@@ -814,7 +835,7 @@ const nca: System = {
         .prepare(
           `SELECT s.msisdn, s.telco, s.status, s.registered_at, s.registered_by, p.ghana_card, p.first_names || ' ' || p.surname AS owner,
             (SELECT COUNT(*) FROM sims x WHERE x.person_id = s.person_id AND x.status IN ('active','blocked')) AS held
-           FROM sims s JOIN persons p ON p.id = s.person_id WHERE s.status != 'in_stock' ${card ? "AND p.ghana_card = ?" : ""} ORDER BY s.registered_at DESC LIMIT 400`,
+           FROM sims s JOIN persons p ON p.id = s.person_id WHERE s.status != 'in_stock' ${card ? "AND p.ghana_card = ?" : ""} ORDER BY s.registered_at DESC LIMIT 200`,
         )
         .all(...(card ? [card] : [])) as Record<string, string | number>[]).map((r) => ({ ...r, network: TELCO_INFO[r.telco as Telco].name, registered_at: iso(r.registered_at as number) })),
       activity: auditFeed(w, "nca"),

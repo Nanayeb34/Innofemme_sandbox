@@ -128,7 +128,8 @@ export default function Hub({ team, logos, phones }: { team: string; logos: Reco
               <Activity rows={data.activity} showSystem empty="Nothing yet. Start at NIA: issue the first Ghana Card." />
             </section>
 
-            <WorldTools team={team} onChange={refresh} />
+            <SimulatedData team={team} onChange={refresh} />
+        <WorldTools team={team} onChange={refresh} />
           </>
         )}
       </main>
@@ -237,6 +238,100 @@ function WorldTools({ team, onChange }: { team: string; onChange: () => void }) 
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+interface DatasetView {
+  loaded: boolean;
+  summary?: { transactions: number; fraud: number; legitimate: number; failed: number; cases: number; from: string; to: string; people: number; sims: number; wallets: number; agents: number; merchants: number; bankAccounts: number; texts: number; calls: number; complaints: number };
+  scenarios?: { id: string; about: string; transactions: number; cases: number }[];
+  files?: { name: string; about: string; rows: number; url: string }[];
+}
+const num = (n: number) => n.toLocaleString("en");
+
+/** A ready-made country with three months of history, a known share of it fraud, to load in place of the empty world. */
+function SimulatedData({ team, onChange }: { team: string; onChange: () => void }) {
+  const { data, refresh } = useView<DatasetView>(team, "/dataset", 15000);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const load = async () => {
+    if (!confirm("Replace this world with the simulated country? What your team has built so far is kept as a save point, so you can roll back to it.")) return;
+    setBusy(true);
+    setMsg("Loading the simulated country. This can take up to a minute the first time…");
+    try {
+      await api(team, "/world", { body: { action: "simulate" } });
+      setMsg("Loaded.");
+      await refresh();
+      onChange();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const s = data?.summary;
+  return (
+    <section className="card mb-5 p-4">
+      <h2 className="font-semibold text-gray-900">Simulated data</h2>
+      {!data?.loaded || !s ? (
+        <>
+          <p className="mt-0.5 text-sm text-gray-600">
+            Your world starts empty. Instead of building everything by hand, you can load a ready-made country: thousands of people with Ghana Cards, their SIMs, wallets, agents, merchants and bank accounts, and three months of transactions between them.
+            A known share of those transactions are fraud of ten different kinds, each labelled, so there is something to study, detect and test against.
+          </p>
+          <button className="btn btn-dark mt-3" disabled={busy} onClick={load}>
+            {busy ? "Loading…" : "Load the simulated country"}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="mt-0.5 text-sm text-gray-600">
+            This world holds a simulated country: <b>{num(s.transactions)}</b> transactions from {when(s.from).slice(0, 6)} to {when(s.to).slice(0, 6)}, of which <b>{num(s.fraud)}</b> ({Math.round((s.fraud / s.transactions) * 100)}%) are fraud in {num(s.cases)} cases.
+            {" "}{num(s.people)} people, {num(s.sims)} registered numbers, {num(s.wallets)} wallets, {num(s.agents)} agents, {num(s.merchants)} merchants, {num(s.bankAccounts)} bank accounts, {num(s.calls)} calls, {num(s.texts)} texts and {num(s.complaints)} complaints. Everything
+            you do from here is added on top of it.
+          </p>
+          <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">The fraud in it</h3>
+              <ul className="mt-1 divide-y divide-gray-100 text-sm">
+                {data.scenarios?.map((x) => (
+                  <li key={x.id} className="flex items-start justify-between gap-3 py-1.5">
+                    <span>
+                      <span className="font-mono text-xs text-gray-900">{x.id}</span>
+                      <span className="block text-xs text-gray-600">{x.about}</span>
+                    </span>
+                    <span className="shrink-0 text-right text-xs text-gray-700">
+                      {num(x.transactions)} transactions
+                      <span className="block text-gray-500">{num(x.cases)} cases</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Download it</h3>
+              <ul className="mt-1 divide-y divide-gray-100 text-sm">
+                {data.files?.map((f) => (
+                  <li key={f.name} className="flex items-start justify-between gap-3 py-1.5">
+                    <span>
+                      <a className="font-mono text-xs underline" href={`/api/w/${team}/dataset/${f.name}`}>
+                        {f.name}
+                      </a>
+                      <span className="block text-xs text-gray-600">{f.about}</span>
+                    </span>
+                    <span className="shrink-0 text-xs text-gray-500">{num(f.rows)} rows</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-gray-500">
+                transactions.csv says which transactions are fraud. Add <code>?answers=0</code> to its address to get it without those columns.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+      {msg && <p className="mt-2 text-sm text-gray-700">{msg}</p>}
     </section>
   );
 }

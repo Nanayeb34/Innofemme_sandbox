@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { DATA_DIR, SCHEMA_VERSION, SNAPSHOTS_DIR, WORLDS_DIR, getMeta, openDb, setMeta, tx } from "./db";
+import { DATA_DIR, SCHEMA_VERSION, SNAPSHOTS_DIR, WORLDS_DIR, count, getMeta, openDb, setMeta, tx } from "./db";
 import { seedConfig } from "./config/store";
 import { seedTrustAccounts } from "./bank";
+import { SIM_DEFAULTS, simulate, type SimSummary } from "./simulate";
 import { makeWorld, withLock, type World } from "./world";
 
 export interface Team {
@@ -157,8 +158,10 @@ export async function snapshotWorld(id: string, label: string): Promise<Snapshot
     const snap: Snapshot = { id: `s${Date.now()}`, label: label.slice(0, 80) || "Snapshot", createdAt: Date.now() };
     w.db.exec(`VACUUM INTO '${path.join(snapDir(id), `${snap.id}.db`).replace(/'/g, "''")}'`);
     const all = [snap, ...listSnapshots(id)];
-    for (const old of all.slice(20)) fs.rmSync(path.join(snapDir(id), `${old.id}.db`), { force: true });
-    fs.writeFileSync(snapIndex(id), JSON.stringify(all.slice(0, 20), null, 2));
+    // A world holding a simulated history is large, so fewer copies of it are kept.
+    const keep = fs.statSync(path.join(snapDir(id), `${snap.id}.db`)).size > 30_000_000 ? 4 : 20;
+    for (const old of all.slice(keep)) fs.rmSync(path.join(snapDir(id), `${old.id}.db`), { force: true });
+    fs.writeFileSync(snapIndex(id), JSON.stringify(all.slice(0, keep), null, 2));
     return snap;
   });
 }
@@ -172,4 +175,56 @@ export async function restoreSnapshot(id: string, snapId: string) {
     fs.copyFileSync(path.join(snapDir(id), `${snap.id}.db`), worldFile(id));
   });
   return getWorld(id);
+}
+
+// ---------- simulated data ----------
+
+const SIM_DIR = path.join(DATA_DIR, "simulated");
+/** Bump when the simulation changes what it produces, so stale copies are rebuilt. */
+const SIM_VERSION = 1;
+
+/**
+ * Builds the simulated country once per day and seed, into a file that team worlds are copied from.
+ * The history always ends at the start of the day it was built, so it stays recent.
+ */
+export function buildSimulated(seed: number = SIM_DEFAULTS.seed): string {
+  const file = path.join(SIM_DIR, `v${SIM_VERSION}-${seed}-${new Date().toISOString().slice(0, 10)}.db`);
+  if (fs.existsSync(file)) return file;
+  fs.mkdirSync(SIM_DIR, { recursive: true });
+  for (const old of fs.readdirSync(SIM_DIR)) fs.rmSync(path.join(SIM_DIR, old), { force: true });
+  const building = `${file}.building`;
+  const db = openDb(building);
+  try {
+    const w = makeWorld("simulated", db);
+    tx(db, () => {
+      seedConfig(db);
+      seedTrustAccounts(w);
+      setMeta(db, "schema", SCHEMA_VERSION);
+      setMeta(db, "created_at", Date.now());
+    });
+    simulate(w, { seed });
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  } finally {
+    db.close();
+    removeFile(building);
+  }
+  return file;
+}
+
+/** Replaces a world with the simulated country. What was there before is kept as a save point. */
+export async function loadSimulated(id: string, seed?: number) {
+  const file = buildSimulated(seed);
+  if (count(getWorld(id).db, "SELECT COUNT(*) AS n FROM persons")) await snapshotWorld(id, "Before loading simulated data");
+  await withLock(getWorld(id), () => {
+    closeWorld(id);
+    removeFile(worldFile(id));
+    fs.copyFileSync(file, worldFile(id));
+  });
+  return getWorld(id);
+}
+
+/** What the simulated history in a world contains, if one was loaded. */
+export function simulatedSummary(w: World): SimSummary | undefined {
+  const raw = getMeta(w.db, "simulated");
+  return raw ? (JSON.parse(raw) as SimSummary) : undefined;
 }

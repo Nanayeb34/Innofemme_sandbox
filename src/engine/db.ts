@@ -350,6 +350,19 @@ CREATE TABLE IF NOT EXISTS ussd_activations (
   PRIMARY KEY (code, telco)
 );
 
+-- ===== Simulated data =====
+-- One row for each transaction of a loaded simulated history, with what it really was.
+CREATE TABLE IF NOT EXISTS dataset (
+  txn_id TEXT PRIMARY KEY,
+  seq INTEGER NOT NULL,              -- its place in time order, from 1
+  is_fraud INTEGER NOT NULL,
+  scenario TEXT,                     -- which kind of fraud
+  role TEXT,                         -- the part this transaction plays in the case
+  case_id TEXT,                      -- transactions of one case share this
+  payment_request INTEGER NOT NULL DEFAULT 0 -- 1 when the payer approved a request sent by the payee
+);
+CREATE INDEX IF NOT EXISTS dataset_seq ON dataset(seq);
+
 -- ===== Plug-in points =====
 -- An outside company's API that an institution has plugged into one of its own steps. The institution
 -- calls it at that step and acts on the answer.

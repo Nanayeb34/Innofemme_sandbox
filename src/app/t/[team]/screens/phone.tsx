@@ -34,6 +34,10 @@ interface PhoneState {
 }
 interface PhoneView {
   lines: Line[];
+  /** How many more phones exist than the list shows. */
+  more?: number;
+  /** The number this answer is about. */
+  asked?: string;
   phone: PhoneState | null;
 }
 
@@ -57,8 +61,9 @@ export default function Phone({ team, role }: { team: string; role: string }) {
   }, [team]);
 
   const lines = data?.lines ?? [];
-  // Fall back to the first line when nothing (or a line that no longer exists) is chosen.
-  const current = lines.some((l) => l.msisdn === msisdn) ? msisdn : (lines[0]?.msisdn ?? "");
+  // Fall back to the first line when nothing (or a line that does not exist) is chosen. A number that is not in the
+  // list yet is kept until the server has answered about it: the list shows only the most recent phones.
+  const current = !data || data.asked !== msisdn || lines.some((l) => l.msisdn === msisdn) ? msisdn : (lines[0]?.msisdn ?? "");
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the list of lines loaded from the server
     if (current !== msisdn) setMsisdn(current);
@@ -148,6 +153,7 @@ export default function Phone({ team, role }: { team: string; role: string }) {
                 </option>
               ))}
             </select>
+            {!!data?.more && <OtherNumber more={data.more} onPick={pick} />}
           </label>
 
           <div className="flex min-h-[620px] flex-1 flex-col overflow-hidden rounded-[2rem] border-[6px] border-gray-900 bg-white shadow-xl">
@@ -498,5 +504,27 @@ function Wallet({ state }: { state: PhoneState }) {
         </ul>
       )}
     </div>
+  );
+}
+
+/** The list shows the most recently registered phones. Any other phone is opened by typing its number. */
+function OtherNumber({ more, onPick }: { more: number; onPick: (msisdn: string) => void }) {
+  const [value, setValue] = useState("");
+  return (
+    <span className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+      <span className="shrink-0">+{more.toLocaleString("en")} more.</span>
+      <input value={value} onChange={(e) => setValue(e.target.value)} inputMode="numeric" placeholder="Type any number to open it" aria-label="Open another number" className="min-w-0 flex-1 rounded border border-gray-300 px-2 py-1 text-xs" />
+      <button
+        type="button"
+        className="rounded border border-gray-300 px-2 py-1 text-xs"
+        onClick={(e) => {
+          e.preventDefault();
+          const digits = value.replace(/\D/g, "");
+          if (digits.length >= 9) onPick(digits.length === 9 ? `0${digits}` : digits.startsWith("233") ? `0${digits.slice(3)}` : digits);
+        }}
+      >
+        Open
+      </button>
+    </span>
   );
 }

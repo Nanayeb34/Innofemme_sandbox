@@ -57,6 +57,21 @@ export default function Dashboard({ access }: { access: Access[] }) {
     }
   };
 
+  const simulate = async () => {
+    if (!confirm(`Replace ${selected.join(", ")} with the simulated country (100,023 transactions, 22% fraud)? What each team has built is kept as a save point.`)) return;
+    setBusy(true);
+    setMsg("Loading the simulated country. This can take up to a minute the first time…");
+    try {
+      const r = await fetch("/api/org/action", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "simulate", worlds: selected }) });
+      const j = await r.json();
+      setMsg(r.ok ? `Loaded simulated data into ${Object.keys(j.results).length} world(s).` : j.error);
+      setSelected([]);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6">
       <section className="card p-5">
@@ -79,6 +94,9 @@ export default function Dashboard({ access }: { access: Access[] }) {
           <h2 className="font-semibold text-gray-900">Team worlds</h2>
           <div className="flex items-center gap-2">
             {msg && <span className="text-sm text-gray-600">{msg}</span>}
+            <button disabled={busy || !selected.length} onClick={simulate} className="btn btn-dark">
+              Load simulated data into selected
+            </button>
             <button disabled={busy || !selected.length} onClick={reset} className="btn btn-danger">
               Reset selected to empty
             </button>

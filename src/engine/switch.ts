@@ -70,13 +70,14 @@ export interface Position {
 
 export function positions(w: World): Position[] {
   const cfg = getConfig(w.db, "switch");
+  const sent: Record<string, number> = {}, received: Record<string, number> = {};
+  const rows = w.db.prepare("SELECT from_party, to_party, COUNT(*) AS n FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type != 'reversal' GROUP BY from_party, to_party").all() as { from_party: string | null; to_party: string | null; n: number }[];
+  for (const r of rows) {
+    if (r.from_party) sent[r.from_party] = (sent[r.from_party] ?? 0) + Number(r.n);
+    if (r.to_party) received[r.to_party] = (received[r.to_party] ?? 0) + Number(r.n);
+  }
   return PARTICIPANTS.map((p) => {
-    const vol = w.db
-      .prepare(
-        `SELECT COALESCE(SUM(CASE WHEN from_party = ? THEN 1 END),0) AS sent, COALESCE(SUM(CASE WHEN to_party = ? THEN 1 END),0) AS received
-         FROM txns WHERE rail = 'switch' AND status IN ('success','reversed') AND type != 'reversal'`,
-      )
-      .get(p, p) as { sent: number; received: number };
+    const vol = { sent: sent[p] ?? 0, received: received[p] ?? 0 };
     return {
       participant: p,
       name: participantName(p),

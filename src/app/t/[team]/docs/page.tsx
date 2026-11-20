@@ -5,7 +5,9 @@ import { pageOrigin } from "@/server/qr";
 import { SYSTEM_PATHS } from "@/server/systems";
 import { teamById } from "@/engine/worlds";
 import { SURFACE_NAMES } from "@/engine/config/schemas";
+import { DATASET_FILES } from "@/engine/dataset";
 import { EVENTS, POINTS, SAMPLES } from "@/engine/integrations";
+import { SCENARIOS } from "@/engine/simulate";
 import { BANK_IDS } from "@/engine/util";
 import NoAccess from "../no-access";
 
@@ -36,7 +38,7 @@ export default async function Docs(props: PageProps<"/t/[team]/docs">) {
             add to its own system.
           </li>
           <li>
-            <b>Console API</b> (sections 8 to 11) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
+            <b>Console API</b> (sections 8 to 12) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
           </li>
         </ul>
 
@@ -276,6 +278,36 @@ curl -X POST ${base}/history/{changeId} ${auth}     # undo`}</Code>
 curl ${base}/snapshots ${auth}
 curl -X POST ${base}/snapshots/{id} ${auth}          # roll back
 curl -X POST ${base}/world ${auth} ${json} -d '{"action":"reset"}'   # wipe to an empty country`}</Code>
+        </Section>
+
+        <Section title="12. Simulated data" id="dataset">
+          <p>
+            A world can be filled with a ready-made country and three months of history: people with Ghana Cards, registered numbers, wallets, agents, merchants, bank accounts, calls, texts, complaints, and 100,023 transactions, 22% of them fraud of
+            ten kinds. Load it from your team&apos;s home page, or here. It replaces what is in the world; what was there is kept as a save point.
+          </p>
+          <Code>{`curl -X POST ${base}/world ${auth} ${json} -d '{"action":"simulate"}'     # load it (up to a minute the first time)
+curl ${base}/dataset ${auth}                                              # what it holds, the kinds of fraud, and the files
+curl ${base}/dataset/transactions.csv ${auth} -o transactions.csv          # every transaction, with is_fraud, fraud_scenario, fraud_role, fraud_case
+curl "${base}/dataset/transactions.csv?answers=0" ${auth} -o blind.csv     # the same without those four columns`}</Code>
+          <p className="break-words">
+            Files: {Object.entries(DATASET_FILES).map(([name, f]) => (
+              <span key={name} className="mr-2">
+                <code>{name}.csv</code> ({f.about.charAt(0).toLowerCase() + f.about.slice(1)}).
+              </span>
+            ))}
+          </p>
+          <p>
+            Transactions join to the other files by number: <code>payer_number</code> and <code>payee_number</code> are in <code>wallets.csv</code>, <code>sims.csv</code>, <code>calls.csv</code> and <code>texts.csv</code>; <code>ghana_card</code> links
+            a number to its owner in <code>people.csv</code>. Transactions of one fraud case share a <code>fraud_case</code>, and <code>fraud_role</code> says what part each played. The kinds of fraud:
+          </p>
+          <ul className="list-disc space-y-1 pl-5">
+            {Object.entries(SCENARIOS).map(([id, about]) => (
+              <li key={id}>
+                <code>{id}</code>: {about}.
+              </li>
+            ))}
+          </ul>
+          <p>The data is in the live world too: every console shows it, every simulated person&apos;s phone can be opened, and whatever you do next is added on top.</p>
         </Section>
       </main>
     </>

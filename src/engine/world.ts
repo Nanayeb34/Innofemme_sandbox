@@ -36,6 +36,8 @@ export interface World {
   calls: Map<string, CallSignal>;
   /** When each number's phone screen was last open, to tell "switched off" from "not answering". */
   presence: Map<string, number>;
+  /** Set only while simulated history is being written: the moment being written, in place of the real time. */
+  clock?: number;
   /** Payments an outside API asked to delay: when each may be tried again. */
   cooldowns: Map<string, number>;
   /** Answers from plugged-in APIs for the request being handled now. See integrations.ts. */
@@ -52,7 +54,7 @@ export function makeWorld(id: string, db: DB): World {
     id,
     db,
     get now() {
-      return Date.now();
+      return this.clock ?? Date.now();
     },
     ussd: new Map(),
     otps: new Map(),
