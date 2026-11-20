@@ -40,6 +40,9 @@ export default function Hub({ team, logos, phones, consoles }: { team: string; l
             <div className="text-[11px] font-semibold uppercase tracking-wider text-[#3b1f6e]">Mobile money sandbox</div>
             <h1 className="text-lg font-semibold text-gray-900">{teamName(team)}: choose a system</h1>
           </div>
+          <Link href={`${base}/assistant`} className="btn">
+            Assistant
+          </Link>
           <Link href={`${base}/docs`} className="btn">
             Documentation
           </Link>

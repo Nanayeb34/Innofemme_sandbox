@@ -125,6 +125,43 @@ nothing installed beyond Python or Node.js, and show how to connect, not what to
 a number for them, opens a wallet on medium KYC with GHS 500 and tells you the PIN. Each part is done the
 way the institutions do it, so it works in an empty world and in the simulated country alike.
 
+## The assistant
+
+A small team of AI agents that works in a team's world on the team's instructions, the way this kind of
+assistant works for a programmer: it is told what is wanted, does it step by step with tools, shows each
+step as it happens, asks before anything that cannot be put back, and reports what happened. It is on every
+team page (a button in the corner opens it beside the console) and at `/t/{team}/assistant`.
+
+| Who | Does |
+| --- | --- |
+| Assistant (the lead) | Talks with the person, decides what needs doing, hands each piece of work to a specialist, checks the result. |
+| Builder | Sets up and changes the institutions: people, SIMs, registration points, agents, merchants, accounts, float, settings. |
+| Operator | Uses the system the way people do: dials codes on a phone, pays, approves, texts; serves at an agent's or a bank's counter. |
+| Integrator | Plugs a team's API into an institution, checks their bridge, issues API credentials, runs the fraud simulator. |
+| Analyst | Finds things in the data and adds them up. Reads only. |
+| Guide | Explains the sandbox from its documentation. |
+
+- **Everything the consoles can do, it can do.** Its tools go through the same console actions a person
+  uses (`src/server/assistant/catalogue.ts` lists them all, and a test fails if a console gains an action
+  the list lacks), plus phones, settings, save points, the fraud simulator, searching the stored data and
+  reading the documentation. So the same checks apply, and APIs plugged into the steps are asked as usual.
+- **One team only.** Every tool is bound to the team's own world. Conversations are kept per team in
+  `assistant.db` beside the worlds, so a conversation survives the world being wiped or rolled back.
+- **Asks first.** Wiping the world, rolling back, loading the simulated country over existing work, and
+  removing things are shown to the person with Approve and Decline. On approval the sandbox itself carries
+  out exactly what was shown.
+- **Never shows a wallet PIN**, other than that of a customer it created or one the person gave it.
+- **Switched on by a key.** Set `ANTHROPIC_API_KEY` (Claude, default model `claude-opus-5-5`) or
+  `OPENAI_API_KEY` (default `gpt-6.2-sol`) on the server; see `.env.example`. With neither, the assistant is
+  not shown. `deploy/gcp.sh secrets` copies the key to the VM from `.env.production`. Each team may call the
+  model `ASSISTANT_DAILY_CALLS` times a day (default 600).
+- **What leaves the server.** The conversation and what the tools return (the world's data, which is all
+  made up) go to the AI service chosen. The team key does not.
+- `POST /api/w/{team}/assistant {"text": "…"}` talks to it from a script; the answer is a stream of events.
+
+`tests/assistant.test.ts` runs whole conversations against a scripted stand-in for the model, so the tests
+need no AI service.
+
 ## Partner APIs
 
 Besides the consoles, each institution has the API it would give an outside company, such as a licensed payments or messaging business. A company calls it with a client ID and API key that institution issued (its console → **API partners**), not with the team key. The API reference at `/t/{team}/docs` lists every endpoint.

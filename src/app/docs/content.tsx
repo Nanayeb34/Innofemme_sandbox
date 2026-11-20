@@ -19,7 +19,7 @@ import { BANK_IDS, TELCOS, TELCO_INFO } from "@/engine/util";
 const CONTENTS: { title: string; items: [id: string, label: string][] }[] = [
   {
     title: "Start here",
-    items: [["start", "What the sandbox is"], ["products", "Two ways to build"], ["first", "Your first 15 minutes"], ["systems", "What each screen is"]],
+    items: [["start", "What the sandbox is"], ["products", "Two ways to build"], ["first", "Your first 15 minutes"], ["assistant", "The assistant"], ["systems", "What each screen is"]],
   },
   {
     title: "Starter kits",
@@ -194,6 +194,37 @@ export async function DocsContent({ team }: { team?: string }) {
             </p>
           </Section>
 
+          <Section title="The assistant" id="assistant">
+            <p>
+              You can also tell the sandbox what you want in plain words. The assistant is a small team of AI agents that works in your world on your instructions: it does the work step by step, shows each step as it happens, and tells you what happened. Open it with
+              the <b>Assistant</b> button in the corner of any page, or on its own page from {home ? screen("/assistant", "your team's home") : "your team's home page"}. If the button is not there, the organisers have not switched the assistant on.
+            </p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <b>What you can ask for.</b> Anything that can be done at the consoles or on a phone: &quot;create two test customers on MTN and send GHS 20 from one to the other&quot;, &quot;set up a mobile money agent on Telecel with GHS 5,000 of float&quot;, &quot;raise the
+                daily limit for minimum KYC wallets&quot;, &quot;plug my API at bridge://laptop into payments on MTN and test it&quot;, &quot;run 10 SIM swap incidents and tell me what got through&quot;, &quot;how many failed payments were there yesterday, by reason&quot;, &quot;how does my
+                application ask a customer for a payment&quot;.
+              </li>
+              <li>
+                <b>Who does the work.</b> The assistant hands each job to a specialist: a builder for setting things up, an operator who uses phones and counters, an integrator for your API and the fraud simulator, an analyst for the data, and a guide who
+                answers from this documentation. You see who is working and each step they take.
+              </li>
+              <li>
+                <b>It asks first.</b> Before wiping your world, rolling it back, or removing something, it shows you what it wants to do and waits for <b>Approve</b> or <b>Decline</b>.
+              </li>
+              <li>
+                <b>What it will not do.</b> It works only in your own team&apos;s world. It never shows a wallet PIN, except for a customer it created for you. It does not suggest what to build: that is yours to decide.
+              </li>
+              <li>
+                <b>Check its work.</b> It reports what its tools returned, and it can be wrong, as any assistant can. Everything it does is on the consoles for you to see.
+              </li>
+            </ul>
+            <p className="text-xs text-gray-600">
+              What you say to the assistant, and what it reads from your world to answer, is sent to the AI service that runs it. Your team key is not. From a script: <code>POST {"{base}"}/assistant</code> with <code>{`{"text": "…"}`}</code> and your team key; the
+              answer comes back as a stream of events.
+            </p>
+          </Section>
+
           <Section title="What each screen is" id="systems">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[520px] text-left text-xs">
@@ -212,6 +243,7 @@ export async function DocsContent({ team }: { team?: string }) {
                       ["/bank/gcb", "A bank", "Accounts, the counter, transfers, agent float, the cash machine, API partners, Plug-ins."],
                       ["/switch", "National switch", "Payments between networks and banks, what each owes, settlement, Plug-ins."],
                       ["/fraud", "Fraud console", "Plays fraud incidents against what you built and shows the results."],
+                      ["/assistant", "Assistant", "Tell it what you want done in your world, in plain words, and it does it."],
                     ] as const
                   ).map(([path, name, about]) => (
                     <tr key={name} className="border-b border-gray-100 align-top">
