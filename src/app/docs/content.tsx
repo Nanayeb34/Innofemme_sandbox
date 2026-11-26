@@ -388,7 +388,8 @@ export async function DocsContent({ team }: { team?: string }) {
                     </td>
                     <td className="px-4 py-3 text-gray-700">
                       <b>Your toolbox</b> (short for context). <code>ctx.store</code> is a small memory that survives between questions and restarts: <code>get(key)</code>, <code>set(key, value)</code>, <code>delete(key)</code>. <code>ctx.institution</code> says who is
-                      asking (e.g. <code>mtn</code>), <code>ctx.world</code> which team&apos;s world, and <code>ctx.log(…)</code> writes to the Output panel.
+                      asking (e.g. <code>mtn</code>), <code>ctx.world</code> which team&apos;s world, <code>ctx.at</code> the time in the world now, and <code>ctx.log(…)</code> writes to the Output panel. Compare times with <code>ctx.at</code>, not
+                      your computer&apos;s clock: the Fraud console plays incidents at times of its own.
                     </td>
                     <td className="hidden px-4 py-3 md:table-cell">
                       <code>ctx.store.get(&quot;seen&quot;)</code>

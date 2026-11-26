@@ -128,7 +128,11 @@ export default function Fraud({ team }: { team: string }) {
         )}
         {!data.notReady && !data.pluggedIn && !data.apps.length && (
           <p className="mt-3 text-sm text-gray-600">
-            Nothing is plugged in and no application is connected, so a run now will show every incident getting through. Plug an API in from a network&apos;s, a bank&apos;s or the switch&apos;s <b>Plug-ins</b> tab, or connect an application below.
+            Nothing is plugged in and no application is connected, so a run now will show every incident getting through. The quickest way to add a defence is the{" "}
+            <Link className="underline" href={`/t/${team}/developer`}>
+              Developer console
+            </Link>
+            : write a plug-in there and plug it into the networks. You can also plug in an API of your own from a network&apos;s, a bank&apos;s or the switch&apos;s <b>Plug-ins</b> tab, or connect an application below.
           </p>
         )}
       </Section>

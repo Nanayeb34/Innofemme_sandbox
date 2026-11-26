@@ -311,7 +311,9 @@ async function fakeShop(inc: Incident): Promise<Line | undefined> {
   if (!reg.value) return void inc.end("stopped", "The fraudster could not register a line for a fake shop", reg.stop);
   const msisdn = reg.value.sim.msisdn;
   const name = `${inc.rng.pick(["QuickBuy Online", "GH Best Deals", "Flash Gadgets", "Royal Imports", "Smart Shoppers"])} ${inc.rng.int(2, 99)}`;
-  const shop = await attempt(inc, "The fraudster signs up as a merchant", () => telcoOps.onboardMerchant(w, telco, { msisdn, name, category: "Online", town: person.town, pin: inc.rng.digits(4) }));
+  // Chosen before the step: a step that stops to ask an outside API is run again, and must then be the same request.
+  const shopPin = inc.rng.digits(4);
+  const shop = await attempt(inc, "The fraudster signs up as a merchant", () => telcoOps.onboardMerchant(w, telco, { msisdn, name, category: "Online", town: person.town, pin: shopPin }));
   if (!shop.value) return void inc.end("stopped", "The fraudster could not sign up a fake shop", shop.stop);
   inc.add("The fraudster signs up as a merchant", `${name} can now take payments`);
   r.used.add(msisdn);
@@ -775,7 +777,19 @@ const PLAY: Record<string, (inc: Incident) => Promise<void>> = {
       }
       // The PIN was right. From here it is a payment like any other.
       inc.add(what, "Correct");
-      const blocked = d.ok ? undefined : await crookPays(inc, "The thief sends the money to their own wallet", victim, crook.id, p2p(w, { ...victim, pin: guess }, crook, send));
+      // That first try was itself the payment: if a service stopped it, that counts, as it would for any other.
+      const payment = "The thief sends the money to their own wallet";
+      const first = d.ok ? undefined : worst(d.seen);
+      if (first && first.decision !== "delay") {
+        inc.add(payment, "Blocked", first);
+        return inc.end("stopped", "The transfer out of the victim's wallet was blocked", first);
+      }
+      if (first) {
+        // Paused: like any fraudster, the thief waits it out and tries again.
+        inc.add(payment, "Paused", first);
+        pause(inc, victim, crook.id);
+      }
+      const blocked = d.ok ? undefined : await crookPays(inc, payment, victim, crook.id, p2p(w, { ...victim, pin: guess }, crook, send));
       if (blocked) return inc.end("stopped", "The transfer out of the victim's wallet was blocked", blocked);
       if (d.ok) inc.add("The thief sends the money to their own wallet", "Done");
       inc.paid = send;
@@ -878,7 +892,9 @@ const ORDINARY: [string, number, (inc: Incident) => Promise<void>][] = [
     await quiet(inc.r, () => {
       if (count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", telco) < 3) telcoOps.generateSims(w, telco, 20);
     });
-    const reg = await attempt(inc, "A new customer registers a SIM", () => telcoOps.registerSim(w, telco, inc.rng.pick(all), { card: person.ghana_card, fingerprint: person.fingerprint }));
+    // Chosen before the step: a step that stops to ask an outside API is run again, and must then be the same request.
+    const point = inc.rng.pick(all);
+    const reg = await attempt(inc, "A new customer registers a SIM", () => telcoOps.registerSim(w, telco, point, { card: person.ghana_card, fingerprint: person.fingerprint }));
     if (!reg.value) return inc.end("blocked", "An honest customer's SIM registration was refused", reg.stop);
     const msisdn = reg.value.sim.msisdn;
     inc.who = msisdn;
@@ -898,7 +914,9 @@ const ORDINARY: [string, number, (inc: Incident) => Promise<void>][] = [
     const v = customer(inc, 0);
     inc.who = v.msisdn;
     const wallet = { id: v.id, msisdn: v.msisdn, telco: v.telco } as Parameters<typeof telcoOps.changePin>[1];
-    const first = await attempt(inc, "A customer changes their PIN", () => telcoOps.changePin(w, wallet, inc.rng.chance(0.4) ? v.dob.slice(0, 4) : "8306"));
+    // Chosen before the step: a step that stops to ask an outside API is run again, and must then be the same request.
+    const newPin = inc.rng.chance(0.4) ? v.dob.slice(0, 4) : "8306";
+    const first = await attempt(inc, "A customer changes their PIN", () => telcoOps.changePin(w, wallet, newPin));
     if (!first.stop) return inc.end("fine", "Changed");
     const second = await attempt(inc, "They choose a different PIN", () => telcoOps.changePin(w, wallet, "7391"));
     inc.end(second.stop ? "blocked" : "slowed", second.stop ? "An honest customer could not change their PIN" : "Changed, after being asked to choose another PIN", second.stop ?? first.stop);
@@ -911,7 +929,9 @@ const ORDINARY: [string, number, (inc: Incident) => Promise<void>][] = [
     if (!rows.length) throw new Void("Nobody has both a bank account with money in it and a wallet.");
     const a = inc.rng.pick(rows);
     inc.who = a.msisdn;
-    const t = await attempt(inc, "A customer moves money from their bank account to their own wallet", () => bankToWallet(w, { bank: a.bank, fromAccount: a.id, msisdn: a.msisdn, amount: ghs(inc.rng.pick([100, 200, 300, 500])) }));
+    // Chosen before the step: a step that stops to ask an outside API is run again, and must then be the same request.
+    const amount = ghs(inc.rng.pick([100, 200, 300, 500]));
+    const t = await attempt(inc, "A customer moves money from their bank account to their own wallet", () => bankToWallet(w, { bank: a.bank, fromAccount: a.id, msisdn: a.msisdn, amount }));
     inc.end(t.stop ? "blocked" : "fine", t.stop ? "An honest transfer from a bank account was blocked" : "Went through", t.stop);
   }],
   ["A text from a shop to a customer", 1, async (inc) => {
@@ -921,7 +941,9 @@ const ORDINARY: [string, number, (inc: Incident) => Promise<void>][] = [
     const to = customer(inc, 0);
     inc.who = to.msisdn;
     const what = "A shop texts a customer that their order is ready";
-    const a = await attempt(inc, what, () => sendAppSms(w, inc.rng.pick(shop), { to: to.msisdn, text: "Your order is ready for pickup. Thank you for shopping with us." }));
+    // Chosen before the step: a step that stops to ask an outside API is run again, and must then be the same request.
+    const from = inc.rng.pick(shop);
+    const a = await attempt(inc, what, () => sendAppSms(w, from, { to: to.msisdn, text: "Your order is ready for pickup. Thank you for shopping with us." }));
     inc.end(a.stop ? "blocked" : a.warn ? "slowed" : "fine", a.stop ? "A shop's text was not delivered" : a.warn ? "A shop's text arrived with a warning label" : "Delivered", a.stop ?? a.warn);
   }],
 ];

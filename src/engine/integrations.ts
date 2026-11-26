@@ -254,10 +254,15 @@ function record(w: World, n: Note) {
   w.db.prepare("DELETE FROM integration_calls WHERE institution = ? AND id <= (SELECT MAX(id) FROM integration_calls WHERE institution = ?) - 500").run(n.i.institution, n.i.institution);
 }
 
-const post = (world: string, i: Integration, point: string, data: unknown) =>
+/**
+ * `at` is the time in the world when the question is asked. It is usually now, but the fraud simulator plays
+ * incidents at times of its own, so an API that compares times (a SIM swapped in the last day?) must use it
+ * rather than its own clock.
+ */
+const post = (world: string, i: Integration, point: string, data: unknown, at = Date.now()) =>
   callOut(i.url, {
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ point, institution: i.institution, world, at: new Date().toISOString(), data }),
+    body: JSON.stringify({ point, institution: i.institution, world, at: new Date(at).toISOString(), data }),
     timeoutMs: i.timeout_ms,
     world,
   });
@@ -267,12 +272,12 @@ const post = (world: string, i: Integration, point: string, data: unknown) =>
  * This touches nothing in the world, so other requests can be served while it waits; what to write down
  * about the call is handed back with the answer.
  */
-async function ask(world: string, i: Integration, point: string, payload: unknown): Promise<{ decision: Decision; note: Note }> {
+async function ask(world: string, i: Integration, point: string, payload: unknown, at?: number): Promise<{ decision: Decision; note: Note }> {
   const started = Date.now();
   const allowed = POINTS[point].answers;
   const note = (decision: string, message: string | undefined): Note => ({ i, point, request: payload, decision, message, ms: Date.now() - started });
   try {
-    const r = await post(world, i, point, payload);
+    const r = await post(world, i, point, payload, at);
     if (r.status < 200 || r.status >= 300) throw new Error(`answered with status ${r.status}`);
     const j = JSON.parse(r.body) as { decision?: string; message?: unknown; minutes?: unknown };
     if (!allowed.includes(j.decision as Answer)) throw new Error(`answered "${j.decision}", but this step accepts: ${allowed.join(", ")}`);
@@ -312,11 +317,13 @@ export async function testIntegration(w: World, institution: string, id: unknown
  */
 async function settle(w: World, a: Ask) {
   const to = active(w, a.institution, a.point);
+  // The world's time at the moment of asking, read before the simulator's clock is put away for the wait.
+  const at = w.now;
   const mine = { answers: w.answers, watch: w.watch, direct: w.direct, clock: w.clock };
   Object.assign(w, { answers: new Map(), watch: undefined, direct: undefined, clock: undefined, asking: false, outbox: [] });
   let replies: Awaited<ReturnType<typeof ask>>[];
   try {
-    replies = await stepAside(w, () => Promise.all(to.map((i) => ask(w.id, i, a.point, a.payload))));
+    replies = await stepAside(w, () => Promise.all(to.map((i) => ask(w.id, i, a.point, a.payload, at))));
   } finally {
     Object.assign(w, { ...mine, asking: true, outbox: [] });
   }

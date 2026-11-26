@@ -171,7 +171,7 @@ function NewPlugin({ team, languages, hasAny, onMade }: { team: string; language
 
         <div className="mt-6">
           <span className="mb-1.5 block text-xs font-medium text-gray-500">Start from</span>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             {TEMPLATES.map((x) => (
               <label key={x.id} className={`flex cursor-pointer flex-col rounded-xl border p-4 transition ${template === x.id ? "border-[#3b1f6e] bg-[#f3effa]" : "border-gray-300 hover:border-gray-400"}`}>
                 <input type="radio" name="template" className="sr-only" checked={template === x.id} onChange={() => setTemplate(x.id)} />

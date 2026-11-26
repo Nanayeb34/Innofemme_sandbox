@@ -17,6 +17,11 @@ const make = (language: "javascript" | "python", source: string) => {
   return m.id;
 };
 afterAll(() => made.forEach((id) => code.stopCode(TEAM, id)));
+/** Deletes a plug-in a test has finished with, so the file stays under a team's limit of 20. */
+const done = (id: string) => {
+  code.deleteCode(TEAM, id);
+  made.splice(made.indexOf(id), 1);
+};
 
 const JS = `
 export function decide(point, data, ctx) {
@@ -112,6 +117,75 @@ export async function decide(point) {
       }
     } finally {
       delete process.env.SANDBOX_PRIVATE_ADDRESSES;
+    }
+  });
+
+  it("every starter template runs in both languages and answers each step it is meant for", async () => {
+    const { TEMPLATES } = await import("../src/app/t/[team]/screens/developer-templates");
+    const { SAMPLES, POINTS } = await import("../src/engine/integrations");
+    for (const t of TEMPLATES) {
+      for (const language of ["javascript", "python"] as const) {
+        if (language === "python" && !code.pythonCommand()) continue;
+        const id = make(language, t.source[language]);
+        for (const point of [...new Set([...t.plugAt, "payment.authorize", "events"])]) {
+          const answer = (await code.askCode(TEAM, id, { point, institution: "mtn", world: TEAM, at: new Date().toISOString(), data: SAMPLES[point] }, 4000)) as { decision: string };
+          if (point !== "events") expect(POINTS[point].answers, `${t.id} (${language}) at ${point}`).toContain(answer.decision);
+        }
+        done(id);
+      }
+    }
+  });
+
+  it("the fraud shield template answers the same in both languages, judging time by the world's clock", async () => {
+    const { TEMPLATES } = await import("../src/app/t/[team]/screens/developer-templates");
+    const { SAMPLES } = await import("../src/engine/integrations");
+    const shield = TEMPLATES.find((t) => t.id === "fraud-shield")!;
+    const at = "2026-03-01T12:00:00.000Z";
+    const base = SAMPLES["payment.authorize"] as Record<string, Record<string, unknown>>;
+    const cases: [string, unknown, string][] = [
+      // The SIM was swapped 10 hours before the world's "now": paused, even though by the computer's clock it was long ago.
+      ["payment.authorize", { ...base, amount: 300, payer: { ...base.payer, lastSimSwapAt: "2026-03-01T02:00:00.000Z" } }, "delay"],
+      // Paying someone new while on a call.
+      ["payment.authorize", { ...base, paymentsToThisPayeeBefore: 0, payer: { ...base.payer, onCallWith: "0209876543" } }, "warn"],
+      // An everyday payment to someone paid before.
+      ["payment.authorize", { ...base, amount: 20, payer: { ...base.payer, lastSimSwapAt: null, onCallWith: null } }, "allow"],
+      ["sms.deliver", { ...SAMPLES["sms.deliver"], text: "CONGRATULATIONS you have won a prize, send the fee to claim", textsBetweenThemBefore: 0 }, "warn"],
+      ["payment.request", { ...SAMPLES["payment.request"], requester: { walletType: "person" }, customerHasPaidThisRequesterBefore: false }, "reject"],
+      // A busy agent asking customers to approve cash-outs is not treated as suspicious.
+      ["payment.request", { ...SAMPLES["payment.request"], requester: { walletType: "agent" }, customerHasPaidThisRequesterBefore: true, requestsFromThisRequesterToday: 40 }, "allow"],
+    ];
+    for (const language of ["javascript", "python"] as const) {
+      if (language === "python" && !code.pythonCommand()) continue;
+      const id = make(language, shield.source[language]);
+      for (const [point, data, expected] of cases) {
+        const a = (await code.askCode(TEAM, id, { point, institution: "mtn", world: TEAM, at, data }, 4000)) as { decision: string };
+        expect(a.decision, `${language} at ${point}`).toBe(expected);
+      }
+      done(id);
+    }
+  });
+
+  it("the SIM-swap template holds large payments soon after a swap, by the world's clock, in both languages", async () => {
+    const { TEMPLATES } = await import("../src/app/t/[team]/screens/developer-templates");
+    const { SAMPLES } = await import("../src/engine/integrations");
+    const t = TEMPLATES.find((x) => x.id === "swap-hold")!;
+    const base = SAMPLES["payment.authorize"] as Record<string, Record<string, unknown>>;
+    const at = "2026-03-10T12:00:00.000Z";
+    const pay = (amount: number, swapped: string | null) => ({ ...base, amount, payer: { ...base.payer, lastSimSwapAt: swapped } });
+    const cases: [unknown, string][] = [
+      [pay(300, "2026-03-10T02:00:00.000Z"), "delay"], // swapped 10 hours ago
+      [pay(300, "2026-03-07T12:00:00.000Z"), "allow"], // swapped 3 days ago
+      [pay(50, "2026-03-10T02:00:00.000Z"), "allow"], // recent, but a small payment
+      [pay(300, null), "allow"], // never swapped
+    ];
+    for (const language of ["javascript", "python"] as const) {
+      if (language === "python" && !code.pythonCommand()) continue;
+      const id = make(language, t.source[language]);
+      for (const [data, expected] of cases) {
+        const a = (await code.askCode(TEAM, id, { point: "payment.authorize", institution: "mtn", world: TEAM, at, data }, 4000)) as { decision: string };
+        expect(a.decision, `${language}`).toBe(expected);
+      }
+      done(id);
     }
   });
 

@@ -1477,6 +1477,37 @@ describe("fraud simulator: incidents played live against what a team has built",
     sim.disconnectApp(w, app.id);
     expect(sim.listApps(w)).toEqual([]);
   });
+
+  it("tells a plugged-in API the time in the world, so rules about recent events work during a run", async () => {
+    // Pauses payments in the two days after a SIM swap, judged by the time the question carries, not the API's own clock.
+    // (Two days: the simulated fraudster waits out the network's own 24-hour hold before emptying the wallet.)
+    everywhere("payment.authorize", "Swap pause");
+    answer = (p, d) => {
+      const at = Date.parse(asked[asked.length - 1].raw.match(/"at":"([^"]+)"/)![1]);
+      return p === "payment.authorize" && d.payer.lastSimSwapAt && at - Date.parse(d.payer.lastSimSwapAt) < 2 * 86_400_000 ? { decision: "delay", minutes: 120, message: "Your SIM was replaced recently." } : { decision: "allow" };
+    };
+    asked.length = 0;
+    const r = await run({ kinds: "sim_swap", incidents: 4, ordinary: 0 });
+    expect(r.fraud).toMatchObject({ total: 4, stopped: 4, through: 0 });
+    // The time sent is the world's, which is never before the swap it is compared with.
+    const swapped = asked.find((a) => a.point === "payment.authorize" && a.data.payer?.lastSimSwapAt)!;
+    expect(Date.parse(JSON.parse(swapped.raw).at)).toBeGreaterThanOrEqual(Date.parse(swapped.data.payer.lastSimSwapAt));
+    unplug();
+  });
+
+  it("credits a pause on a thief's payment as a stop, and asks the same question again when a step is run again", async () => {
+    // Pauses every payment, and screens every text: a step that stops to ask must ask the same thing when it is run again.
+    everywhere("payment.authorize", "Pauser");
+    everywhere("sms.deliver", "Text screen");
+    answer = (p) => (p === "payment.authorize" ? { decision: "delay", minutes: 30, message: "Paused." } : { decision: "allow" });
+    const r = await run({ kinds: "pin_guessing", incidents: 4, ordinary: 40 });
+    expect(r.fraud).toMatchObject({ total: 4, stopped: 4, through: 0 });
+    expect(r.couldNotBePlayed).toBe(0);
+    expect(r.incidents.some((i) => /Too many outside checks/.test(i.summary ?? ""))).toBe(false);
+    // Where the thief guessed the PIN, it was the pause that stopped them (a PIN nobody could guess locks the wallet first).
+    expect(r.incidents.some((i) => i.scenario === "pin_guessing" && i.stoppedBy === "Pauser")).toBe(true);
+    unplug();
+  });
 });
 
 describe("each network's own wallet menu and services", () => {
