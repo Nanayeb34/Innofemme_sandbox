@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: { "/*": ["./examples/**/*"] },
   // Logos are small PNGs; serve them as-is rather than through the image optimiser.
   images: { unoptimized: true },
+  // When the dev server is reached from phones on the same network (PUBLIC_URL=http://<this machine's IP>:<port>),
+  // let that address load the dev server's own assets too, not only localhost.
+  allowedDevOrigins: process.env.PUBLIC_URL ? [new URL(process.env.PUBLIC_URL).hostname] : [],
   // A team's own web page, served from anywhere, may call their world's API straight from the browser.
   // Any site may ask, but only with a key in a header: with "*" a browser never sends this site's cookies along,
   // so a page elsewhere cannot act as someone who is merely signed in to the consoles.

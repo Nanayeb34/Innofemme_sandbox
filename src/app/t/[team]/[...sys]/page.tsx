@@ -10,12 +10,14 @@ import AgentMenu from "../screens/agent-menu";
 import { MomoPoint, SimPoint } from "../screens/agents";
 import Bank from "../screens/bank";
 import Care from "../screens/care";
+import Developer from "../screens/developer";
 import Fraud from "../screens/fraud";
 import Nia from "../screens/nia";
 import Phone from "../screens/phone";
 import { Bog, Nca } from "../screens/regulators";
 import Switch from "../screens/switch";
 import TelcoConsole from "../screens/telco";
+import TelcoHome from "../screens/telco-home";
 
 /** What each kind of link may open. The team's own key opens everything. */
 function allowed(role: Role, system: string): boolean {
@@ -24,7 +26,7 @@ function allowed(role: Role, system: string): boolean {
   return system === "agent" || system === "momo-agent" || system === "sim-agent";
 }
 
-/** One page per institution: /t/{team}/nia, /telco/mtn, /care/mtn, /sim-agent/mtn, /momo-agent/mtn, /agent, /phone, /bank/gcb, /switch, /bog, /nca */
+/** One page per institution: /t/{team}/nia, /telcos/mtn (a network's front door), /telco/mtn, /care/mtn, /sim-agent/mtn, /momo-agent/mtn, /agent, /phone, /bank/gcb, /switch, /bog, /nca */
 export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">) {
   const { team, sys } = await props.params;
   const role = await teamRole(team);
@@ -55,8 +57,10 @@ export default async function SystemPage(props: PageProps<"/t/[team]/[...sys]">)
     if (system === "switch") return <Switch team={team} />;
     if (system === "bog") return <Bog team={team} />;
     if (system === "nca") return <Nca team={team} />;
+    if (system === "developer") return <Developer team={team} />;
   }
   if (sys.length === 2 && isTelco(which)) {
+    if (system === "telcos") return <TelcoHome team={team} telco={which} />;
     if (system === "telco") return <TelcoConsole team={team} telco={which} />;
     if (system === "care") return <Care team={team} telco={which} />;
     if (system === "sim-agent") return <SimPoint team={team} telco={which} role={role} />;

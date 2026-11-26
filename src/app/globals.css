@@ -44,3 +44,34 @@ body {
     padding-right: 26rem;
   }
 }
+
+/* The documentation: comfortable reading for long text, the same look for every section. */
+@layer components {
+  .docs-prose {
+    @apply text-[15px] leading-7 text-gray-700;
+  }
+  .docs-prose :where(p, ul, ol) {
+    @apply max-w-3xl;
+  }
+  .docs-prose :where(ul) {
+    @apply list-disc space-y-1.5 pl-5;
+  }
+  .docs-prose :where(ol) {
+    @apply list-decimal space-y-2 pl-5;
+  }
+  .docs-prose :where(b, strong) {
+    @apply font-semibold text-gray-900;
+  }
+  .docs-prose :where(a:not(.btn)) {
+    @apply font-medium text-[#3b1f6e] underline decoration-[#3b1f6e]/30 underline-offset-2 hover:decoration-[#3b1f6e];
+  }
+  .docs-prose :where(:not(pre) > code) {
+    @apply rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-[0.85em] text-gray-900;
+  }
+  .docs-prose :where(table) {
+    @apply text-sm;
+  }
+  .docs-prose :where(th) {
+    @apply bg-gray-50;
+  }
+}

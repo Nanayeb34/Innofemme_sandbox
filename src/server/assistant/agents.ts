@@ -24,7 +24,7 @@ The fraud here is simulated too. Teams build defences against mobile money fraud
 
 const HOW_IT_FITS = `How the country fits together, which decides the order things must be done in:
 - Nobody exists until NIA enrols them. Enrolling gives a Ghana Card number and a fingerprint code; both are needed wherever identity is checked.
-- A network needs blank SIMs in stock and at least one SIM registration point before a number can be registered. A registration point registers a SIM to a person against their card and fingerprint, which gives them a number. A person's second number needs an approval code texted to their first.
+- Each network has its own head office service centre from the start (MTN-HQ, TELECEL-HQ, AT-HQ), which keeps itself in blank SIMs, so a SIM can be registered as soon as NIA has enrolled the person. Other registration points need authorising and their network needs SIM stock. A registration point registers a SIM to a person against their card and fingerprint, which gives them a number. A person's second number needs an approval code texted to their first.
 - A wallet is opened from the phone (dial the wallet code and choose a PIN) or in person by a mobile money agent. A wallet opened from the phone starts on minimum KYC, with low limits; an agent or the back office can raise it.
 - A mobile money agent or a merchant is a registered line that the network's back office turns into one. An agent needs float in its wallet (a bank sends it: the bank's to_wallet) and cash in its till before it can serve customers.
 - Money gets into a customer's wallet by cash-in at an agent or by a transfer from a bank.

@@ -47,6 +47,9 @@ export function Shell({
     <div className="flex min-h-full flex-1 flex-col">
       <header style={{ background: color, color: textOn }}>
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+          <Link href={back?.href ?? `/t/${team}`} className="shrink-0 rounded-lg border border-current/30 px-3 py-1.5 text-sm font-medium hover:bg-black/10">
+            ← {back?.label ?? "All systems"}
+          </Link>
           {mark}
           <div className="mr-auto min-w-0">
             <div className="text-[11px] font-semibold uppercase tracking-wider opacity-80">
@@ -55,9 +58,6 @@ export function Shell({
             <h1 className="truncate text-lg font-semibold leading-tight">{title}</h1>
           </div>
           {right}
-          <Link href={back?.href ?? `/t/${team}`} className="rounded-lg border border-current/30 px-3 py-1.5 text-sm font-medium hover:bg-black/10">
-            ← {back?.label ?? "All systems"}
-          </Link>
         </div>
       </header>
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5">{children}</main>
@@ -173,7 +173,7 @@ export interface Field {
 export function ActionForm({
   team, path, action, fields, submit, extra, onDone, keep = [], disabled,
 }: {
-  team: string; path: string; action: string; fields: Field[]; submit: string; extra?: Record<string, unknown>; onDone?: () => void; keep?: string[]; disabled?: string;
+  team: string; path: string; action: string; fields: Field[]; submit: string; extra?: Record<string, unknown>; onDone?: (result: Record<string, unknown>) => void; keep?: string[]; disabled?: string;
 }) {
   const initial = () => Object.fromEntries(fields.map((f) => [f.name, f.initial ?? (f.type === "select" ? (f.options?.[0]?.[0] ?? "") : "")]));
   const [values, setValues] = useState<Record<string, string>>(initial);
@@ -187,10 +187,10 @@ export function ActionForm({
     try {
       // A select shows its first option when nothing valid is chosen, so send what is on screen.
       const sent = Object.fromEntries(fields.map((f) => [f.name, f.type === "select" && !(f.options ?? []).some(([v]) => v === values[f.name]) ? (f.options?.[0]?.[0] ?? "") : (values[f.name] ?? "")]));
-      const r = await api<{ message?: string }>(team, path, { body: { action, ...extra, ...sent } });
+      const r = await api<{ message?: string } & Record<string, unknown>>(team, path, { body: { action, ...extra, ...sent } });
       setResult({ ok: true, text: r.message ?? "Done." });
       setValues((v) => ({ ...initial(), ...Object.fromEntries(keep.map((k) => [k, v[k]])) }));
-      onDone?.();
+      onDone?.(r);
     } catch (err) {
       const d = err instanceof ApiError && err.details ? ` ${err.details.join("; ")}` : "";
       setResult({ ok: false, text: (err as Error).message + d });
@@ -382,11 +382,18 @@ export interface ActivityRow {
   summary: string;
 }
 
-export function Activity({ rows, showSystem, empty = "Nothing has happened here yet." }: { rows: ActivityRow[]; showSystem?: boolean; empty?: string }) {
+export function Activity({ rows, showSystem, empty = "Nothing has happened here yet.", pageSize: initialSize, pageSizes }: { rows: ActivityRow[]; showSystem?: boolean; empty?: string; pageSize?: number; pageSizes?: number[] }) {
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(initialSize);
   if (!rows.length) return <p className="text-sm text-gray-500">{empty}</p>;
+  // With a page size, show one page at a time. New rows arrive at the top, so the first page is always the latest.
+  const pages = pageSize ? Math.max(1, Math.ceil(rows.length / pageSize)) : 1;
+  const at = Math.min(page, pages - 1);
+  const shown = pageSize ? rows.slice(at * pageSize, (at + 1) * pageSize) : rows;
   return (
+    <>
     <ul className="divide-y divide-gray-100 text-sm">
-      {rows.map((a) => (
+      {shown.map((a) => (
         <li key={a.id} className="flex flex-wrap gap-x-3 py-1.5 sm:flex-nowrap">
           <span className="w-24 shrink-0 text-xs text-gray-500">{when(a.at)}</span>
           {showSystem && <span className="w-28 shrink-0 text-xs font-medium text-gray-700">{a.systemName}</span>}
@@ -394,6 +401,46 @@ export function Activity({ rows, showSystem, empty = "Nothing has happened here 
         </li>
       ))}
     </ul>
+    {pageSize && (pages > 1 || pageSizes) && (
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 text-xs text-gray-600">
+        <span className="flex flex-wrap items-center gap-2">
+          {pageSizes && (
+            <label className="flex items-center gap-1.5">
+              Show
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(0);
+                }}
+                className="rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs"
+                aria-label="Items per page"
+              >
+                {pageSizes.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              per page
+            </label>
+          )}
+          <span className="text-gray-400">·</span>
+          <span>
+            {at * pageSize + 1}–{Math.min((at + 1) * pageSize, rows.length)} of {rows.length}
+          </span>
+        </span>
+        <span className="flex gap-2">
+          <button type="button" className="btn !px-2.5 !py-1 !text-xs" disabled={at === 0} onClick={() => setPage(at - 1)}>
+            ← Newer
+          </button>
+          <button type="button" className="btn !px-2.5 !py-1 !text-xs" disabled={at >= pages - 1} onClick={() => setPage(at + 1)}>
+            Older →
+          </button>
+        </span>
+      </div>
+    )}
+    </>
   );
 }
 

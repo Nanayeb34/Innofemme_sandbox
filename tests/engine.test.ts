@@ -495,8 +495,8 @@ describe("text messages", () => {
     expect(sms.thread(w, nb, na).messages.map((m) => m.out)).toEqual([false, true, false]);
     const list = sms.conversations(w, na);
     expect(list[0]).toMatchObject({ with: nb, canReply: true, lastOut: true });
-    // The network's own texts (here, the welcome at SIM registration) are a conversation too, but nobody can reply to a sender name.
-    expect(list.find((x) => x.with === "MTNMoMo")).toMatchObject({ canReply: false, lastOut: false });
+    // The network's own texts (here, the welcome at SIM registration, sent as the network's name) are a conversation too, but nobody can reply to a sender name.
+    expect(list.find((x) => x.with === "MTN")).toMatchObject({ canReply: false, lastOut: false });
 
     // A business texts a customer from its software, under its registered sender name.
     telco.onboardMerchant(w, "mtn", { msisdn: shopLine, name: "Dzifa's Provisions & Co", town: "Ho", pin: "9999" });
@@ -511,7 +511,7 @@ describe("text messages", () => {
     const mtnLog = sms.smsRecords(w, "mtn");
     expect(mtnLog.filter((r) => r.kind === "person").length).toBe(5);
     expect(mtnLog.filter((r) => r.kind === "app").length).toBe(1);
-    expect(mtnLog.some((r) => r.kind === "network" && r.from === "MTNMoMo")).toBe(true);
+    expect(mtnLog.some((r) => r.kind === "network" && r.from === "MTN")).toBe(true);
     expect(mtnLog.find((r) => r.body === "anyone?")).toMatchObject({ status: "failed", reason: "Number not in service", toNetwork: "" });
     const telLog = sms.smsRecords(w, "telecel");
     expect(telLog.find((r) => r.body === "Hello Kwabena")).toMatchObject({ fromNetwork: "MTN", toNetwork: "Telecel", status: "delivered" });
@@ -1772,5 +1772,78 @@ describe("each network's own wallet menu and services", () => {
     worlds.upgradeMenus(old.db);
     expect(JSON.stringify(getConfig(old.db, "telco.telecel"))).toBe(again);
     await resetWorld("team-01");
+  });
+});
+
+describe("registering a SIM in a fresh world", () => {
+  it("needs only a Ghana Card: each network's head office is open from the start and keeps its own stock", async () => {
+    const w = await resetWorld("team-02");
+    const ama = person(w, "Ama", "Boateng");
+    for (const t of ["mtn", "telecel", "at"] as const) {
+      const v = view<{ agents: { id: string; status: string }[]; current: string | null; headOffice: string; stockCount: number }>(w, "sim-agent", t);
+      expect(v.current).toBe(telco.headOfficeId(t));
+      expect(v.headOffice).toBe(telco.headOfficeId(t));
+      expect(v.stockCount).toBe(0);
+    }
+    // Nothing was written just by looking.
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM sim_agents")).toBe(0);
+
+    const sys = resolveSystem(["sim-agent", "mtn"]);
+    const r = (await sys.staged!.register(w, { action: "register", agent: "MTN-HQ", card: ama.ghana_card, fingerprint: ama.fingerprint })) as { ok: boolean; msisdn: string };
+    expect(r.ok).toBe(true);
+    expect(telco.getSim(w, r.msisdn)).toMatchObject({ status: "active", registered_by: "MTN-HQ", telco: "mtn" });
+    expect(lastSms(w, r.msisdn)).toMatch(/registered to Ama Boateng/);
+    // The welcome text comes from the network's name, not its wallet.
+    expect((w.db.prepare("SELECT sender FROM sms WHERE msisdn = ? ORDER BY id DESC LIMIT 1").get(r.msisdn) as { sender: string }).sender).toBe("MTN");
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = 'mtn' AND status = 'in_stock'")).toBeGreaterThan(0);
+
+    // The back office lists it, run by the network itself, and the next point it authorises is still numbered from one.
+    const tv = view<{ simAgents: { id: string; owner: string; registered: number }[] }>(w, "telco", "mtn");
+    expect(tv.simAgents).toEqual([expect.objectContaining({ id: "MTN-HQ", owner: "MTN (head office)", registered: 1 })]);
+    expect(telco.onboardSimAgent(w, "mtn", { card: ama.ghana_card, name: "Adum", kind: "registration_agent", town: "Kumasi" }).id).toBe("MTN-RA-0001");
+
+    // The head office also does the rest of a service centre's work, and can be suspended like any other.
+    expect(() => telco.simAgent(w, "telecel", "TELECEL-HQ")).not.toThrow();
+    telco.setSimAgentStatus(w, "mtn", "MTN-HQ", "suspended");
+    await expect(sys.staged!.register(w, { action: "register", agent: "MTN-HQ", card: ama.ghana_card, fingerprint: ama.fingerprint })).rejects.toThrow(/suspended/);
+  });
+});
+
+describe("opening a mobile money agent", () => {
+  it("takes only the owner's Ghana Card: a new agent line, an agent number and a starting float in one step", async () => {
+    const w = await resetWorld("team-02");
+    const yaw = person(w, "Yaw", "Darko", "1980-02-02");
+    const sys = resolveSystem(["telco", "mtn"]);
+    const open = (fields: Record<string, unknown>) => sys.staged!.open_momo_agent(w, { action: "open_momo_agent", card: yaw.ghana_card, fingerprint: yaw.fingerprint, name: "Yaw Mobile Money", town: "Suame", pin: "4826", ...fields });
+
+    // Mistakes that can be seen up front leave nothing behind.
+    await expect(open({ pin: "12" })).rejects.toThrow(/4 digits/);
+    await expect(open({ card: "GHA-000000000-0" })).rejects.toThrow(/Enrol the owner at NIA/);
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE status = 'active'")).toBe(0);
+
+    const r = (await open({ float: "1000" })) as { ok: boolean; agent: { code: string; msisdn: string } };
+    expect(r.ok).toBe(true);
+    const line = walletByMsisdn(w, r.agent.msisdn)!;
+    expect(line).toMatchObject({ owner_type: "agent", balance: 100000 });
+    const v = view<{ agent: { code: string; float: number } | null }>(w, "momo-agent", "mtn");
+    expect(v.agent).toMatchObject({ code: r.agent.code, float: 1000 });
+
+    // A second agent line on the same card needs the code texted to the first, as for any second SIM.
+    await expect(open({ name: "Yaw Two" })).rejects.toThrow(/approval code was sent/);
+    const otp = lastSms(w, r.agent.msisdn).match(/is (\d{6})/)![1];
+    const second = (await open({ name: "Yaw Two", otp, float: "" })) as { agent: { code: string; msisdn: string } };
+    expect(walletByMsisdn(w, second.agent.msisdn)).toMatchObject({ owner_type: "agent", balance: 0 });
+    expect(count(w.db, "SELECT COUNT(*) AS n FROM momo_agents")).toBe(2);
+
+    // The agent opens a wallet for a customer without ever learning their PIN: a starting PIN is texted, and the customer sets their own.
+    const efua = person(w, "Efua", "Asare", "1995-09-09");
+    const efuaNo = telco.registerSim(w, "mtn", "MTN-HQ", { card: efua.ghana_card, fingerprint: efua.fingerprint }).sim.msisdn;
+    const opened = resolveSystem(["momo-agent", "mtn"]).actions.register_customer(w, { action: "register_customer", agent: r.agent.code, msisdn: efuaNo, card: efua.ghana_card, fingerprint: efua.fingerprint, pin: "" }) as { message: string };
+    expect(opened.message).toMatch(/A starting PIN was texted to them\. They dial \*170# to create their own/);
+    expect(walletByMsisdn(w, efuaNo)).toMatchObject({ kyc_tier: "medium", status: "active" });
+    const starting = lastSms(w, efuaNo).match(/starting MTN MoMo PIN is (\d{4})/)![1];
+    expect(dial(w, efuaNo, "*170#").text).toMatch(/Enter the PIN sent to you by SMS/);
+    expect(dial(w, efuaNo, "*170#", starting, "3917", "3917").text).toMatch(/Your PIN is set/);
+    expect(walletByMsisdn(w, efuaNo)!.pin).toBe("3917");
   });
 });

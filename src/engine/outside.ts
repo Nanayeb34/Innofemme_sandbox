@@ -3,6 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import { bridgeAddress, sendThroughBridge } from "./bridge";
+import { askCode, codeIdOf } from "./coderun";
 import { SimError, need } from "./util";
 
 /**
@@ -53,6 +54,11 @@ function refusal(address: string): string | undefined {
 /** Checks an address a team typed. Throws, in plain words, if the sandbox will not call it. */
 export function checkUrl(input: string | undefined | null, what = "The API's address"): string {
   const url = String(need(input?.trim(), what));
+  // A plug-in the team wrote in the Developer console, which the sandbox runs itself.
+  if (/^code:/i.test(url)) {
+    if (!codeIdOf(url)) throw new SimError("A plug-in address from the Developer console looks like code://code_…");
+    return url;
+  }
   // An API on a team's laptop, reached through their bridge. Whether it is connected is known only when it is called.
   if (/^bridge:/i.test(url)) {
     if (!bridgeAddress(url)) throw new SimError("A bridge address looks like bridge://laptop");
@@ -105,6 +111,17 @@ export function callOut(address: string, req: { method?: string; headers?: Recor
     let url: URL;
     try {
       const checked = checkUrl(address);
+      const code = codeIdOf(checked);
+      if (code) {
+        // Only the team whose world is asking can reach its own code.
+        if (!req.world) throw new SimError("A plug-in from the Developer console cannot be used here");
+        let q: { point?: string; institution?: string; world?: string; at?: string; data?: unknown } = {};
+        try {
+          q = JSON.parse(req.body ?? "{}");
+        } catch {}
+        const question = q && typeof q === "object" && "point" in q ? { point: String(q.point), institution: String(q.institution ?? ""), world: req.world, at: q.at, data: q.data } : { point: "request", institution: "", world: req.world, data: q };
+        return askCode(req.world, code, question, req.timeoutMs).then((answer) => resolve({ status: 200, ok: true, body: JSON.stringify(answer) }), reject);
+      }
       const bridge = bridgeAddress(checked);
       if (bridge) {
         if (!req.world) throw new SimError("A bridge address cannot be used here");

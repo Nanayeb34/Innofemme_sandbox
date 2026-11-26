@@ -104,12 +104,13 @@ export default function Phone({ team, role }: { team: string; role: string }) {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{teamName(team)} · Phone</div>
-        {role === "team" ? (
+        {role === "team" && (
           <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
             ← All systems
           </Link>
-        ) : (
+        )}
+        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{teamName(team)} · Phone</div>
+        {role !== "team" && (
           <Link href={`/t/${team}/console`} className="text-xs text-gray-500 underline">
             Use this device for the consoles
           </Link>
@@ -131,18 +132,11 @@ export default function Phone({ team, role }: { team: string; role: string }) {
               issues the person a Ghana Card.
             </li>
             <li>
-              A telco&apos;s{" "}
-              <Link className="underline" href={`/t/${team}/telco/mtn`}>
-                back office
-              </Link>{" "}
-              adds SIM stock and authorises a registration point.
-            </li>
-            <li>
-              The{" "}
+              A{" "}
               <Link className="underline" href={`/t/${team}/sim-agent/mtn`}>
                 SIM registration point
               </Link>{" "}
-              registers a SIM for them.
+              registers a SIM for them. Each network&apos;s head office can do this straight away.
             </li>
           </ol>
         </div>
