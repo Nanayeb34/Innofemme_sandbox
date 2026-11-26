@@ -5,6 +5,7 @@ import { useState } from "react";
 import { TelcoMark } from "@/components/telco-mark";
 import { ActionButton, ActionForm, Activity, Badge, Loading, Section, SettingsForm, SettingsHistory, SettingsJson, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type ActivityRow, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
+import { OpenAgentForm } from "./agents";
 import { ApiPartners, type ApiPartner } from "./partners";
 import { Plugins, type PluginView } from "./plugins";
 
@@ -72,11 +73,10 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
 
       {tab === "overview" && (
         <>
-          <Section title="How this network gets going" hint={`${b.name} starts with no SIMs, no staff and no customers.`}>
+          <Section title="How this network gets going" hint={`${b.name} starts with only its head office: no customers, agents or merchants yet.`}>
             <ol className="list-decimal space-y-1 pl-5 text-sm text-gray-700">
-              <li>Add blank SIM cards to stock (SIMs tab).</li>
-              <li>Authorise a service centre or SIM registration agent (SIM registration points tab). They register customers&apos; SIMs with the Ghana Card.</li>
-              <li>Onboard mobile money agents and merchants on their own registered business lines.</li>
+              <li>Register customers&apos; SIMs with the Ghana Card. {b.name} Head Office does this from the start and orders its own blank SIMs. To add more outlets, add SIM stock (SIMs tab) and authorise a service centre or SIM registration agent (SIM registration points tab).</li>
+              <li>Open mobile money agents from the owner&apos;s Ghana Card (Mobile money agents tab), and onboard merchants on their own registered business lines.</li>
               <li>
                 Customers open wallets {data.config.selfRegistration ? `by dialling ${b.shortcode}, or ` : ""}at a mobile money agent, then cash in and transact.
               </li>
@@ -86,11 +86,14 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
                 Open customer care{s.openTickets ? ` (${s.openTickets} open)` : ""}
               </Link>
               <Link href={`/t/${team}/sim-agent/${telco}`} className="btn">
-                Open a SIM registration point
+                Go to a SIM registration point
               </Link>
               <Link href={`/t/${team}/momo-agent/${telco}`} className="btn">
-                Open a mobile money agent
+                Go to a mobile money agent
               </Link>
+              <button type="button" onClick={() => setTab("agents")} className="btn">
+                Open a new mobile money agent
+              </button>
             </div>
           </Section>
           <Section title="Activity">
@@ -176,7 +179,7 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
           <Section title="Registration points">
             <Table
               rows={data.simAgents}
-              empty="No registration point has been authorised. Until one is, nobody can register a SIM on this network."
+              empty={`No registration point has served anyone yet. ${b.name} Head Office registers SIMs from the start; authorise more points here.`}
               cols={[
                 { label: "ID", cell: (a) => <span className="font-mono text-xs">{a.id}</span> },
                 { label: "Outlet", cell: (a) => a.name },
@@ -249,9 +252,12 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
       {tab === "agents" && (
         <>
           <Section
-            title="Onboard a mobile money agent"
-            hint={`Mobile money agents take cash and give e-money (cash-in), give cash for e-money (cash-out), and register customers for ${b.wallet}. They work from a dedicated agent line with its own float. They are separate from SIM registration points.`}
+            title="Open a mobile money agent"
+            hint={`Mobile money agents take cash and give e-money (cash-in), give cash for e-money (cash-out), and open ${b.wallet} wallets for customers. They work from a dedicated agent line with its own float, separate from SIM registration points. All you need is the owner's Ghana Card: ${b.name} Head Office registers the agent line for them.`}
           >
+            <OpenAgentForm team={team} telco={telco} brand={b} onDone={() => refresh()} />
+          </Section>
+          <Section title="Or use a business line the owner already has" hint="For an owner who has already registered a separate line for the business at a SIM registration point.">
             <ActionForm
               team={team}
               path={path}
@@ -386,7 +392,7 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
                 <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Opening a wallet</dt>
                 <dd className="mt-0.5 text-gray-800">
                   {data.services.registration.code ? `The subscriber dials ${data.services.registration.code}, or goes to an agent with their Ghana Card.` : `The subscriber dials ${b.shortcode}, or goes to an agent with their Ghana Card.`}{" "}
-                  {data.services.registration.pinBySms ? "At an agent, a starting PIN is texted to the customer, who must replace it the first time they open the menu." : "At an agent, the customer chooses their PIN."}
+                  {data.services.registration.pinBySms ? "At an agent, a starting PIN is texted to the customer, who must replace it the first time they open the menu." : "At an agent, the customer can type their own PIN at the counter or leave it empty: a starting PIN is then texted to them, which they must replace the first time they open the menu."}
                 </dd>
               </div>
               <div>

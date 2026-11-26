@@ -51,15 +51,16 @@ export async function createTestCustomer(w: World, input: { network?: unknown; a
   if (!person) throw new SimError("Could not enrol a new person. Please try again.");
   const owner = person;
 
-  // 2. A service centre to register the number at, and a SIM to give out. An empty world has neither yet.
+  // 2. A service centre to register the number at, and a SIM to give out. In an empty world that is the network's own head office.
   const centre = await locked(
     w,
     () =>
       (w.db.prepare("SELECT id FROM sim_agents WHERE telco = ? AND kind = 'service_centre' AND status = 'active' ORDER BY created_at LIMIT 1").get(telco) as { id: string } | undefined)?.id ??
-      telcoOps.onboardSimAgent(w, telco, { card: owner.ghana_card, name: `${TELCO_INFO[telco].name} Service Centre`, kind: "service_centre", town: owner.town }).id,
+      telcoOps.headOfficeId(telco),
   );
   await locked(w, () => {
-    if (!count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", telco)) telcoOps.generateSims(w, telco, 10);
+    if (centre === telcoOps.headOfficeId(telco)) telcoOps.readyHeadOffice(w, telco);
+    else if (!count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", telco)) telcoOps.generateSims(w, telco, 10);
   });
   const msisdn = (await locked(w, () => telcoOps.registerSim(w, telco, centre, { card: owner.ghana_card, fingerprint: owner.fingerprint }))).sim.msisdn;
 

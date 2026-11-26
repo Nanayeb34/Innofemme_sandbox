@@ -5,8 +5,9 @@ import { useEffect, useState } from "react";
 import { TelcoMark } from "@/components/telco-mark";
 import { ActionForm, Badge, ID_FIELDS, Loading, Section, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
+import { Select } from "@/components/select";
 
-const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
+export const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
 const TELCOS: [string, string][] = [["mtn", "MTN"], ["telecel", "Telecel"], ["at", "AT"]];
 
 /** Remembers which agent this browser is acting as, per network. */
@@ -29,7 +30,7 @@ function useChosen(key: string): [string, (v: string) => void] {
   ];
 }
 
-function NetworkSwitch({ team, kind, telco }: { team: string; kind: string; telco: string }) {
+export function NetworkSwitch({ team, kind, telco }: { team: string; kind: string; telco: string }) {
   return (
     <div className="flex overflow-hidden rounded-lg border border-current/30 text-sm">
       {TELCOS.map(([id, name]) => (
@@ -43,16 +44,10 @@ function NetworkSwitch({ team, kind, telco }: { team: string; kind: string; telc
 
 function Who({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: [string, string][] }) {
   return (
-    <label className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+    <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
       <span className="font-medium text-gray-700">{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm sm:w-auto sm:max-w-full">
-        {options.map(([v, l]) => (
-          <option key={v} value={v}>
-            {l}
-          </option>
-        ))}
-      </select>
-    </label>
+      <Select className="w-full sm:w-[28rem] sm:max-w-full" value={value} onChange={onChange} options={options.map(([v, l]) => ({ value: v, label: l }))} label={label} />
+    </div>
   );
 }
 
@@ -63,6 +58,7 @@ interface SimPointView {
   brand: { name: string; wallet: string; color: string; shortcode: string; logo: string | null; approvals?: string };
   agents: { id: string; name: string; kind: string; town: string; status: string }[];
   current: string | null;
+  headOffice: string;
   stockCount: number;
   stock: string[];
   events: { id: number; msisdn: string; at: string; kind: string; detail: string }[];
@@ -89,19 +85,19 @@ export function SimPoint({ team, telco, role }: { team: string; telco: string; r
   return (
     <Shell team={team} title={`${b.name} SIM registration point`} subtitle="SIM registration and troubleshooting" color={b.color} textOn={TEXT_ON[telco]} mark={<TelcoMark telco={telco} logo={b.logo} height={34} />} right={<NetworkSwitch team={team} kind="sim-agent" telco={telco} />} back={backFor(team, role)}>
       {!me ? (
-        <Section title="No registration point on this network yet">
+        <Section title="No registration point open on this network">
           <p className="text-sm text-gray-700">
-            {b.name} has not authorised a service centre or SIM registration agent.{" "}
+            Every {b.name} registration point, including the head office, is suspended.{" "}
             {role === "team" ? (
               <>
                 Go to the{" "}
                 <Link className="underline" href={`/t/${team}/telco/${telco}`}>
                   {b.name} back office
                 </Link>{" "}
-                → SIM registration points, and authorise one.
+                → SIM registration points, and reinstate or authorise one.
               </>
             ) : (
-              <>Ask your team to authorise one in the {b.name} back office, then come back.</>
+              <>Ask your team to reinstate or authorise one in the {b.name} back office, then come back.</>
             )}
           </p>
         </Section>
@@ -115,7 +111,12 @@ export function SimPoint({ team, telco, role }: { team: string; telco: string; r
               title="Register a new SIM"
               hint={`The customer presents their Ghana Card and gives a fingerprint. Both are checked live with NIA before the number is switched on. NCA rules: at most ${data.rules.maxSimsPerCard} SIMs per card across all networks, age ${data.rules.minimumAge} or over${data.rules.primaryNumberApproval ? ", and a second SIM needs an approval code sent to the customer's first number" : ""}.`}
             >
-              {data.stockCount === 0 && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">There are no blank SIMs in stock. {b.name} back office must add SIM stock first.</p>}
+              {data.stockCount === 0 &&
+                (me.id === data.headOffice ? (
+                  <p className="mb-3 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">There are no blank SIMs in stock yet. The head office orders more automatically when you register a SIM.</p>
+                ) : (
+                  <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">There are no blank SIMs in stock. {b.name} back office must add SIM stock first, or register the SIM at the {b.name} Head Office.</p>
+                ))}
               <ActionForm
                 team={team}
                 path={path}
@@ -199,13 +200,40 @@ interface MomoPointView {
   pinBySms: boolean;
 }
 
-const MOMO_TABS = [["cashin", "Cash-in (deposit)"], ["cashout", "Cash-out (withdrawal)"], ["register", "Register a customer"], ["float", "Float and till"], ["txns", "Transactions"]] as const;
+const MOMO_TABS = [["cashin", "Cash-in (deposit)"], ["cashout", "Cash-out (withdrawal)"], ["register", "Open a customer wallet"], ["float", "Float and till"], ["txns", "Transactions"]] as const;
+
+/**
+ * Opens a mobile money agent in one step for anyone with a Ghana Card: the network's head office registers
+ * a new agent line to them, the line becomes an agent, and the bank can pay in a starting float.
+ */
+export function OpenAgentForm({ team, telco, brand, onDone }: { team: string; telco: string; brand: { name: string; wallet: string }; onDone?: (code: string | undefined) => void }) {
+  return (
+    <ActionForm
+      team={team}
+      path={`/s/telco/${telco}`}
+      action="open_momo_agent"
+      submit="Open the agent"
+      onDone={(r) => onDone?.((r.agent as { code?: string } | undefined)?.code)}
+      keep={["card", "fingerprint", "name", "town"]}
+      fields={[
+        { ...ID_FIELDS[0], label: "Owner's Ghana Card number", hint: "Anyone NIA has issued a card to, 18 or older." },
+        { ...ID_FIELDS[1], hint: "The owner's fingerprint code, from their Ghana Card record at NIA." },
+        { name: "name", label: "Business name", placeholder: "Yaw Mobile Money Centre" },
+        { name: "town", label: "Town", placeholder: "Suame" },
+        { name: "pin", label: "Agent PIN (4 digits)", type: "password" },
+        { name: "float", label: "Starting float (GHS)", type: "number", initial: "1000", optional: true, hint: "Paid onto the agent line by GCB Bank, so the agent can do cash-ins straight away. 0 for none." },
+        { name: "otp", label: "Approval code", optional: true, placeholder: "6 digits", hint: `Only if the owner already has a number: a new ${brand.name} agent line on their card needs the code texted to their first number.` },
+      ]}
+    />
+  );
+}
 
 export function MomoPoint({ team, telco, role }: { team: string; telco: string; role: string }) {
   const [code, setCode] = useChosen(`momo-agent:${team}:${telco}`);
   const path = `/s/momo-agent/${telco}`;
   const { data, error, refresh } = useView<MomoPointView>(team, `${path}?agent=${encodeURIComponent(code)}`);
   const [tab, setTab] = useState<(typeof MOMO_TABS)[number][0]>("cashin");
+  const [adding, setAdding] = useState(false);
   if (!data) return <Loading error={error} />;
   const active = data.agents.filter((a) => a.status === "active");
   const b = data.brand;
@@ -216,25 +244,41 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
 
   return (
     <Shell team={team} title={`${b.wallet} agent`} subtitle="Mobile money agent" color={b.color} textOn={TEXT_ON[telco]} mark={<TelcoMark telco={telco} logo={b.logo} height={34} />} right={<NetworkSwitch team={team} kind="momo-agent" telco={telco} />} back={backFor(team, role)}>
-      {!me ? (
+      {(!me || adding) && role === "team" ? (
+        <Section
+          title={me ? "Open another mobile money agent" : `Open a ${b.wallet} agent`}
+          hint={`All you need is the owner's Ghana Card: ${b.name} Head Office registers a new agent line to them and it becomes an agent with its own agent number. Mobile money agents take cash and give e-money (cash-in), give cash for e-money (cash-out), and open wallets for customers.`}
+        >
+          <OpenAgentForm
+            team={team}
+            telco={telco}
+            brand={b}
+            onDone={(newCode) => {
+              if (newCode) setCode(newCode);
+              setAdding(false);
+              refresh();
+            }}
+          />
+          {me && (
+            <button type="button" onClick={() => setAdding(false)} className="btn mt-3">
+              Back to {me.name}
+            </button>
+          )}
+        </Section>
+      ) : !me ? (
         <Section title="No mobile money agent on this network yet">
-          <p className="text-sm text-gray-700">
-            {role === "team" ? (
-              <>
-                Register a SIM for the business at a SIM registration point, then go to the{" "}
-                <Link className="underline" href={`/t/${team}/telco/${telco}`}>
-                  {b.name} back office
-                </Link>{" "}
-                → Mobile money agents, and onboard it.
-              </>
-            ) : (
-              <>Ask your team to onboard a mobile money agent in the {b.name} back office, then come back.</>
-            )}
-          </p>
+          <p className="text-sm text-gray-700">Ask your team to open a mobile money agent for you, then come back.</p>
         </Section>
       ) : (
         <>
-          <Who label="You are" value={me.code} onChange={setCode} options={active.map((a) => [a.code, `${a.name}, ${a.town} (agent no. ${a.code})`])} />
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <Who label="You are" value={me.code} onChange={setCode} options={active.map((a) => [a.code, `${a.name}, ${a.town} (agent no. ${a.code})`])} />
+            {role === "team" && (
+              <button type="button" onClick={() => setAdding(true)} className="btn">
+                + Open another agent
+              </button>
+            )}
+          </div>
           <Stats>
             <Stat label="Float (e-money)" value={ghs(me.float)} sub="what you can deposit for customers" tone={me.float === 0 ? "bad" : undefined} />
             <Stat label="Cash in the till" value={ghs(me.cash)} sub="what you can pay out" />
@@ -315,8 +359,8 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
 
           {tab === "register" && (
             <Section
-              title={`Register a customer for ${b.wallet}`}
-              hint={`The customer must own a registered SIM on this network. You verify their Ghana Card and fingerprint, so the wallet opens on medium KYC. ${data.pinBySms ? `You never see the PIN: a starting PIN is texted to the customer, who dials ${b.shortcode} to create their own.` : "For a customer who opened a wallet from their phone, the same check upgrades it from minimum to medium (leave the PIN empty)."}`}
+              title={`Open a ${b.wallet} wallet for a customer`}
+              hint={`The customer must own a registered SIM on this network. You verify their Ghana Card and fingerprint, so the wallet opens on medium KYC. You never need to know the customer's PIN: a starting PIN is texted to them, and they dial ${b.shortcode} to create their own secret PIN. For a customer who opened a wallet from their phone, the same check upgrades it from minimum to medium KYC.`}
             >
               <ActionForm
                 team={team}
@@ -328,7 +372,7 @@ export function MomoPoint({ team, telco, role }: { team: string; telco: string; 
                 fields={[
                   { name: "msisdn", label: "Customer's number" },
                   ...ID_FIELDS,
-                  ...(data.pinBySms ? [] : [{ name: "pin", label: "Customer chooses a 4-digit PIN", type: "password" as const, optional: true, hint: "Not needed when upgrading an existing wallet." }]),
+                  ...(data.pinBySms ? [] : [{ name: "pin", label: "Customer types a 4-digit PIN", type: "password" as const, optional: true, hint: `Only if the customer wants to type their own PIN here. Leave it empty and they get a starting PIN by SMS, then set their own when they dial ${b.shortcode}.` }]),
                 ]}
               />
             </Section>

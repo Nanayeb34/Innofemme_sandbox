@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ghs, when } from "@/lib/client";
+import { askConfirm } from "@/stores/ui";
 
 interface TeamRow {
   id: string;
@@ -43,7 +44,7 @@ export default function Dashboard({ access }: { access: Access[] }) {
   }, [load]);
 
   const reset = async () => {
-    if (!confirm(`Wipe ${selected.join(", ")} back to an empty country? Everything those teams built will be lost.`)) return;
+    if (!(await askConfirm({ title: `Wipe ${selected.join(", ")}?`, message: "Each of these worlds goes back to an empty country. Everything those teams built will be lost.", confirm: "Wipe them", danger: true }))) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -58,7 +59,7 @@ export default function Dashboard({ access }: { access: Access[] }) {
   };
 
   const simulate = async () => {
-    if (!confirm(`Replace ${selected.join(", ")} with the simulated country (100,023 transactions, 22% fraud)? What each team has built is kept as a save point.`)) return;
+    if (!(await askConfirm({ title: `Load the simulated country into ${selected.join(", ")}?`, message: "100,023 transactions, 22% fraud. What each team has built is kept as a save point.", confirm: "Load it" }))) return;
     setBusy(true);
     setMsg("Loading the simulated country. This can take up to a minute the first time…");
     try {

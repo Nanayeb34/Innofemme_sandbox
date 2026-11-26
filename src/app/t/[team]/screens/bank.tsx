@@ -7,6 +7,7 @@ import { ActionButton, ActionForm, Activity, Badge, ID_FIELDS, Loading, Section,
 import { ghs } from "@/lib/client";
 import { ApiPartners, type ApiPartner } from "./partners";
 import { Plugins, type PluginView } from "./plugins";
+import { Select } from "@/components/select";
 
 interface BankView {
   bank: string;
@@ -46,13 +47,7 @@ export default function Bank({ team, bank }: { team: string; bank: string }) {
       subtitle="Bank"
       color="#134e4a"
       right={
-        <select value={bank} onChange={(e) => router.push(`/t/${team}/bank/${e.target.value}`)} className="rounded-lg border border-white/30 bg-transparent px-2 py-1.5 text-sm" aria-label="Switch bank">
-          {data.banks.map((b) => (
-            <option key={b.id} value={b.id} className="text-gray-900">
-              {b.name}
-            </option>
-          ))}
-        </select>
+        <Select className="w-52" size="sm" value={bank} onChange={(v) => router.push(`/t/${team}/bank/${v}`)} options={data.banks.map((b) => ({ value: b.id, label: b.name }))} label="Switch bank" />
       }
     >
       <Stats>

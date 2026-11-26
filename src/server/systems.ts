@@ -6,7 +6,7 @@ import { getConfig } from "@/engine/config/store";
 import { TIERS, type KycTier } from "@/engine/config/schemas";
 import { count, getMeta, setMeta } from "@/engine/db";
 import { connectApp, disconnectApp, fraudResults, startRun, stopRun } from "@/engine/fraudsim";
-import { EVENTS, SAMPLES, addIntegration, integrationLog, listIntegrations, pointsFor, removeIntegration, setIntegrationEnabled, testIntegration } from "@/engine/integrations";
+import { EVENTS, SAMPLES, addIntegration, integrationLog, listIntegrations, locked, pointsFor, removeIntegration, setIntegrationEnabled, testIntegration } from "@/engine/integrations";
 import { balanceOf, getTxn, getWallet, walletByMsisdn } from "@/engine/ledger";
 import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } from "@/engine/nia";
 import { createClient, listClients, rotateSecret, setClientStatus } from "@/engine/partners";
@@ -15,6 +15,7 @@ import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
 import { createTestCustomer } from "@/engine/testcustomer";
+import { openMomoAgent } from "@/engine/openagent";
 import { approvalsPath, atmOf, atmWithdraw, billersOf, bundlesOf, offersAtm } from "@/engine/services";
 import { AIRTIME_CODE, LINKED_SIMS_CODE, OWN_NUMBER_CODE, REGISTRATION_CHECK_CODE } from "@/engine/ussd";
 import { allocateCode, dial, listCodes, revokeCode, setActivation } from "@/engine/ussdapps";
@@ -201,9 +202,8 @@ const hub: System = {
       counts: c,
       steps: [
         { system: "nia", title: "Issue Ghana Cards", detail: "NIA enrols each person and issues their card.", done: c.persons > 0 },
-        { system: "telco", title: "Add SIM stock and authorise a SIM registration point", detail: "Each telco adds blank SIMs and authorises a service centre or registration agent.", done: c.simAgents > 0 && c.simsInStock + c.simsRegistered > 0 },
-        { system: "sim-agent", title: "Register a SIM", detail: "The registration agent checks the Ghana Card and fingerprint with NIA and activates the number.", done: c.simsRegistered > 0 },
-        { system: "telco", title: "Onboard a mobile money agent", detail: "The telco turns a registered business line into an agent with its own agent number.", done: c.momoAgents > 0 },
+        { system: "sim-agent", title: "Register a SIM", detail: "A registration point checks the Ghana Card and fingerprint with NIA and activates the number. Each network's head office can do this from the start; telcos can add stock and authorise more points.", done: c.simsRegistered > 0 },
+        { system: "momo-agent", title: "Open a mobile money agent", detail: "From the owner's Ghana Card: the head office registers an agent line, which becomes an agent with its own agent number and, if you like, a starting float.", done: c.momoAgents > 0 },
         { system: "bank", title: "Open a bank account and buy float", detail: "The agent opens an account, deposits cash and the bank sends float to the agent line.", done: c.agentFloat > 0 || c.cashIns > 0 },
         { system: "phone", title: "Open a wallet", detail: "From the phone (dial the short code) or in person at a mobile money agent.", done: c.wallets > 0 },
         { system: "momo-agent", title: "Cash in and transact", detail: "Deposit at the agent, then send money, pay a merchant or cash out from the phone.", done: c.payments > 0 },
@@ -323,7 +323,7 @@ function telcoSystem(t: Telco): System {
           msisdn: s.msisdn, iccid: s.iccid, status: s.status, owner: s.surname ? `${s.first_names} ${s.surname}` : "", card: s.ghana_card, registeredAt: iso(s.registered_at as number), registeredBy: s.registered_by,
           lastSwapAt: iso(s.last_swap_at as number), blockReason: s.block_reason, hasWallet: !!s.has_wallet,
         })),
-        simAgents: list(w, "SELECT a.*, p.first_names || ' ' || p.surname AS owner, (SELECT COUNT(*) FROM sims s WHERE s.registered_by = a.id) AS registered FROM sim_agents a JOIN persons p ON p.id = a.person_id WHERE a.telco = ? ORDER BY a.created_at", t),
+        simAgents: list<Record<string, unknown>>(w, "SELECT a.*, p.first_names || ' ' || p.surname AS owner, (SELECT COUNT(*) FROM sims s WHERE s.registered_by = a.id) AS registered FROM sim_agents a LEFT JOIN persons p ON p.id = a.person_id WHERE a.telco = ? ORDER BY a.created_at", t).map((a) => (a.owner == null ? { ...a, owner: `${TELCO_INFO[t].name} (head office)` } : a)),
         wallets: wallets.map((x) => ({ msisdn: x.msisdn, name: x.display_name, type: x.owner_type, tier: x.kyc_tier, status: x.status, balance: money(x.balance as number), card: x.ghana_card, openedAt: iso(x.created_at as number) })),
         momoAgents: (w.db.prepare("SELECT a.*, w.msisdn, w.balance FROM momo_agents a JOIN wallets w ON w.id = a.wallet_id WHERE w.telco = ? ORDER BY a.created_at").all(t) as Record<string, string | number>[]).map((a) => ({
           code: a.code, name: a.name, town: a.town, msisdn: a.msisdn, float: money(a.balance as number), cash: money(a.cash as number), commission: money(a.commission as number), status: a.status,
@@ -346,6 +346,12 @@ function telcoSystem(t: Telco): System {
         config: getConfig(w.db, `telco.${t}`),
         limits: getConfig(w.db, "bog").kycTiers,
       };
+    },
+    staged: {
+      async open_momo_agent(w, b) {
+        const a = await openMomoAgent(w, t, { card: str(b.card), fingerprint: str(b.fingerprint), otp: str(b.otp), name: str(b.name), town: str(b.town), pin: str(b.pin), float: b.float });
+        return ok(`${a.name} is now a ${brand.wallet} agent. Agent number ${a.code}, on the new agent line ${a.msisdn}${a.float ? `, with GHS ${a.float.toFixed(2)} of float` : ""}.`, { agent: a });
+      },
     },
     actions: {
       add_sims(w, b) {
@@ -418,12 +424,16 @@ function simAgentSystem(t: Telco): System {
   return {
     view(w, q) {
       const agents = w.db.prepare("SELECT id, name, kind, town, status FROM sim_agents WHERE telco = ? ORDER BY created_at").all(t) as { id: string; name: string; kind: string; town: string; status: string }[];
+      // The network's own head office is always there, even before it has served anyone.
+      const hq = telcoOps.headOffice(t);
+      if (!agents.some((a) => a.id === hq.id)) agents.push({ ...hq, status: "active" });
       const agent = agents.find((a) => a.id === q.get("agent") && a.status === "active") ?? agents.find((a) => a.status === "active");
       return {
         telco: t,
         brand: { ...brand, logo: telcoLogo(t), approvals: approvalsPath(w, t) },
         agents,
         current: agent?.id ?? null,
+        headOffice: hq.id,
         stockCount: sum(w, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", t),
         stock: (w.db.prepare("SELECT msisdn FROM sims WHERE telco = ? AND status = 'in_stock' ORDER BY created_at, msisdn LIMIT 12").all(t) as { msisdn: string }[]).map((s) => s.msisdn),
         events: agent
@@ -432,11 +442,15 @@ function simAgentSystem(t: Telco): System {
         rules: getConfig(w.db, "nca"),
       };
     },
-    actions: {
-      register(w, b) {
-        const r = telcoOps.registerSim(w, t, b.agent, { card: str(b.card), fingerprint: str(b.fingerprint), msisdn: str(b.msisdn) || undefined, otp: str(b.otp) });
+    staged: {
+      async register(w, b) {
+        // The head office opens and orders blank SIMs in a turn of its own, before the registration itself.
+        if (str(b.agent) === telcoOps.headOfficeId(t)) await locked(w, () => telcoOps.readyHeadOffice(w, t));
+        const r = await locked(w, () => telcoOps.registerSim(w, t, b.agent, { card: str(b.card), fingerprint: str(b.fingerprint), msisdn: str(b.msisdn) || undefined, otp: str(b.otp) }));
         return ok(`${r.sim.msisdn} is registered to ${fullName(r.person)} and active. Hand over the SIM card.`, { msisdn: r.sim.msisdn });
       },
+    },
+    actions: {
       swap(w, b) {
         const s = telcoOps.swapSim(w, t, b.agent, person(b));
         return ok(`${s.msisdn} moved to a new SIM card (serial ${s.iccid}).`);
@@ -515,7 +529,7 @@ function momoAgentSystem(t: Telco): System {
     },
     actions: {
       register_customer(w, b) {
-        const sent = !!getConfig(w.db, `telco.${t}`).registration?.pinBySms && !str(b.pin);
+        const sent = !str(b.pin);
         const had = !!walletByMsisdn(w, normalizeMsisdn(str(b.msisdn) ?? ""));
         const x = telcoOps.agentRegisterWallet(w, t, b.agent, { msisdn: str(b.msisdn), card: str(b.card), fingerprint: str(b.fingerprint), pin: str(b.pin) || undefined });
         return ok(`${x.display_name} (${x.msisdn}) has a ${brand.wallet} wallet on ${x.kyc_tier} KYC.${sent && !had ? ` A starting PIN was texted to them. They dial ${brand.shortcode} to create their own.` : ""}`);

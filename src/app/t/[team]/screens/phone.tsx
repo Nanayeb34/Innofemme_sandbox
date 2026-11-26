@@ -6,6 +6,7 @@ import { TelcoMark } from "@/components/telco-mark";
 import { Loading, useView } from "@/components/ui";
 import { api, ghs, teamName, when } from "@/lib/client";
 import { CallLog, CallScreen, useCalls, type CallLogRow, type Calls } from "./calls";
+import { Select } from "@/components/select";
 
 interface Line {
   msisdn: string;
@@ -104,12 +105,13 @@ export default function Phone({ team, role }: { team: string; role: string }) {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{teamName(team)} · Phone</div>
-        {role === "team" ? (
+        {role === "team" && (
           <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
             ← All systems
           </Link>
-        ) : (
+        )}
+        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{teamName(team)} · Phone</div>
+        {role !== "team" && (
           <Link href={`/t/${team}/console`} className="text-xs text-gray-500 underline">
             Use this device for the consoles
           </Link>
@@ -131,35 +133,28 @@ export default function Phone({ team, role }: { team: string; role: string }) {
               issues the person a Ghana Card.
             </li>
             <li>
-              A telco&apos;s{" "}
-              <Link className="underline" href={`/t/${team}/telco/mtn`}>
-                back office
-              </Link>{" "}
-              adds SIM stock and authorises a registration point.
-            </li>
-            <li>
-              The{" "}
+              A{" "}
               <Link className="underline" href={`/t/${team}/sim-agent/mtn`}>
                 SIM registration point
               </Link>{" "}
-              registers a SIM for them.
+              registers a SIM for them. Each network&apos;s head office can do this straight away.
             </li>
           </ol>
         </div>
       ) : (
         <>
-          <label className="mb-3 block text-sm">
+          <div className="mb-3 block text-sm">
             <span className="text-xs font-medium text-gray-600">Whose phone is this?</span>
-            <select value={current} onChange={(e) => pick(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
-              {lines.map((l) => (
-                <option key={l.msisdn} value={l.msisdn}>
-                  {l.label} · {l.msisdn} · {NETWORK[l.telco]}
-                  {l.status !== "active" ? " (blocked)" : ""}
-                </option>
-              ))}
-            </select>
+            <Select
+              className="mt-1"
+              value={current}
+              onChange={pick}
+              searchable={lines.length > 5}
+              label="Whose phone is this?"
+              options={lines.map((l) => ({ value: l.msisdn, label: `${l.label}${l.status !== "active" ? " (blocked)" : ""}`, hint: `${l.msisdn} · ${NETWORK[l.telco]}` }))}
+            />
             {!!data?.more && <OtherNumber more={data.more} onPick={pick} />}
-          </label>
+          </div>
 
           <div className="flex min-h-[620px] flex-1 flex-col overflow-hidden rounded-[2rem] border-[6px] border-gray-900 bg-white shadow-xl">
             <div className="flex items-center justify-between px-5 py-2 text-xs font-semibold" style={{ background: brandColor, color: TEXT_ON[state?.telco ?? ""] ?? "#fff" }}>

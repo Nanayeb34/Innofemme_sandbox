@@ -217,10 +217,12 @@ describe("a conversation with the assistant", () => {
     };
     const w = getWorld("team-01");
     await resolveSystem(["hub"]).staged!.test_customer(w, { network: "mtn" });
+    const stock = () => count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = 'mtn' AND status = 'in_stock'");
+    const stockBefore = stock();
     const { events } = await turn("team-01", chatId, { text: "Have the analyst change something." });
     expect(answers[0]).toBe('You have no tool called "create_test_customer".');
     expect(answers[1]).toBe('You have no tool called "act".');
-    expect(count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = 'mtn' AND status = 'in_stock'")).toBeLessThan(10);
+    expect(stock()).toBe(stockBefore);
     const pin = (w.db.prepare("SELECT pin FROM wallets LIMIT 1").get() as { pin: string }).pin;
     expect(answers[2]).toContain('"balance":500');
     expect(answers[2]).not.toContain(`"pin"`);

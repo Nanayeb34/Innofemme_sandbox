@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BrandBar } from "@/components/brand";
+import { CopyCode, CopyValue, DocsHeader, DocsNav, ToTop, type ContentsPart } from "./chrome";
 import { pageOrigin } from "@/server/qr";
 import { KITS, kitSource } from "@/server/starter";
 import { SYSTEM_PATHS } from "@/server/systems";
@@ -15,24 +15,27 @@ import { EVENTS, POINTS, SAMPLES } from "@/engine/integrations";
 import { SCENARIOS } from "@/engine/simulate";
 import { BANK_IDS, TELCOS, TELCO_INFO } from "@/engine/util";
 
-/** What is on the page, in order. The list on the left and the one at the top are made from this. */
-const CONTENTS: { title: string; items: [id: string, label: string][] }[] = [
+/** "team-01" as people say it. (The same as the client helper, which a server page cannot call.) */
+const teamName = (team: string) => (team === "organiser" ? "Organiser world" : team.replace("team-", "Team "));
+
+/** What is on the page, in order. The contents column and the drop-down on small screens are made from this. */
+const CONTENTS: ContentsPart[] = [
   {
-    title: "Start here",
-    items: [["start", "What the sandbox is"], ["products", "Two ways to build"], ["first", "Your first 15 minutes"], ["assistant", "The assistant"], ["systems", "What each screen is"]],
+    title: "1 · Start here",
+    items: [["start", "What the sandbox is"], ["first", "Your first 15 minutes"], ["words", "Words you will see"], ["systems", "What each screen is"], ["assistant", "The assistant"]],
   },
   {
-    title: "Starter kits",
-    items: [["kits", "The kits"], ["kit-plugin", "Run a plug-in API"], ["kit-app", "Run an application"], ["reach", "Where your API has to be"], ["bridge", "The bridge: an API on your laptop"]],
+    title: "2 · Build",
+    items: [["products", "Two ways to build"], ["developer", "Developer console"], ["kits", "Starter kits"], ["kit-plugin", "Run a plug-in API"], ["kit-app", "Run an application"], ["reach", "Where your API has to be"], ["bridge", "The bridge"]],
   },
   {
-    title: "Reference",
+    title: "3 · API reference",
     items: [
-      ["credentials", "1. Partner credentials"], ["momo", "2. Mobile money API (all networks)"], ["network", "3. Network API (all networks)"], ["bank", "4. Bank API"], ["switch", "5. National switch API"], ["nia", "6. NIA verification"],
+      ["reference", "Which API is for what"], ["credentials", "1. Partner credentials"], ["momo", "2. Mobile money API"], ["network", "3. Network API"], ["bank", "4. Bank API"], ["switch", "5. National switch API"], ["nia", "6. NIA verification"],
       ["plugins", "7. Plug-in points"], ["console", "8. Console API"], ["phones", "9. Phones"], ["settings", "10. Settings"], ["savepoints", "11. Save points"], ["dataset", "12. Simulated data"], ["fraud", "13. Fraud API"],
     ],
   },
-  { title: "Help", items: [["problems", "When something goes wrong"]] },
+  { title: "4 · Help", items: [["problems", "When something goes wrong"]] },
 ];
 
 const KIT_ABOUT = {
@@ -75,180 +78,167 @@ export async function DocsContent({ team }: { team?: string }) {
     );
 
   return (
-    <>
-      <BrandBar subtitle="Documentation" />
-      <div className="mx-auto w-full max-w-6xl px-4 py-6 lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10">
-        <nav aria-label="On this page" className="hidden text-sm lg:block">
-          <div className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto pb-6 pr-2">
-            <Contents />
-          </div>
-        </nav>
+    <div className="flex min-h-full flex-1 flex-col bg-white">
+      <DocsHeader back={home ? { href: home, label: `Back to ${teamName(team!)}` } : { href: "/", label: "Back to home" }} teamLabel={team ? teamName(team) : undefined} />
+      <div className="mx-auto w-full max-w-7xl px-4 pb-24 pt-6 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-12 lg:pt-10">
+        <DocsNav parts={CONTENTS} />
 
-        <main className="min-w-0 text-sm leading-relaxed text-gray-800">
-          <Link href={home ?? "/"} className="text-xs text-gray-500 underline">
-            ← {home ? "All systems" : "Home"}
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold text-gray-900">Documentation</h1>
-          <p className="mt-1 text-gray-600">How to get started, starter kits to copy, every API in full, and what to do when something goes wrong.</p>
+        <main className="docs-prose min-w-0">
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Documentation</h1>
+          <p className="mt-3 max-w-3xl text-lg leading-8 text-gray-600">
+            Everything about the mobile money sandbox: what it is, how to try it in a few minutes, how to build on it, and every API in full. You do not need to be a programmer to read the first part.
+          </p>
+
+          <div className="mt-8 grid gap-4 md:grid-cols-2">
+            <a href="#start" className="group rounded-2xl border border-gray-200 bg-gradient-to-br from-[#f6f2fc] to-white p-5 no-underline hover:border-[#3b1f6e]/40 hover:shadow-md">
+              <div className="text-xs font-semibold uppercase tracking-wider text-[#3b1f6e]">New here? No coding needed</div>
+              <div className="mt-1 text-lg font-semibold text-gray-900">Start here →</div>
+              <p className="mt-1 text-sm leading-6 text-gray-600">What the sandbox is, a 15-minute walk-through with test customers and a real payment, and the words you will meet along the way.</p>
+            </a>
+            <a href="#products" className="group rounded-2xl border border-gray-200 bg-gradient-to-br from-slate-50 to-white p-5 no-underline hover:border-slate-400 hover:shadow-md">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-600">Building something? For developers</div>
+              <div className="mt-1 text-lg font-semibold text-gray-900">Build and API reference →</div>
+              <p className="mt-1 text-sm leading-6 text-gray-600">Write a plug-in in the Developer console, run a starter kit, and look up every endpoint, with examples ready to copy.</p>
+            </a>
+          </div>
 
           {team ? (
-            <div className="card mt-4 grid gap-1 break-all p-4 font-mono text-xs">
-              <div>
-                <span className="text-gray-500">Base URL </span>
-                {base}
+            <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+              <div className="text-sm font-semibold text-gray-900">Your team&apos;s address and key</div>
+              <p className="mt-0.5 text-sm text-gray-600">Already filled into every example on this page. Keep the key inside your team: anyone who has it can change your world.</p>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                <CopyValue label="Base URL" value={base} />
+                <CopyValue label="Team key" value={key} />
               </div>
-              <div>
-                <span className="text-gray-500">Team key </span>
-                {key}
-              </div>
-              <div className="mt-1 font-sans text-gray-600">These are your team&apos;s own. They are already filled into every example on this page. Keep the key inside your team: anyone who has it can change your world.</div>
             </div>
           ) : (
-            <div className="mt-4 rounded-lg border border-[#d9cdee] bg-[#f3effa] p-4 text-gray-800">
-              <b>This is the public copy.</b> The examples use the placeholders <code>YOUR-TEAM</code> and <code>YOUR-TEAM-KEY</code>. Once you have your team link, open <b>Documentation</b> from your team&apos;s home page: the same page, with your own address and key filled
-              into every example, ready to copy.
-            </div>
+            <Callout tone="info" title="This is the public copy">
+              The examples use the placeholders <code>YOUR-TEAM</code> and <code>YOUR-TEAM-KEY</code>. Once you have your team link, open <b>Documentation</b> from your team&apos;s home page: the same page, with your own address and key filled into every
+              example.
+            </Callout>
           )}
 
-          <details className="card mt-4 p-4 lg:hidden">
-            <summary className="cursor-pointer font-semibold text-gray-900">On this page</summary>
-            <div className="mt-3">
-              <Contents />
-            </div>
-          </details>
-
-          <Part>Start here</Part>
+          <Part n={1} title="Start here" about="For everyone. No coding needed." />
 
           <Section title="What the sandbox is" id="start">
             <p>
-              A working copy of Ghana&apos;s mobile money system. The National Identification Authority issues Ghana Cards. Three networks (MTN, Telecel and AT) register SIMs and run wallets. Agents take cash in and pay it out. Banks hold accounts. The national
-              switch (GhIPSS) carries payments between them. The Bank of Ghana and the NCA set the rules. Each has its own screen, and the phones work: you dial the wallet code, send money, get texts and take calls.
+              A working copy of Ghana&apos;s mobile money system, made for building and testing ideas against fraud. Every institution is here, each with its own screen:
             </p>
-            <p>
-              Every team has its own copy, called a <b>world</b>. Nothing you do reaches another team, and you can save your world, roll it back or wipe it whenever you like. Nothing here touches real money or real people.
-            </p>
-          </Section>
-
-          <Section title="Two ways to build" id="products">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="card p-4">
-                <h3 className="font-semibold text-gray-900">An API an institution plugs in</h3>
-                <p className="mt-1">
-                  You build an API. A network, a bank or the national switch calls it at one of its own steps (when a PIN is chosen, when a payment is about to leave, when a SIM is about to be replaced) and does what your API answers.
-                </p>
-                <p className="mt-2 text-xs text-gray-600">
-                  Read <a className="underline" href="#plugins">section 7</a>. Start from <a className="underline" href="#kit-plugin">the plug-in kit</a>.
-                </p>
-              </div>
-              <div className="card p-4">
-                <h3 className="font-semibold text-gray-900">An application of your own</h3>
-                <p className="mt-1">
-                  You build an app or a service that stands outside the institutions and uses what they give an outside company: their partner APIs, with credentials each institution issues to you. All three networks (MTN, Telecel and AT), every bank, the national switch and NIA have one.
-                </p>
-                <p className="mt-2 text-xs text-gray-600">
-                  Read <a className="underline" href="#credentials">sections 1 to 6</a>. Start from <a className="underline" href="#kit-app">the application kit</a>.
-                </p>
-              </div>
+            <div className="my-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {(
+                [
+                  ["NIA", "Issues Ghana Cards: who a person is."],
+                  ["MTN, Telecel and AT", "Register SIMs and run the wallets: MTN MoMo, Telecel Cash, AT Money."],
+                  ["Agents and merchants", "Agents swap cash for e-money. Merchants take payments."],
+                  ["Banks", "Hold accounts, and send money to and from wallets."],
+                  ["National switch", "Carries money between networks and banks."],
+                  ["Bank of Ghana and NCA", "Set the rules: wallet limits, SIM registration."],
+                ] as const
+              ).map(([t, d]) => (
+                <div key={t} className="rounded-xl border border-gray-200 p-3">
+                  <div className="text-sm font-semibold text-gray-900">{t}</div>
+                  <div className="text-sm leading-6 text-gray-600">{d}</div>
+                </div>
+              ))}
             </div>
             <p>
-              Either way, the <b>Fraud console</b> tests what you built: it plays fraud incidents through your world, or sends them straight to your application, and counts how many were stopped (<a className="underline" href="#fraud">section 13</a>). If your
-              work is on data rather than a live service, the simulated country comes with every transaction labelled (<a className="underline" href="#dataset">section 12</a>).
+              The phones work too: you dial the wallet code, send money, get texts and take calls, on screen or on a real phone. Every team has its own copy, called a <b>world</b>. Nothing you do reaches another team, you can save your world and roll it back at any
+              time, and nothing here touches real money or real people.
             </p>
           </Section>
 
           <Section title="Your first 15 minutes" id="first">
-            <ol className="list-decimal space-y-2 pl-5">
-              <li>
-                <b>Open your team&apos;s link.</b> It is on your team card, as a link and as a QR code. You land on {home ? screen("", "your team's home page") : "your team's home page"}, which lists every system.
-              </li>
-              <li>
-                <b>Decide what your world starts with.</b> It starts empty. On the home page, <b>Load the simulated country</b> fills it with thousands of people, their numbers, wallets, agents, merchants, bank accounts and three months of history, part of it fraud.
-                Do this first if you want it: loading replaces what is in the world (what was there is kept as a save point).
-              </li>
-              <li>
-                <b>Create two test customers.</b> On the home page, under <b>A ready test customer</b>, choose a network and press <b>Create a test customer</b>, twice. Each gets a number, a wallet with GHS 500 and a PIN that you are shown. Write the PINs down.
-                (People in the simulated country have PINs too, but you are not told them, as in real life.)
-              </li>
-              <li>
-                <b>Make a payment.</b> Press <b>Open this phone</b> beside the first customer. On the phone, dial the wallet code, choose to send money, enter the second customer&apos;s number and an amount, and confirm with the PIN.
-                The wallet codes: {approvals.map((a, i) => (
-                  <span key={a.name}>
-                    {i > 0 && ", "}
-                    <code>{a.code}</code> for {a.wallet}
-                  </span>
-                ))}
-                .
-              </li>
-              <li>
-                <b>See it from the other side.</b> Open that network&apos;s back office and look under <b>Transactions</b>: the payment is there, with its fee. If the two customers are on different networks, it is also on the national switch under <b>Routed payments</b>.
-              </li>
-              <li>
-                <b>Get a starter kit running</b> (<a className="underline" href="#kits">below</a>), so you have something of your own answering before you write a line of your idea.
-              </li>
-              <li>
-                <b>Run the Fraud console</b> once with nothing built, to see what gets through today. It needs the simulated country loaded.
-              </li>
-            </ol>
-            <p>
-              To use a real phone as a customer&apos;s phone, scan the phone QR code on the home page with it. That phone then shows only the phone, while your laptop keeps the consoles.
-            </p>
+            <p>A short walk-through. Each step takes a minute or two, and you need nothing installed.</p>
+            <Steps
+              steps={[
+                <>
+                  <b>Open your team&apos;s link.</b> It is on your team card, as a link and as a QR code. You land on {home ? screen("", "your team's home page") : "your team's home page"}, with every system in the purple bar at the top.
+                </>,
+                <>
+                  <b>Choose what your world starts with.</b> It starts empty. To fill it with thousands of people, wallets, agents and three months of history (part of it fraud), press <b>Load the simulated country</b> on the home page. Do this first if you
+                  want it: it replaces what is in the world, and keeps the old world as a save point.
+                </>,
+                <>
+                  <b>Create two test customers.</b> On the home page, choose a network and press <b>Create a test customer</b>, twice. Each gets a number, a wallet with GHS 500 and a PIN you are shown once. Write the PINs down.
+                </>,
+                <>
+                  <b>Send money.</b> Press <b>Open this phone</b> beside the first customer. Dial the wallet code, choose to send money, enter the second customer&apos;s number and an amount, and confirm with the PIN. The wallet codes:{" "}
+                  {approvals.map((a, i) => (
+                    <span key={a.name}>
+                      {i > 0 && ", "}
+                      <code>{a.code}</code> for {a.wallet}
+                    </span>
+                  ))}
+                  .
+                </>,
+                <>
+                  <b>See it from the other side.</b> Open the network from <b>Telcos</b> in the top bar, then its back office, and look under <b>Transactions</b>: the payment is there, with its fee. Between two networks, it is also on the national switch.
+                </>,
+                <>
+                  <b>Try a fraud check.</b> Open <b>Developer</b>, create a plug-in from <b>New-payee warning</b>, and plug it into the network. Send money to someone new: the phone warns you first. See <a href="#developer">Developer console</a>.
+                </>,
+              ]}
+            />
+            <Callout tone="tip" title="Use a real phone">
+              Scan the <b>customer phone</b> QR code on the home page with your phone. It then works as that customer&apos;s phone, while your laptop keeps the consoles. Both must be on the same network as the sandbox, or it must be on the internet.
+            </Callout>
           </Section>
 
-          <Section title="The assistant" id="assistant">
-            <p>
-              You can also tell the sandbox what you want in plain words. The assistant is a small team of AI agents that works in your world on your instructions: it does the work step by step, shows each step as it happens, and tells you what happened. Open it with
-              the <b>Assistant</b> button in the corner of any page, or on its own page from {home ? screen("/assistant", "your team's home") : "your team's home page"}. If the button is not there, the organisers have not switched the assistant on.
-            </p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>
-                <b>What you can ask for.</b> Anything that can be done at the consoles or on a phone: &quot;create two test customers on MTN and send GHS 20 from one to the other&quot;, &quot;set up a mobile money agent on Telecel with GHS 5,000 of float&quot;, &quot;raise the
-                daily limit for minimum KYC wallets&quot;, &quot;plug my API at bridge://laptop into payments on MTN and test it&quot;, &quot;run 10 SIM swap incidents and tell me what got through&quot;, &quot;how many failed payments were there yesterday, by reason&quot;, &quot;how does my
-                application ask a customer for a payment&quot;.
-              </li>
-              <li>
-                <b>Who does the work.</b> The assistant hands each job to a specialist: a builder for setting things up, an operator who uses phones and counters, an integrator for your API and the fraud simulator, an analyst for the data, and a guide who
-                answers from this documentation. You see who is working and each step they take.
-              </li>
-              <li>
-                <b>It asks first.</b> Before wiping your world, rolling it back, or removing something, it shows you what it wants to do and waits for <b>Approve</b> or <b>Decline</b>.
-              </li>
-              <li>
-                <b>What it will not do.</b> It works only in your own team&apos;s world. It never shows a wallet PIN, except for a customer it created for you. It does not suggest what to build: that is yours to decide.
-              </li>
-              <li>
-                <b>Check its work.</b> It reports what its tools returned, and it can be wrong, as any assistant can. Everything it does is on the consoles for you to see.
-              </li>
-            </ul>
-            <p className="text-xs text-gray-600">
-              What you say to the assistant, and what it reads from your world to answer, is sent to the AI service that runs it. Your team key is not. From a script: <code>POST {"{base}"}/assistant</code> with <code>{`{"text": "…"}`}</code> and your team key; the
-              answer comes back as a stream of events.
-            </p>
+          <Section title="Words you will see" id="words">
+            <dl className="my-2 grid gap-x-8 gap-y-3 md:grid-cols-2">
+              {(
+                [
+                  ["World", "Your team's own copy of the whole system. Save it, roll it back, or wipe it from the home page."],
+                  ["Wallet", "A mobile money account tied to a phone number, such as MTN MoMo."],
+                  ["Ghana Card", "The national ID card. NIA issues it; it is needed to register a SIM or open a wallet."],
+                  ["Fingerprint code", "Stands in for a person's fingerprints wherever a biometric check is done (e.g. FP-7KQ2XA)."],
+                  ["KYC level", "How well a customer has been identified: minimum, medium or enhanced. Higher levels allow larger balances and payments."],
+                  ["Short code (USSD)", "What you dial for a menu, such as *170#. The menu then appears on the phone's screen."],
+                  ["Agent", "A shop that gives cash for e-money and e-money for cash, and opens wallets for customers."],
+                  ["Float", "The e-money an agent holds to serve customers. Agents buy it from a bank."],
+                  ["Merchant", "A business that accepts wallet payments, identified by a merchant (till) number."],
+                  ["SIM swap", "Moving a number to a new SIM card. Fraudsters use it to take over accounts."],
+                  ["National switch", "The system (GhIPSS) that carries money between different networks and banks."],
+                  ["Plug-in", "Code that an institution asks at one of its steps, such as just before a payment. It can allow, warn, delay or refuse."],
+                  ["API", "A way for programs to talk to each other. Every institution here has one."],
+                  ["Team key", "Your team's password for the sandbox's own API. Keep it inside your team."],
+                ] as const
+              ).map(([t, d]) => (
+                <div key={t} className="border-b border-gray-100 pb-3">
+                  <dt className="font-semibold text-gray-900">{t}</dt>
+                  <dd className="text-[14px] leading-6 text-gray-600">{d}</dd>
+                </div>
+              ))}
+            </dl>
           </Section>
 
           <Section title="What each screen is" id="systems">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-left text-xs">
-                <tbody>
+            <p>Every screen is one click away in the purple bar at the top of your team&apos;s home page.</p>
+            <div className="mt-3 overflow-hidden rounded-xl border border-gray-200">
+              <table className="w-full text-left">
+                <tbody className="divide-y divide-gray-100">
                   {(
                     [
-                      ["", "Team home", "Where everything starts: every system, the QR codes for phones, test customers, the simulated country, save points."],
-                      ["/nia", "NIA", "The Ghana Card register. Enrols people; shows every identity check institutions have made."],
-                      ["/nca", "NCA", "SIM registration rules, the central register of every number against its Ghana Card, USSD short codes."],
-                      ["/bog", "Bank of Ghana", "KYC limits for wallets, and whether each network's e-money is fully backed."],
-                      ["/telco/mtn", "A network's back office", "SIM stock, registration points, wallets, agents, merchants, transactions, calls, texts, services, fees and menus, API partners, Plug-ins. One each for MTN, Telecel and AT."],
+                      ["", "Team home", "Where everything starts: test customers, the simulated country, phone QR codes, recent activity, save points."],
+                      ["/developer", "Developer console", "Write your own plug-ins in JavaScript or Python. The sandbox runs them for you."],
+                      ["/telcos/mtn", "A network's page", "Everything one network runs, in one place. One each for MTN, Telecel and AT."],
+                      ["/telco/mtn", "A network's back office", "SIM stock, wallets, agents, merchants, transactions, calls and texts, fees and menus, API partners, plug-ins."],
+                      ["/sim-agent/mtn", "SIM registration point", "Registers a SIM against a Ghana Card, replaces a SIM, resets a PIN, raises KYC. Each network's head office is open from the start."],
+                      ["/momo-agent/mtn", "Mobile money agent", "Open an agent from the owner's Ghana Card, then cash in, cash out and open wallets for customers."],
                       ["/care/mtn", "Customer care", "A network's call centre: complaints, disputes, holds and returning money."],
-                      ["/sim-agent/mtn", "SIM registration point", "Registers a SIM against a Ghana Card and fingerprint, replaces a SIM, resets a wallet PIN, raises KYC."],
-                      ["/momo-agent/mtn", "Mobile money agent", "Opens wallets in person, takes cash in, pays cash out."],
                       ["/phone", "Phone", "Any registered number: dial codes, messages, calls, the wallet."],
-                      ["/bank/gcb", "A bank", "Accounts, the counter, transfers, agent float, the cash machine, API partners, Plug-ins."],
-                      ["/switch", "National switch", "Payments between networks and banks, what each owes, settlement, Plug-ins."],
-                      ["/fraud", "Fraud console", "Plays fraud incidents against what you built and shows the results."],
-                      ["/assistant", "Assistant", "Tell it what you want done in your world, in plain words, and it does it."],
+                      ["/nia", "NIA", "The Ghana Card register, and every identity check made."],
+                      ["/nca", "NCA", "SIM registration rules and the central register of numbers."],
+                      ["/bog", "Bank of Ghana", "Wallet limits, and whether each network's e-money is fully backed."],
+                      ["/bank/gcb", "A bank", "Accounts, the counter, transfers, agent float, API partners, plug-ins."],
+                      ["/switch", "National switch", "Payments between networks and banks, what each owes, settlement."],
+                      ["/fraud", "Fraud console", "Plays fraud incidents against what you built and counts how many were stopped."],
+                      ["/assistant", "Assistant", "Tell it what you want done in plain words, and it does it."],
                     ] as const
                   ).map(([path, name, about]) => (
-                    <tr key={name} className="border-b border-gray-100 align-top">
-                      <td className="whitespace-nowrap px-2 py-2 font-medium text-gray-900">{home ? <Link className="underline" href={`${home}${path}`}>{name}</Link> : name}</td>
-                      <td className="px-2 py-2">{about}</td>
+                    <tr key={name} className="align-top">
+                      <td className="w-56 whitespace-nowrap px-4 py-2.5 font-medium text-gray-900">{home ? <Link href={`${home}${path}`}>{name}</Link> : name}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{about}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -256,9 +246,195 @@ export async function DocsContent({ team }: { team?: string }) {
             </div>
           </Section>
 
-          <Part>Starter kits</Part>
+          <Section title="The assistant" id="assistant">
+            <p>
+              You can also tell the sandbox what you want in plain words. The assistant is a small team of AI agents that works in your world: it does the job step by step, shows each step, and tells you what happened. Open it with the <b>Assistant</b> button
+              {home ? <> on {screen("/assistant", "your team's home page")}</> : " on your team's home page"}. If it is not there, the organisers have not switched it on.
+            </p>
+            <ul>
+              <li>
+                <b>Ask for anything you could do on the screens:</b> &quot;create two test customers on MTN and send GHS 20 from one to the other&quot;, &quot;set up an agent on Telecel with GHS 5,000 of float&quot;, &quot;how many payments failed yesterday, and why?&quot;
+              </li>
+              <li>
+                <b>It asks first</b> before wiping your world, rolling it back, or removing anything, and waits for you to approve.
+              </li>
+              <li>
+                <b>It stays in your world.</b> It never shows a wallet PIN, except for a customer it created for you, and it does not suggest what to build: that is yours to decide.
+              </li>
+              <li>
+                <b>Check its work.</b> It can be wrong, as any assistant can. Everything it does shows on the screens.
+              </li>
+            </ul>
+            <Callout tone="note">
+              What you say to the assistant, and what it reads from your world to answer, is sent to the AI service that runs it. Your team key is not. From a script: <code>POST {"{base}"}/assistant</code> with <code>{`{"text": "…"}`}</code> and your team key.
+            </Callout>
+          </Section>
 
-          <Section title="The kits" id="kits">
+          <Part n={2} title="Build" about="For developers: plug-ins, starter kits, and where your code runs." />
+
+          <Section title="Two ways to build" id="products">
+            <div className="my-3 grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-gray-200 p-4">
+                <div className="text-base font-semibold text-gray-900">A plug-in an institution asks</div>
+                <p className="mt-1 text-[14px] leading-6">
+                  A network, a bank or the national switch asks your code at one of its own steps (a PIN being chosen, a payment about to leave, a SIM about to be replaced) and does what it answers. Write it in the <a href="#developer">Developer console</a>, or run
+                  it yourself (<a href="#kit-plugin">plug-in kit</a>).
+                </p>
+              </div>
+              <div className="rounded-xl border border-gray-200 p-4">
+                <div className="text-base font-semibold text-gray-900">An application of your own</div>
+                <p className="mt-1 text-[14px] leading-6">
+                  An app or service outside the institutions that uses what they give outside companies: their partner APIs, with credentials each one issues to you. See <a href="#credentials">sections 1 to 6</a> and the <a href="#kit-app">application kit</a>.
+                </p>
+              </div>
+            </div>
+            <p>
+              Either way, the <b>Fraud console</b> tests what you built: it plays fraud incidents through your world and counts how many were stopped (<a href="#fraud">section 13</a>). For work on data, the simulated country comes with every transaction labelled (
+              <a href="#dataset">section 12</a>).
+            </p>
+          </Section>
+
+          <Section title="Developer console" id="developer">
+            <p>
+              The quickest way to build a plug-in: write it in your browser, in <b>JavaScript</b> or <b>Python</b>, and the sandbox runs it for you. No server, no bridge, nothing to install. Open it with the <b>Developer</b> button
+              {home ? <> on {screen("/developer", "your team's home page")}</> : " on your team's home page"}.
+            </p>
+            <Steps
+              steps={[
+                <>
+                  Press <b>+ New plug-in</b>. Give it a name, pick the language, and start from <b>Blank</b> or a ready example such as <b>New-payee warning</b>.
+                </>,
+                <>
+                  Write your rules in <code>decide(point, data, ctx)</code> and press <b>Save and run</b> (or ⌘S / Ctrl+S). A mistake shows straight away.
+                </>,
+                <>
+                  Under <b>Try it</b>, send it the example a network would send at a step, and see its answer. Nothing happens for real.
+                </>,
+                <>
+                  Under <b>Plug it in</b>, choose a network, bank or the switch, and the step. From then on that step asks your code. Its <code>print()</code> / <code>console.log()</code> output and every question it was asked appear under <b>Output</b>.
+                </>,
+              ]}
+            />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <CopyCode label="plugin.py">{`def decide(point, data, ctx):
+    # point: the step, e.g. "payment.authorize"
+    # data:  what is about to happen (try a step to see it)
+    # ctx:   ctx.store.get/set/delete keeps things between questions
+    if point == "payment.authorize" and data["amount"] > 1000:
+        return {"decision": "warn",
+                "message": "This is a large payment. Is it genuine?"}
+    return {"decision": "allow"}`}</CopyCode>
+              <CopyCode label="plugin.mjs">{`export function decide(point, data, ctx) {
+  // point: the step, e.g. "payment.authorize"
+  // data:  what is about to happen (try a step to see it)
+  // ctx:   ctx.store.get/set/delete keeps things between questions
+  if (point === "payment.authorize" && data.amount > 1000) {
+    return { decision: "warn",
+             message: "This is a large payment. Is it genuine?" };
+  }
+  return { decision: "allow" };
+}`}</CopyCode>
+            </div>
+
+            <h3 className="pt-4 text-lg font-semibold text-gray-900">How decide() works</h3>
+            <p>
+              Think of it as a question the institution asks your code at one moment, such as just before a payment leaves a wallet: <i>&quot;this is about to happen, shall I go ahead?&quot;</i>. Your function gets three things and gives back one answer.
+            </p>
+            <div className="my-4 overflow-hidden rounded-xl border border-gray-200">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50 text-xs font-semibold tracking-wide text-gray-500 uppercase">
+                  <tr>
+                    <th className="w-36 px-4 py-2.5">Name</th>
+                    <th className="px-4 py-2.5">What it is</th>
+                    <th className="hidden px-4 py-2.5 md:table-cell">Example</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 align-top">
+                  <tr>
+                    <td className="px-4 py-3">
+                      <code>point</code>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <b>Which moment it is</b>: the step you plugged the code into. One plug-in can be plugged in at several steps, and <code>point</code> tells you which one is asking now. <code>events</code> is the odd one out: it reports things that have already
+                      happened, and your answer is ignored.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>&quot;payment.authorize&quot;</code>
+                      <br />
+                      <code>&quot;sim.swap&quot;</code>
+                      <br />
+                      <code>&quot;events&quot;</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3">
+                      <code>data</code>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <b>The facts about what is about to happen</b>, as an object (a dict in Python). What is in it depends on the step: for a payment, the amount, who is paying, who is being paid and how often they have paid them before. The{" "}
+                      <b>Test</b> tab in the console shows the real example for every step, and <a href="#plugins">section 7</a> lists them all.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>data.amount</code>
+                      <br />
+                      <code>data.payer.msisdn</code>
+                      <br />
+                      <code>data.payee.name</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3">
+                      <code>ctx</code>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <b>Your toolbox</b> (short for context). <code>ctx.store</code> is a small memory that survives between questions and restarts: <code>get(key)</code>, <code>set(key, value)</code>, <code>delete(key)</code>. <code>ctx.institution</code> says who is
+                      asking (e.g. <code>mtn</code>), <code>ctx.world</code> which team&apos;s world, and <code>ctx.log(…)</code> writes to the Output panel.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>ctx.store.get(&quot;seen&quot;)</code>
+                      <br />
+                      <code>ctx.institution</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3">
+                      <b>The answer</b>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      What the institution should do, with an optional <code>message</code> shown to the customer: <code>allow</code> (go ahead), <code>warn</code> (show the message; the customer chooses to continue or cancel), <code>delay</code> (refuse for now,
+                      with <code>minutes</code> before it may be tried again) or <code>reject</code> (refuse). Return nothing and it counts as <code>allow</code>.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>{`{ "decision": "warn", "message": "…" }`}</code>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              Here is the <code>data</code> a network sends at <code>payment.authorize</code>, just before money leaves a customer&apos;s wallet:
+            </p>
+            <CopyCode label="data at payment.authorize">{JSON.stringify(SAMPLES["payment.authorize"], null, 2)}</CopyCode>
+            <Callout tone="tip" title="Not sure what a step sends?">
+              Write <code>print(data)</code> (Python) or <code>console.log(data)</code> (JavaScript) in your function, save, and press <b>Send a test</b> on the <b>Test</b> tab. The full example appears under <b>Output</b>.
+            </Callout>
+            <ul>
+              <li>
+                <b>Answers:</b> <code>allow</code>, <code>warn</code> (the customer sees your message and chooses), <code>delay</code> (with <code>minutes</code>) or <code>reject</code>. Each step accepts only some of them; the console tells you which.
+              </li>
+              <li>
+                <b>Remembering things:</b> <code>ctx.store</code> keeps values between questions and restarts. Plug the same code in at <code>events</code> to learn from payments that went through.
+              </li>
+              <li>
+                <b>Limits:</b> the language&apos;s own standard library only, about 2 seconds to answer, and only its own folder on disk. A plug-in that is idle for 20 minutes is paused and starts again with the next question.
+              </li>
+              <li>
+                <b>Its address</b> looks like <code>code://code_…</code>. It also works in any institution&apos;s <b>Plug-ins</b> tab. What each step sends is in <a href="#plugins">section 7</a>.
+              </li>
+            </ul>
+          </Section>
+
+          <Section title="Starter kits" id="kits">
             <p>
               Small working files to copy and change. They do the plumbing (receiving a question, signing in, sending an answer in the right shape) and nothing else: what to build is yours. None needs anything installed beyond Python or Node.js itself.
               The last two are not something to build on: the bridge is a helper you run as it is.
@@ -284,7 +460,7 @@ export async function DocsContent({ team }: { team?: string }) {
                 </div>
               ))}
             </div>
-            <p className="text-xs text-gray-600">The same files are in the <code>examples</code> folder of the sandbox&apos;s repository.</p>
+            <p className="text-[14px] text-gray-600">The same files are in the <code>examples</code> folder of the sandbox&apos;s repository.</p>
           </Section>
 
           <Section title="Run a plug-in API" id="kit-plugin">
@@ -294,7 +470,7 @@ export async function DocsContent({ team }: { team?: string }) {
                 <code>Listening on port 4010</code>.
               </li>
               <li>
-                Make sure the sandbox can reach it: see <a className="underline" href="#reach">where your API has to be</a>. From a laptop, that means starting <a className="underline" href="#bridge">the bridge</a> and using <code>bridge://laptop</code> as the address.
+                Make sure the sandbox can reach it: see <a href="#reach">where your API has to be</a>. From a laptop, that means starting <a href="#bridge">the bridge</a> and using <code>bridge://laptop</code> as the address.
               </li>
               <li>
                 Open the console of the institution that should ask it, for example {screen("/telco/mtn", "the MTN back office")}, and go to <b>Plug-ins</b>. Under <b>Plug in an API</b>, give it a name, choose the step, and enter its address.
@@ -312,8 +488,8 @@ export async function DocsContent({ team }: { team?: string }) {
 { "decision": "warn",   "message": "Shown first. The customer chooses whether to continue." }
 { "decision": "delay",  "minutes": 10, "message": "Refused now; can be tried again after the pause." }`}</Code>
             <p>
-              Which answers each step accepts, and exactly what it sends you, is in <a className="underline" href="#plugins">section 7</a>. While it is deciding, your API can ask the sandbox anything it likes, such as whether a SIM was replaced lately
-              (<a className="underline" href="#network">section 3</a>).
+              Which answers each step accepts, and exactly what it sends you, is in <a href="#plugins">section 7</a>. While it is deciding, your API can ask the sandbox anything it likes, such as whether a SIM was replaced lately
+              (<a href="#network">section 3</a>).
             </p>
           </Section>
 
@@ -344,7 +520,7 @@ node app.mjs --sandbox ${base} --client-id … --api-key … --number 024…
               .
             </p>
             <p>
-              An application that should be <em>sent</em> fraud incidents by the Fraud API receives them in the same format as a plug-in API, so start that part from the plug-in kit and connect it as <a className="underline" href="#fraud">section 13</a> describes.
+              An application that should be <em>sent</em> fraud incidents by the Fraud API receives them in the same format as a plug-in API, so start that part from the plug-in kit and connect it as <a href="#fraud">section 13</a> describes.
             </p>
           </Section>
 
@@ -358,7 +534,7 @@ node app.mjs --sandbox ${base} --client-id … --api-key … --number 024…
                 </p>
                 <ol className="list-decimal space-y-1 pl-5">
                   <li>
-                    <b>The bridge (simplest).</b> Keep your API on your laptop and run the bridge beside it. Nothing to install, no account, and the address never changes. See <a className="underline" href="#bridge">the next section</a>.
+                    <b>The bridge (simplest).</b> Keep your API on your laptop and run the bridge beside it. Nothing to install, no account, and the address never changes. See <a href="#bridge">the next section</a>.
                   </li>
                   <li>
                     <b>Host it.</b> Put the API on any hosting service that gives it a public <code>https://</code> address, and use that address. This does not depend on a laptop staying awake, so it is the steadiest choice for a final demonstration.
@@ -371,7 +547,7 @@ node app.mjs --sandbox ${base} --client-id … --api-key … --number 024…
             ) : (
               <p>
                 <b>This sandbox is running on your own machine or in a Codespace, so an address on the same machine works as it is:</b> with a kit running on port 4010, use <code>http://localhost:4010/</code>. On a sandbox shared by every team it is different: that
-                one cannot call your laptop, so there you run <a className="underline" href="#bridge">the bridge</a>, host the API at a public <code>https://</code> address, or open a tunnel. The bridge works here too, if you want to practise with it.
+                one cannot call your laptop, so there you run <a href="#bridge">the bridge</a>, host the API at a public <code>https://</code> address, or open a tunnel. The bridge works here too, if you want to practise with it.
               </p>
             )}
             <p>
@@ -387,7 +563,7 @@ node app.mjs --sandbox ${base} --client-id … --api-key … --number 024…
             <ol className="list-decimal space-y-2 pl-5">
               <li>Start your API on your laptop, for example a plug-in kit on port 4010.</li>
               <li>
-                Download <code>bridge.py</code> or <code>bridge.mjs</code> (<a className="underline" href="#kits">above</a>) and start it beside your API. It does not matter which one you use, whatever your API is written in:
+                Download <code>bridge.py</code> or <code>bridge.mjs</code> (<a href="#kits">above</a>) and start it beside your API. It does not matter which one you use, whatever your API is written in:
               </li>
             </ol>
             <Code>{`python3 bridge.py --sandbox ${base} --key ${key}
@@ -422,26 +598,32 @@ node bridge.mjs --sandbox ${base} --key ${key}
             </ul>
           </Section>
 
-          <Part>Reference</Part>
-          <p className="mt-2 text-gray-600">There are four kinds of API here, and they are for different jobs.</p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-700">
-            <li>
-              <b>Partner APIs</b> (sections 1 to 6) are what an institution gives an outside company, such as a licensed payments or messaging business. You call them with credentials that institution issued, not with your team key.
-            </li>
-            <li>
-              <b>Plug-in points</b> (section 7) work the other way round: <em>you</em> build an API, and a network, a bank or the national switch plugs it into one of its own steps. It asks your API every time that step happens and does what you answer.
-            </li>
-            <li>
-              <b>Console API</b> (sections 8 to 12) does everything the consoles do, with your team key. Use it to set up your world from a script, or when your team is acting as the institution itself.
-            </li>
-            <li>
-              <b>Fraud API</b> (section 13) tests what you have built: it plays fraud incidents through the sandbox, or sends them straight to your application, and your team&apos;s console shows how many were stopped.
-            </li>
-          </ul>
-          <p className="mt-2 text-xs text-gray-600">
-            Base URL: <code className="break-all">{base}</code>. Amounts are in cedis. Your own web page can call any of this straight from the browser, wherever the page is served from, with the key or the credentials in a header; a page on another site cannot use a
-            console sign-in.
-          </p>
+          <Part n={3} title="API reference" about="Every endpoint, with examples ready to copy. Amounts are in cedis." />
+
+          <Section title="Which API is for what" id="reference">
+            <div className="my-3 grid gap-3 md:grid-cols-2">
+              {(
+                [
+                  ["Partner APIs", "Sections 1 to 6", "What an institution gives an outside company. You call them with credentials that institution issued, not your team key."],
+                  ["Plug-in points", "Section 7", "The other way round: an institution asks your code at one of its steps, and does what you answer."],
+                  ["Console API", "Sections 8 to 12", "Everything the screens do, with your team key. Use it to set up your world from a script."],
+                  ["Fraud API", "Section 13", "Tests what you built: plays fraud incidents and counts how many were stopped."],
+                ] as const
+              ).map(([t, where, d]) => (
+                <div key={t} className="rounded-xl border border-gray-200 p-4">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-semibold text-gray-900">{t}</span>
+                    <span className="text-xs text-gray-500">{where}</span>
+                  </div>
+                  <p className="mt-1 text-[14px] leading-6 text-gray-600">{d}</p>
+                </div>
+              ))}
+            </div>
+            <div className="max-w-3xl">
+              <CopyValue label="Base URL" value={base} />
+            </div>
+            <p className="text-[14px] text-gray-600">Your own web page can call any of this straight from the browser, with the key or the credentials in a header.</p>
+          </Section>
 
           <Section title="1. Getting partner credentials" id="credentials">
             <p>
@@ -570,7 +752,7 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
 
           <Section title="7. Plug-in points: your API inside an institution's system" id="plugins">
             <p>
-              Put your API where the sandbox can reach it (see <a className="underline" href="#reach">where your API has to be</a>)
+              Put your API where the sandbox can reach it (see <a href="#reach">where your API has to be</a>)
               , then open the console of a network, a bank or the national switch, go to <b>Plug-ins</b>, and enter its address and the step it should be asked at. From then on the institution sends a <code>POST</code> with a JSON body to your address every time that step
               happens, waits for your answer (2 seconds by default), and acts on it. The same tab shows every question it asked and what you answered, and has a <b>Send a test</b> button.
             </p>
@@ -583,7 +765,7 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
 { "decision": "warn",   "message": "Shown first. The customer then chooses 1) Continue or 2) Cancel." }
 { "decision": "delay",  "minutes": 10, "message": "The payment is refused now and can be tried again after the pause." }`}</Code>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-left text-xs">
+              <table className="w-full min-w-[560px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 text-[11px] uppercase tracking-wide text-gray-500">
                     <th className="px-2 py-2 font-medium">Step</th>
@@ -634,7 +816,7 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
               </details>
             ))}
             <p>
-              The <a className="underline" href="#kits">starter kits</a> <code>plugin_api.py</code> and <code>plugin-api.mjs</code> answer &quot;allow&quot; to everything and print what they were sent. Plug an API in from a script:
+              The <a href="#kits">starter kits</a> <code>plugin_api.py</code> and <code>plugin-api.mjs</code> answer &quot;allow&quot; to everything and print what they were sent. Plug an API in from a script:
             </p>
             <Code>{`curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"plugin_add","name":"My API","point":"payment.authorize","url":"https://your-api.example.com/","ifDown":"carry_on"}'`}</Code>
           </Section>
@@ -646,12 +828,15 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
             <Code>{`# NIA issues a Ghana Card
 curl -X POST ${base}/s/nia ${auth} ${json} -d '{"action":"enrol","firstNames":"Ama","surname":"Owusu","dob":"1994-03-12","gender":"F","region":"Ashanti","town":"Kumasi"}'
 
-# MTN adds SIM stock and authorises a service centre
+# MTN's head office registers a SIM straight away (card + fingerprint are checked with NIA; it keeps its own blank SIMs)
+curl -X POST ${base}/s/sim-agent/mtn ${auth} ${json} -d '{"action":"register","agent":"MTN-HQ","card":"GHA-…","fingerprint":"FP-…"}'
+
+# Optional: MTN adds SIM stock and authorises a service centre of its own
 curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"add_sims","count":10}'
 curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"onboard_sim_agent","kind":"service_centre","name":"Adum Service Centre","town":"Kumasi","card":"GHA-…"}'
 
-# The service centre registers a SIM (card + fingerprint are checked with NIA)
-curl -X POST ${base}/s/sim-agent/mtn ${auth} ${json} -d '{"action":"register","agent":"MTN-SC-0001","card":"GHA-…","fingerprint":"FP-…"}'
+# MTN opens a mobile money agent from the owner's Ghana Card: a new agent line, an agent number, and GHS 1,000 of float
+curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"open_momo_agent","card":"GHA-…","fingerprint":"FP-…","name":"Yaw Mobile Money Centre","town":"Suame","pin":"4826","float":1000}'
 
 # MTN gives a company API access (the answer carries its client ID and API key)
 curl -X POST ${base}/s/telco/mtn ${auth} ${json} -d '{"action":"api_partner_create","name":"PayLink Ghana","till":"100001"}'
@@ -776,11 +961,11 @@ curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect",
             </p>
           </Section>
 
-          <Part>Help</Part>
+          <Part n={4} title="Help" about="What an error means, and what to do about it." />
 
           <Section title="When something goes wrong" id="problems">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-left text-xs">
+              <table className="w-full min-w-[560px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 text-[11px] uppercase tracking-wide text-gray-500">
                     <th className="px-2 py-2 font-medium">What you see</th>
@@ -818,7 +1003,8 @@ curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect",
           </Section>
         </main>
       </div>
-    </>
+      <ToTop />
+    </div>
   );
 }
 
@@ -826,7 +1012,7 @@ curl -X POST ${base}/fraud-simulator ${auth} ${json} -d '{"action":"disconnect",
 function NetworkAddresses({ base, api }: { base: string; api: "momo" | "network" }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[480px] text-left text-xs">
+      <table className="w-full min-w-[480px] text-left text-sm">
         <thead>
           <tr className="border-b border-gray-200 text-[11px] uppercase tracking-wide text-gray-500">
             <th className="px-2 py-2 font-medium">Network</th>
@@ -850,40 +1036,73 @@ function NetworkAddresses({ base, api }: { base: string; api: "momo" | "network"
   );
 }
 
-function Contents() {
+function Part({ n, title, about }: { n: number; title: string; about: string }) {
   return (
-    <div className="space-y-4">
-      {CONTENTS.map((part) => (
-        <div key={part.title}>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">{part.title}</div>
-          <ul className="mt-1 space-y-1">
-            {part.items.map(([id, label]) => (
-              <li key={id}>
-                <a href={`#${id}`} className="text-gray-700 hover:text-[#3b1f6e] hover:underline">
-                  {label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+    <div className="mt-16 mb-2 flex items-end gap-4 border-b-2 border-gray-900 pb-3">
+      <span className="text-4xl font-bold leading-none text-[#3b1f6e]/25">{String(n).padStart(2, "0")}</span>
+      <div>
+        <div className="text-2xl font-bold tracking-tight text-gray-900">{title}</div>
+        <div className="text-sm text-gray-500">{about}</div>
+      </div>
     </div>
   );
 }
 
-function Part({ children }: { children: React.ReactNode }) {
-  return <div className="mt-10 border-b border-gray-200 pb-1 text-xs font-semibold uppercase tracking-[0.15em] text-[#3b1f6e]">{children}</div>;
-}
-
 function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
   return (
-    <section id={id} className="mt-6 scroll-mt-4 space-y-2">
-      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+    <section id={id} className="group mt-10 scroll-mt-24 space-y-3">
+      <h2 className="flex items-center gap-2 text-xl font-semibold tracking-tight text-gray-900">
+        {title}
+        {id && (
+          <a href={`#${id}`} aria-label={`Link to ${title}`} className="text-base font-normal text-gray-300 no-underline opacity-0 group-hover:opacity-100">
+            #
+          </a>
+        )}
+      </h2>
       {children}
     </section>
   );
 }
 
-function Code({ children }: { children: string }) {
-  return <pre className="overflow-x-auto rounded-lg bg-gray-900 p-3 font-mono text-xs leading-relaxed text-gray-100">{children}</pre>;
+function Code({ children, label }: { children: string; label?: string }) {
+  return <CopyCode label={label}>{children}</CopyCode>;
+}
+
+/** Numbered steps, easy to follow one at a time. */
+function Steps({ steps }: { steps: React.ReactNode[] }) {
+  return (
+    <ol className="!my-4 !list-none !space-y-3 !pl-0">
+      {steps.map((s, i) => (
+        <li key={i} className="flex gap-3">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#3b1f6e] text-sm font-semibold text-white">{i + 1}</span>
+          <div className="min-w-0 flex-1">{s}</div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+const TONES = {
+  note: { box: "border-gray-200 bg-gray-50", head: "text-gray-900", icon: "ℹ" },
+  info: { box: "border-[#d9cdee] bg-[#f6f2fc]", head: "text-[#3b1f6e]", icon: "ℹ" },
+  tip: { box: "border-emerald-200 bg-emerald-50", head: "text-emerald-900", icon: "✓" },
+  warn: { box: "border-amber-200 bg-amber-50", head: "text-amber-900", icon: "!" },
+} as const;
+
+/** A note set apart from the text: a tip, a warning, or something worth knowing. */
+function Callout({ tone = "note", title, children }: { tone?: keyof typeof TONES; title?: string; children: React.ReactNode }) {
+  const t = TONES[tone];
+  return (
+    <div className={`my-4 max-w-3xl rounded-xl border px-4 py-3 text-[14px] leading-6 ${t.box}`}>
+      {title && (
+        <div className={`mb-0.5 font-semibold ${t.head}`}>
+          <span aria-hidden className="mr-1.5">
+            {t.icon}
+          </span>
+          {title}
+        </div>
+      )}
+      <div className="text-gray-700">{children}</div>
+    </div>
+  );
 }

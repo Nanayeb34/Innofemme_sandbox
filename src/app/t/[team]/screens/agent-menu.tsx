@@ -12,16 +12,17 @@ export default function AgentMenu({ team, role, logos }: { team: string; role: s
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-5">
       <div className="mb-4 flex items-center gap-3">
+        {role === "team" && (
+          <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700">
+            ← All systems
+          </Link>
+        )}
         <InnofemmeLogo size={32} />
         <div className="mr-auto leading-tight">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-[#3b1f6e]">{teamName(team)}</div>
           <h1 className="text-lg font-semibold text-gray-900">Agent phone</h1>
         </div>
-        {role === "team" ? (
-          <Link href={`/t/${team}`} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700">
-            ← All systems
-          </Link>
-        ) : (
+        {role !== "team" && (
           <Link href={`/t/${team}/console`} className="text-xs text-gray-500 underline">
             Use this device for the consoles
           </Link>

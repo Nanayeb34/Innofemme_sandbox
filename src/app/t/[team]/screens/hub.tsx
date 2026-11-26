@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { InnofemmeLogo } from "@/components/brand";
 import { TelcoMark } from "@/components/telco-mark";
 import { Activity, Loading, useView, type ActivityRow } from "@/components/ui";
 import { api, teamName, when } from "@/lib/client";
+import { Select } from "@/components/select";
+import { ChevronDown } from "lucide-react";
+import { askConfirm } from "@/stores/ui";
 
 interface HubView {
   counts: Record<string, number>;
@@ -26,128 +29,129 @@ interface PhoneCode {
   qr: string;
 }
 
+const TELCO_COLOR: Record<string, string> = { mtn: "#ffcb05", telecel: "#e60000", at: "#1f3c88" };
+
 export default function Hub({ team, logos, phones, consoles }: { team: string; logos: Record<string, string | null>; phones: PhoneCode[]; consoles?: PhoneCode & { key: string } }) {
   const { data, error, refresh } = useView<HubView>(team, "/s/hub", 4000);
   const base = `/t/${team}`;
   const next = data?.steps.find((s) => !s.done);
+  const done = data?.steps.filter((s) => s.done).length ?? 0;
 
   return (
     <div className="flex min-h-full flex-1 flex-col">
-      <header className="border-b border-gray-200 bg-white">
+      <header className="bg-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
           <InnofemmeLogo size={36} />
           <div className="mr-auto leading-tight">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-[#3b1f6e]">Mobile money sandbox</div>
-            <h1 className="text-lg font-semibold text-gray-900">{teamName(team)}: choose a system</h1>
+            <h1 className="text-lg font-semibold text-gray-900">{teamName(team)}</h1>
           </div>
-          <Link href={`${base}/assistant`} className="btn">
-            Assistant
-          </Link>
-          <Link href={`${base}/docs`} className="btn">
-            Documentation
-          </Link>
+          <div className="flex gap-2">
+            <Link href={`${base}/developer`} className="btn btn-dark">
+              Developer
+            </Link>
+            <Link href={`${base}/assistant`} className="btn">
+              Assistant
+            </Link>
+            <Link href={`${base}/docs`} className="btn">
+              <span className="sm:hidden">Docs</span>
+              <span className="hidden sm:inline">Documentation</span>
+            </Link>
+          </div>
         </div>
       </header>
+      {/* Stays at the top while the page scrolls, so every system is one click away from anywhere on it. */}
+      <nav aria-label="Systems" className="relative z-30 bg-[#3b1f6e] text-white shadow-sm md:sticky md:top-0">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-1 px-2 py-1.5 sm:px-3">
+            <span className="rounded-lg bg-white/15 px-3 py-1.5 text-sm font-semibold">Home</span>
+            <NavMenu label="Telcos" items={TELCOS.map(([id, name, wallet]) => ({ href: `${base}/telcos/${id}`, title: name, sub: `${wallet} · back office, SIMs, agents, care`, icon: <TelcoMark telco={id} logo={logos[id]} height={26} /> }))} />
+            <NavLink href={`${base}/nia`}>NIA</NavLink>
+            <NavMenu
+              label="Regulators"
+              items={[
+                { href: `${base}/nca`, title: "NCA", sub: "SIM registration rules and the central register" },
+                { href: `${base}/bog`, title: "Bank of Ghana", sub: "KYC limits and oversight of e-money" },
+              ]}
+            />
+            <NavMenu label="Banks" items={BANKS.map(([id, name]) => ({ href: `${base}/bank/${id}`, title: name, sub: "Accounts, cash, transfers, agent float" }))} />
+            <NavLink href={`${base}/switch`}>National switch</NavLink>
+            <NavLink href={`${base}/phone`}>Phone</NavLink>
+            <NavLink href={`${base}/fraud`}>Fraud console</NavLink>
+          </div>
+      </nav>
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5">
-        <p className="mb-5 max-w-3xl text-sm text-gray-600">
-          This is your team&apos;s own copy of the country&apos;s mobile money systems. It starts empty: no people, no SIM cards, no money. Each institution below has its own console, and they only work together the way the real ones do.
-        </p>
-
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         {!data ? (
           <Loading error={error} />
         ) : (
           <>
-            <section className="card mb-5 p-4">
-              <h2 className="font-semibold text-gray-900">Building your world</h2>
-              <ol className="mt-3 grid gap-2 md:grid-cols-2">
-                {data.steps.map((s, i) => (
-                  <li key={s.title}>
-                    <Link href={`${base}/${STEP_LINK[s.system]}`} className={`flex h-full gap-3 rounded-lg border p-3 hover:bg-gray-50 ${s === next ? "border-[#3b1f6e] bg-[#f3effa]" : "border-gray-200"}`}>
-                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${s.done ? "bg-green-600 text-white" : s === next ? "bg-[#3b1f6e] text-white" : "bg-gray-200 text-gray-600"}`}>{s.done ? "✓" : i + 1}</span>
-                      <span>
-                        <span className="block text-sm font-medium text-gray-900">{s.title}</span>
-                        <span className="block text-xs text-gray-600">{s.detail}</span>
+            <p className="mb-4 max-w-3xl text-sm text-gray-600">
+              Your team&apos;s own copy of the country&apos;s mobile money systems. Each institution has its own console, and they work together the way the real ones do. Start quickly with one of these:
+            </p>
+            <div className="mb-8 grid gap-4 lg:grid-cols-2">
+              <TestCustomer team={team} onChange={refresh} />
+              <SimulatedData team={team} onChange={refresh} />
+            </div>
+
+            <SectionTitle title="Building your world" note={`${done} of ${data.steps.length} done`} />
+            <ol className="mb-8 grid gap-2 md:grid-cols-2">
+              {data.steps.map((s, i) => (
+                <li key={s.title}>
+                  <Link href={`${base}/${STEP_LINK[s.system]}`} className={`flex h-full gap-3 rounded-xl border bg-white p-3 hover:border-gray-300 hover:shadow-sm ${s === next ? "border-[#3b1f6e] ring-1 ring-[#3b1f6e]" : "border-gray-200"}`}>
+                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${s.done ? "bg-green-600 text-white" : s === next ? "bg-[#3b1f6e] text-white" : "bg-gray-200 text-gray-600"}`}>{s.done ? "✓" : i + 1}</span>
+                    <span>
+                      <span className="block text-sm font-medium text-gray-900">
+                        {s.title}
+                        {s === next && <span className="ml-2 rounded-full bg-[#3b1f6e] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">Next</span>}
                       </span>
-                    </Link>
-                  </li>
-                ))}
-              </ol>
-            </section>
+                      <span className="block text-xs text-gray-600">{s.detail}</span>
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
 
-            {phones.length > 0 && <PhoneCodes phones={phones} consoles={consoles} />}
-
-            <Group title="Testing what you have built">
+            <SectionTitle title="Systems" />
+            <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              {TELCOS.map(([id, name, wallet]) => (
+                <Tile key={id} href={`${base}/telcos/${id}`} color={TELCO_COLOR[id]} icon={<TelcoMark telco={id} logo={logos[id]} height={28} />} title={name} sub={`${wallet}: back office, SIM registration, agents and customer care`} />
+              ))}
+              <Tile href={`${base}/nia`} color="#0b6b3a" title="NIA" sub="Issues Ghana Cards and answers identity checks" stat={`${data.counts.persons} card(s) issued`} />
+              <Tile href={`${base}/nca`} color="#0f4c81" title="NCA" sub="SIM registration rules and the central register" stat={`${data.counts.simsRegistered} registered SIM(s)`} />
+              <Tile href={`${base}/bog`} color="#6b1d1d" title="Bank of Ghana" sub="KYC limits and oversight of e-money" stat={`${data.counts.wallets} customer wallet(s)`} />
+              <Tile href={`${base}/phone`} color="#111827" title="Phone" sub="Use any registered SIM: dial, messages, wallet" stat={`${data.counts.simsRegistered} line(s)`} />
+              <Tile href={`${base}/bank/gcb`} color="#7c5a10" title="Banks" sub={`${BANKS.length} banks: accounts, cash, transfers and agent float`} stat={`${data.counts.bankAccounts} personal account(s)`} />
+              <Tile href={`${base}/switch`} color="#312e81" title="National switch" sub="Routes payments between networks and banks, and settles" stat={`${data.counts.crossNetwork} payment(s) routed`} />
               <Tile
                 href={`${base}/fraud`}
                 color="#7f1d1d"
                 title="Fraud console"
-                sub="Send fraud incidents at your API or application, and see how many it stops"
-                stat={data.fraud ? `Fraud API results: ${data.fraud.stopped + data.fraud.contained} of ${data.fraud.incidents} stopped in the last run` : "Fraud API results: nothing run yet"}
+                sub="Send fraud incidents at your API or application and see how many it stops"
+                stat={data.fraud ? `${data.fraud.stopped + data.fraud.contained} of ${data.fraud.incidents} stopped in the last run` : "Nothing run yet"}
               />
-            </Group>
+            </div>
 
-            <Group title="Identity and regulators">
-              <Tile href={`${base}/nia`} color="#0b6b3a" title="NIA" sub="Ghana Card register" stat={`${data.counts.persons} card(s) issued`} />
-              <Tile href={`${base}/nca`} color="#0f4c81" title="NCA" sub="SIM registration rules and central register" stat={`${data.counts.simsRegistered} registered SIM(s)`} />
-              <Tile href={`${base}/bog`} color="#6b1d1d" title="Bank of Ghana" sub="KYC limits and oversight of e-money" stat={`${data.counts.wallets} customer wallet(s)`} />
-            </Group>
+            {phones.length > 0 && <PhoneCodes phones={phones} consoles={consoles} />}
 
-            <Group title="Telcos">
-              {TELCOS.map(([id, name, wallet]) => (
-                <div key={id} className="card flex flex-col p-4">
-                  <div className="flex items-center gap-3">
-                    <TelcoMark telco={id} logo={logos[id]} height={34} />
-                    <div>
-                      <div className="font-semibold text-gray-900">{name}</div>
-                      <div className="text-xs text-gray-500">{wallet}</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 grid gap-2">
-                    <Link href={`${base}/telco/${id}`} className="btn btn-dark justify-center">
-                      {name} back office
-                    </Link>
-                    <Link href={`${base}/care/${id}`} className="btn justify-center">
-                      Customer care
-                    </Link>
-                    <Link href={`${base}/sim-agent/${id}`} className="btn justify-center">
-                      SIM registration point
-                    </Link>
-                    <Link href={`${base}/momo-agent/${id}`} className="btn justify-center">
-                      Mobile money agent
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </Group>
-
-            <Group title="People, banks and the national switch">
-              <Tile href={`${base}/phone`} color="#111827" title="Phone" sub="Any registered SIM: dial, messages, wallet" stat={`${data.counts.simsRegistered} line(s)`} />
-              <div className="card p-4">
-                <div className="font-semibold text-gray-900">Banks</div>
-                <div className="text-xs text-gray-500">Accounts, cash, transfers, agent float</div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {BANKS.map(([id, name]) => (
-                    <Link key={id} href={`${base}/bank/${id}`} className="btn justify-center !text-xs">
-                      {name}
-                    </Link>
-                  ))}
-                </div>
-              </div>
-              <Tile href={`${base}/switch`} color="#312e81" title="National switch" sub="Routing between networks and banks, settlement" stat={`${data.counts.crossNetwork} payment(s) routed`} />
-            </Group>
-
-            <section className="card mb-5 p-4">
-              <h2 className="mb-2 font-semibold text-gray-900">What has happened, across all systems</h2>
-              <Activity rows={data.activity} showSystem empty="Nothing yet. Start at NIA: issue the first Ghana Card." />
-            </section>
-
-            <TestCustomer team={team} onChange={refresh} />
-            <SimulatedData team={team} onChange={refresh} />
-        <WorldTools team={team} onChange={refresh} />
+            <div className="grid items-start gap-4 lg:grid-cols-3">
+              <section className="card p-4 lg:col-span-2">
+                <h2 className="mb-2 font-semibold text-gray-900">Recent activity</h2>
+                <Activity rows={data.activity} showSystem pageSize={8} pageSizes={[5, 8, 10, 20, 40]} empty="Nothing yet. Start at NIA: issue the first Ghana Card." />
+              </section>
+              <WorldTools team={team} onChange={refresh} />
+            </div>
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function SectionTitle({ title, note }: { title: string; note?: string }) {
+  return (
+    <div className="mb-3 flex items-baseline justify-between gap-3">
+      <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+      {note && <span className="text-xs text-gray-500">{note}</span>}
     </div>
   );
 }
@@ -176,11 +180,10 @@ function PhoneCodes({ phones, consoles }: { phones: PhoneCode[]; consoles?: Phon
     </div>
   );
   return (
-    <section className="card mb-5 p-4">
-      <h2 className="font-semibold text-gray-900">Open on another device</h2>
-      <p className="mt-0.5 max-w-3xl text-sm text-gray-600">
-        Any number of devices can be open at once: this page stays as it is while a phone is used as a customer&apos;s or an agent&apos;s phone. Point the phone&apos;s camera at a code. The customer code opens only the phone simulator; the agent code opens only the
-        agent screens. Neither can reach the consoles, so they are safe to show on a projector.
+    <section className="card mb-8 p-5">
+      <h2 className="font-semibold text-gray-900">Open on a phone</h2>
+      <p className="mt-1 max-w-3xl text-sm text-gray-600">
+        Point a phone&apos;s camera at a code. The customer code opens only the phone; the agent code opens only the agent screens. Neither reaches the consoles, so they are safe to show on a projector.
       </p>
       <div className="mt-4 grid gap-4 sm:grid-cols-2">{phones.map((p) => card(p))}</div>
       {consoles && (
@@ -204,23 +207,63 @@ function PhoneCodes({ phones, consoles }: { phones: PhoneCode[]; consoles?: Phon
   );
 }
 
-function Group({ title, children }: { title: string; children: React.ReactNode }) {
+function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <section className="mb-5">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">{title}</h2>
-      <div className="grid gap-3 md:grid-cols-3">{children}</div>
-    </section>
+    <Link href={href} className="rounded-lg px-3 py-1.5 text-sm font-medium text-white/90 hover:bg-white/10 hover:text-white">
+      {children}
+    </Link>
   );
 }
 
-function Tile({ href, color, title, sub, stat }: { href: string; color: string; title: string; sub: string; stat: string }) {
+/** A menu in the navigation bar: opens a list of places, closes on a click elsewhere or Escape. */
+function NavMenu({ label, items }: { label: string; items: { href: string; title: string; sub?: string; icon?: React.ReactNode }[] }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
   return (
-    <Link href={href} className="card flex flex-col overflow-hidden hover:shadow-md">
-      <div className="h-1.5" style={{ background: color }} />
+    <div ref={box} className="relative">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="menu" className={`rounded-lg px-3 py-1.5 text-sm font-medium ${open ? "bg-white text-[#3b1f6e]" : "text-white/90 hover:bg-white/10 hover:text-white"}`}>
+        <span className="flex items-center gap-1">{label} <ChevronDown aria-hidden className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} /></span>
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 z-30 mt-1.5 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-gray-200 bg-white py-1 text-gray-900 shadow-xl">
+          {items.map((it) => (
+            <Link key={it.href} role="menuitem" href={it.href} onClick={() => setOpen(false)} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50">
+              {it.icon}
+              <span className="leading-tight">
+                <span className="block text-sm font-medium">{it.title}</span>
+                {it.sub && <span className="block text-xs text-gray-500">{it.sub}</span>}
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Tile({ href, color, title, sub, stat, icon }: { href: string; color: string; title: string; sub: string; stat?: string; icon?: React.ReactNode }) {
+  return (
+    <Link href={href} className="card group flex flex-col overflow-hidden hover:border-gray-300 hover:shadow-md">
+      <div className="h-1" style={{ background: color }} />
       <div className="flex flex-1 flex-col p-4">
-        <div className="font-semibold text-gray-900">{title}</div>
-        <div className="text-xs text-gray-500">{sub}</div>
-        <div className="mt-auto pt-3 text-sm text-gray-700">{stat}</div>
+        <div className="flex items-center gap-3">
+          {icon}
+          <div className="font-semibold text-gray-900">{title}</div>
+          <span aria-hidden className="ml-auto text-gray-300 transition group-hover:translate-x-0.5 group-hover:text-gray-500">→</span>
+        </div>
+        <div className="mt-1 text-sm text-gray-600">{sub}</div>
+        {stat && <div className="mt-auto pt-3 text-xs font-medium text-gray-500">{stat}</div>}
       </div>
     </Link>
   );
@@ -253,7 +296,7 @@ function WorldTools({ team, onChange }: { team: string; onChange: () => void }) 
       >
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Name this save point" className="min-w-[200px] flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm" />
         <button className="btn btn-dark">Save now</button>
-        <button type="button" className="btn btn-danger" onClick={() => confirm("Wipe this world back to an empty country? Everything your team has built will be lost.") && run(() => api(team, "/world", { body: { action: "reset" } }), "World reset to empty.")}>
+        <button type="button" className="btn btn-danger" onClick={async () => (await askConfirm({ title: "Wipe this world?", message: "It goes back to an empty country. Everything your team has built will be lost, unless you saved it first.", confirm: "Wipe the world", danger: true })) && run(() => api(team, "/world", { body: { action: "reset" } }), "World reset to empty.")}>
           Reset to empty
         </button>
       </form>
@@ -265,7 +308,7 @@ function WorldTools({ team, onChange }: { team: string; onChange: () => void }) 
               <span>
                 {s.label} <span className="text-xs text-gray-500">· {when(new Date(s.createdAt).toISOString())}</span>
               </span>
-              <button className="btn !px-2 !py-1 !text-xs" onClick={() => confirm(`Roll the whole world back to "${s.label}"?`) && run(() => api(team, `/snapshots/${s.id}`, { method: "POST" }), `Rolled back to "${s.label}".`)}>
+              <button className="btn !px-2 !py-1 !text-xs" onClick={async () => (await askConfirm({ title: `Roll back to "${s.label}"?`, message: "The whole world goes back to how it was at this save point. Anything done since is lost.", confirm: "Roll back", danger: true })) && run(() => api(team, `/snapshots/${s.id}`, { method: "POST" }), `Rolled back to "${s.label}".`)}>
                 Roll back
               </button>
             </li>
@@ -316,26 +359,19 @@ function TestCustomer({ team, onChange }: { team: string; onChange: () => void }
     }
   };
   return (
-    <section className="card mb-5 p-4">
-      <h2 className="font-semibold text-gray-900">A ready test customer</h2>
-      <p className="mt-0.5 text-sm text-gray-600">
-        Makes a new person with a Ghana Card, registers a number for them, opens their wallet and puts GHS 500 in it. You are shown the wallet PIN, so you can dial from their phone straight away. Write the PIN down: it is not shown again once you leave this page.
-      </p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <select className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" value={network} onChange={(e) => setNetwork(e.target.value)} aria-label="Network">
-          {TELCOS.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </select>
+    <QuickCard
+      title="Create a test customer"
+      text="A new person with a Ghana Card, a registered number and a wallet holding GHS 500. You see their PIN once, so you can dial from their phone straight away."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select className="w-44" value={network} onChange={setNetwork} label="Network" options={TELCOS.map(([id, name, wallet]) => ({ value: id, label: name, hint: wallet }))} />
         <button className="btn btn-dark" disabled={busy} onClick={create}>
           {busy ? "Creating…" : "Create a test customer"}
         </button>
         {msg && <span className="text-sm text-red-700">{msg}</span>}
       </div>
       {made.length > 0 && (
-        <ul className="mt-3 divide-y divide-gray-100 text-sm">
+        <ul className="mt-3 divide-y divide-gray-100 border-t border-gray-100 text-sm">
           {made.map((c) => (
             <li key={c.number} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2">
               <span>
@@ -352,6 +388,17 @@ function TestCustomer({ team, onChange }: { team: string; onChange: () => void }
           ))}
         </ul>
       )}
+    </QuickCard>
+  );
+}
+
+/** One of the two ways to get started, side by side at the top of the page. */
+function QuickCard({ title, text, children }: { title: string; text: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="card flex flex-col p-5">
+      <h2 className="font-semibold text-gray-900">{title}</h2>
+      <p className="mt-1 text-sm text-gray-600">{text}</p>
+      <div className="mt-auto pt-4">{children}</div>
     </section>
   );
 }
@@ -362,7 +409,7 @@ function SimulatedData({ team, onChange }: { team: string; onChange: () => void 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const load = async () => {
-    if (!confirm("Replace this world with the simulated country? What your team has built so far is kept as a save point, so you can roll back to it.")) return;
+    if (!(await askConfirm({ title: "Load the simulated country?", message: "It replaces what is in this world. What your team has built so far is kept as a save point, so you can roll back to it.", confirm: "Load it" }))) return;
     setBusy(true);
     setMsg("Loading the simulated country. This can take up to a minute the first time…");
     try {
@@ -377,67 +424,67 @@ function SimulatedData({ team, onChange }: { team: string; onChange: () => void 
     }
   };
   const s = data?.summary;
-  return (
-    <section className="card mb-5 p-4">
-      <h2 className="font-semibold text-gray-900">Simulated data</h2>
-      {!data?.loaded || !s ? (
-        <>
-          <p className="mt-0.5 text-sm text-gray-600">
-            Your world starts empty. Instead of building everything by hand, you can load a ready-made country: thousands of people with Ghana Cards, their SIMs, wallets, agents, merchants and bank accounts, and three months of transactions between them.
-            A known share of those transactions are fraud of ten different kinds, each labelled, so there is something to study, detect and test against.
-          </p>
-          <button className="btn btn-dark mt-3" disabled={busy} onClick={load}>
+  if (!data?.loaded || !s) {
+    return (
+      <QuickCard
+        title="Load the simulated country"
+        text="Swap this empty world for a ready-made one: thousands of people, SIMs, wallets, agents and bank accounts, with three months of transactions, some of them labelled fraud."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn btn-dark" disabled={busy} onClick={load}>
             {busy ? "Loading…" : "Load the simulated country"}
           </button>
-        </>
-      ) : (
+          {msg && <span className="text-sm text-gray-700">{msg}</span>}
+        </div>
+      </QuickCard>
+    );
+  }
+  return (
+    <QuickCard
+      title="Simulated country loaded"
+      text={
         <>
-          <p className="mt-0.5 text-sm text-gray-600">
-            This world holds a simulated country: <b>{num(s.transactions)}</b> transactions from {when(s.from).slice(0, 6)} to {when(s.to).slice(0, 6)}, of which <b>{num(s.fraud)}</b> ({Math.round((s.fraud / s.transactions) * 100)}%) are fraud in {num(s.cases)} cases.
-            {" "}{num(s.people)} people, {num(s.sims)} registered numbers, {num(s.wallets)} wallets, {num(s.agents)} agents, {num(s.merchants)} merchants, {num(s.bankAccounts)} bank accounts, {num(s.calls)} calls, {num(s.texts)} texts and {num(s.complaints)} complaints. Everything
-            you do from here is added on top of it.
-          </p>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">The fraud in it</h3>
-              <ul className="mt-1 divide-y divide-gray-100 text-sm">
-                {data.scenarios?.map((x) => (
-                  <li key={x.id} className="flex items-start justify-between gap-3 py-1.5">
-                    <span>
-                      <span className="font-mono text-xs text-gray-900">{x.id}</span>
-                      <span className="block text-xs text-gray-600">{x.about}</span>
-                    </span>
-                    <span className="shrink-0 text-right text-xs text-gray-700">
-                      {num(x.transactions)} transactions
-                      <span className="block text-gray-500">{num(x.cases)} cases</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Download it</h3>
-              <ul className="mt-1 divide-y divide-gray-100 text-sm">
-                {data.files?.map((f) => (
-                  <li key={f.name} className="flex items-start justify-between gap-3 py-1.5">
-                    <span>
-                      <a className="font-mono text-xs underline" href={`/api/w/${team}/dataset/${f.name}`}>
-                        {f.name}
-                      </a>
-                      <span className="block text-xs text-gray-600">{f.about}</span>
-                    </span>
-                    <span className="shrink-0 text-xs text-gray-500">{num(f.rows)} rows</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2 text-xs text-gray-500">
-                transactions.csv says which transactions are fraud. Add <code>?answers=0</code> to its address to get it without those columns.
-              </p>
-            </div>
-          </div>
+          <b>{num(s.transactions)}</b> transactions from {when(s.from).slice(0, 6)} to {when(s.to).slice(0, 6)}, <b>{Math.round((s.fraud / s.transactions) * 100)}%</b> of them fraud in {num(s.cases)} cases, across {num(s.people)} people and {num(s.wallets)} wallets. What you do now is
+          added on top.
         </>
-      )}
+      }
+    >
+      <details>
+        <summary className="cursor-pointer text-sm font-medium text-gray-800">The fraud in it, and downloads</summary>
+        <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-gray-500">The fraud in it</h3>
+        <ul className="mt-1 divide-y divide-gray-100 text-sm">
+          {data.scenarios?.map((x) => (
+            <li key={x.id} className="flex items-start justify-between gap-3 py-1.5">
+              <span>
+                <span className="font-mono text-xs text-gray-900">{x.id}</span>
+                <span className="block text-xs text-gray-600">{x.about}</span>
+              </span>
+              <span className="shrink-0 text-right text-xs text-gray-700">
+                {num(x.transactions)} transactions
+                <span className="block text-gray-500">{num(x.cases)} cases</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-gray-500">Download it</h3>
+        <ul className="mt-1 divide-y divide-gray-100 text-sm">
+          {data.files?.map((f) => (
+            <li key={f.name} className="flex items-start justify-between gap-3 py-1.5">
+              <span>
+                <a className="font-mono text-xs underline" href={`/api/w/${team}/dataset/${f.name}`}>
+                  {f.name}
+                </a>
+                <span className="block text-xs text-gray-600">{f.about}</span>
+              </span>
+              <span className="shrink-0 text-xs text-gray-500">{num(f.rows)} rows</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 text-xs text-gray-500">
+          transactions.csv says which transactions are fraud. Add <code>?answers=0</code> to its address to get it without those columns.
+        </p>
+      </details>
       {msg && <p className="mt-2 text-sm text-gray-700">{msg}</p>}
-    </section>
+    </QuickCard>
   );
 }

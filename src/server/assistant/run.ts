@@ -123,7 +123,8 @@ async function work(run: Run, agent: Agent, conv: Conversation, isLead: boolean)
       emit({ type: "notice", text: "This is taking a great many steps, so the assistant has stopped here. Say what to do next and it will carry on." });
       return last || "Stopped: too many steps in one go.";
     }
-    const s = await llm.step(conv, { system: promptOf(agent), tools: specs, signal: t.signal });
+    // The words go to the screen as they are written. They are not stored: the finished text is, once the step is done.
+    const s = await llm.step(conv, { system: promptOf(agent), tools: specs, signal: t.signal, onText: (delta) => t.send(isLead ? { type: "delta", text: delta } : { type: "delta", agent: agent.id, text: delta }) });
     countUsage(t.team, s.tokens);
     if (s.text) {
       last = s.text;

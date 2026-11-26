@@ -23,6 +23,7 @@ export const GET = handle(async (req: Request, ctx: Ctx) => {
   if (id && !chat) throw new HttpError(404, "No such conversation");
   return {
     enabled: !!llm,
+    provider: llm?.provider ?? null,
     chats: listChats(w.id),
     usedToday: usageToday(w.id).calls,
     chat: chat ? { id: chat.id, title: chat.title, busy: isBusy(chat.id), waiting: chat.pending.map((p) => ({ id: p.id, summary: p.summary })), events: chatEvents(chat.id) } : undefined,

@@ -116,14 +116,44 @@ export function onboardSimAgent(w: World, telco: Telco, input: { card?: string; 
   const kind = input.kind === "service_centre" ? "service_centre" : "registration_agent";
   const p = verify(w, { requester: telco, purpose: "SIM registration agent onboarding", card: input.card, biometric: false });
   if (ageOf(p, w.now) < 18) throw new SimError("An agent must be at least 18 years old");
-  const n = count(w.db, "SELECT COUNT(*) AS n FROM sim_agents WHERE telco = ?", telco) + 1;
+  const n = count(w.db, "SELECT COUNT(*) AS n FROM sim_agents WHERE telco = ? AND id != ?", telco, headOfficeId(telco)) + 1;
   const id = `${TELCO_INFO[telco].name.toUpperCase()}-${kind === "service_centre" ? "SC" : "RA"}-${String(n).padStart(4, "0")}`;
   w.db.prepare("INSERT INTO sim_agents(id, telco, person_id, name, kind, town, created_at) VALUES(?,?,?,?,?,?,?)").run(id, telco, p.id, name, kind, town, w.now);
   audit(w, telco, "sim_agent", `Authorised ${kind === "service_centre" ? "service centre" : "SIM registration agent"} ${name} (${id}), run by ${fullName(p)}`);
   return w.db.prepare("SELECT * FROM sim_agents WHERE id = ?").get(id) as unknown as SimAgentRow;
 }
 
+/**
+ * Every network runs its own head office service centre from the start, so a person can register a SIM
+ * as soon as NIA has issued their card, without anyone authorising a point first. It is staffed by the
+ * network itself rather than a person, and is written to the register the first time it is used.
+ */
+export const headOfficeId = (telco: Telco) => `${TELCO_INFO[telco].name.toUpperCase()}-HQ`;
+export const headOfficeOwner = (telco: Telco) => `network:${telco}`;
+export const headOffice = (telco: Telco) => ({ id: headOfficeId(telco), name: `${TELCO_INFO[telco].name} Head Office`, kind: "service_centre" as const, town: "Accra" });
+
+function openHeadOffice(w: World, telco: Telco) {
+  const hq = headOffice(telco);
+  if (w.db.prepare("SELECT 1 FROM sim_agents WHERE id = ?").get(hq.id)) return;
+  w.db.prepare("INSERT INTO sim_agents(id, telco, person_id, name, kind, town, created_at) VALUES(?,?,?,?,?,?,?)").run(hq.id, telco, headOfficeOwner(telco), hq.name, hq.kind, hq.town, w.now);
+  audit(w, telco, "sim_agent", `Opened ${hq.name} (${hq.id}), run by ${TELCO_INFO[telco].name}`);
+}
+
+/** How many blank SIMs the head office keeps on hand: it orders more whenever it runs out. */
+const HEAD_OFFICE_STOCK = 20;
+
+/**
+ * Gets the head office ready to register a SIM: opened, and with blank SIMs in stock. Run it in a turn of
+ * its own before the registration, so a registration that stops to ask a plugged-in API finds the same
+ * stock, and so the same number, when it runs again.
+ */
+export function readyHeadOffice(w: World, telco: Telco) {
+  openHeadOffice(w, telco);
+  if (!count(w.db, "SELECT COUNT(*) AS n FROM sims WHERE telco = ? AND status = 'in_stock'", telco)) generateSims(w, telco, HEAD_OFFICE_STOCK);
+}
+
 export function simAgent(w: World, telco: Telco, id: unknown): SimAgentRow {
+  if (String(id ?? "") === headOfficeId(telco)) openHeadOffice(w, telco);
   const a = w.db.prepare("SELECT * FROM sim_agents WHERE id = ?").get(String(need(id as string, "Agent"))) as SimAgentRow | undefined;
   if (!a || a.telco !== telco) throw new SimError("Unknown SIM registration point for this network");
   if (a.status !== "active") throw new SimError(`${a.name} is suspended and cannot serve customers`);
@@ -309,8 +339,10 @@ export function agentRegisterWallet(w: World, telco: Telco, agentCode: unknown, 
     if (existing.owner_type !== "person" || existing.kyc_tier !== "minimum") throw new SimError(`${sim.msisdn} already has a wallet on ${existing.kyc_tier} KYC`);
     return upgradeTier(w, telco, sim.msisdn, "medium", `agent ${agent.code}`);
   }
-  // On a network that texts a starting PIN, the agent never learns it: the customer replaces it the first time they open the menu.
-  if (getConfig(w.db, `telco.${telco}`).registration?.pinBySms && !input.pin) {
+  // Unless the customer chooses to type a PIN at the counter, the agent never learns it: a starting PIN is texted
+  // to the customer, who replaces it with their own the first time they open the menu. On a network that texts
+  // a starting PIN (pinBySms), the agent is not even offered a PIN field.
+  if (!input.pin) {
     const pin = digits(4);
     return tx(w.db, () => {
       const wallet = openWallet(w, sim, { pin, tier: "medium", ownerType: "person", displayName: fullName(p), by: `agent ${agent.name} (${agent.code})` });

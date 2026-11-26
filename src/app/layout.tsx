@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import ConfirmDialog from "@/components/confirm-dialog";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,7 +12,10 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, them
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <ConfirmDialog />
+      </body>
     </html>
   );
 }

@@ -8,12 +8,16 @@ export function render(template: string, vars: Record<string, string | number | 
   return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k: string) => (vars[k] === undefined ? "" : String(vars[k])));
 }
 
+/** Texts about the line itself come from the network's name (MTN); everything else from its wallet (MTNMoMo). */
+const FROM_THE_NETWORK: readonly NotificationEvent[] = ["sim_registered", "sim_swapped"];
+export const senderFor = (telco: Telco, event: NotificationEvent) => (FROM_THE_NETWORK.includes(event) ? TELCO_INFO[telco].name : TELCO_INFO[telco].wallet).replace(/\s/g, "");
+
 /** Sends the telco's SMS for an event to one of its subscribers, if that notification is switched on. */
 export function notify(w: World, telco: Telco, event: NotificationEvent, msisdn: string, vars: Record<string, string | number | undefined>) {
   // An event the telco has not customised (for example one added after its world was created) uses the standard wording.
   const n = getConfig(w.db, `telco.${telco}`).notifications[event] ?? standard(telco)[event];
   if (!n.enabled) return;
-  sendSms(w, msisdn, TELCO_INFO[telco].wallet.replace(/\s/g, ""), render(n.template, vars));
+  sendSms(w, msisdn, senderFor(telco, event), render(n.template, vars));
 }
 
 /** How many 160-character messages a text is sent as. */

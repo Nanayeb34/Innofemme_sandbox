@@ -36,6 +36,7 @@ const telco: Record<string, ActionInfo> = {
   onboard_sim_agent: { does: "Authorise a SIM registration point: a service centre or a registration agent.", fields: { kind: "service_centre | registration_agent", name: "the outlet's name", town: "its town", card: "the Ghana Card of the person who runs it" } },
   sim_agent_status: { does: "Suspend a SIM registration point, or restore it.", fields: { id: "the point's id", status: "suspended | active" } },
   sim_status: { does: "Block, unblock or deactivate a number from the back office.", fields: { msisdn: "the number", status: "blocked | active | deactivated", reason: "why?" } },
+  open_momo_agent: { does: "Open a mobile money agent in one go for a person with a Ghana Card: the head office registers a new agent line to them and it becomes an agent, with an optional starting float from the bank.", fields: { card: "the owner's Ghana Card", fingerprint: "their fingerprint code", otp: "the approval code texted to their first number, when they already have one?", name: "the shop's name", town: "its town", pin: "a 4-digit PIN for the agent wallet", float: "starting float in cedis?" } },
   onboard_momo_agent: { does: "Turn a registered line into a mobile money agent with its own agent number.", fields: { msisdn: "the agent's registered line", name: "the shop's name", town: "its town", pin: "a 4-digit PIN for the agent wallet" } },
   momo_agent_status: { does: "Suspend a mobile money agent, or restore it.", fields: { code: "the agent number", status: "suspended | active" } },
   onboard_merchant: { does: "Turn a registered line into a merchant with a till number.", fields: { msisdn: "the merchant's registered line", name: "the business name", category: "what it sells", town: "its town", pin: "a 4-digit PIN for the merchant wallet" } },
@@ -64,7 +65,7 @@ const care: Record<string, ActionInfo> = {
 };
 
 const simAgent: Record<string, ActionInfo> = {
-  register: { does: "Register a SIM to a person: their Ghana Card and fingerprint are checked with NIA and the number is switched on.", fields: { agent: "the registration point's id", card: "the person's Ghana Card number", fingerprint: "their fingerprint code", msisdn: "a particular number from stock?", otp: "the approval code texted to their first number, when they already have one?" } },
+  register: { does: "Register a SIM to a person: their Ghana Card and fingerprint are checked with NIA and the number is switched on.", fields: { agent: "the registration point's id (the network's head office, e.g. MTN-HQ, is always open)", card: "the person's Ghana Card number", fingerprint: "their fingerprint code", msisdn: "a particular number from stock?", otp: "the approval code texted to their first number, when they already have one?" } },
   swap: { does: "Move a number to a replacement SIM card for its owner.", fields: { agent: "the registration point's id", msisdn: "the number", card: "the owner's Ghana Card", fingerprint: "the owner's fingerprint code" } },
   block: { does: "Block a number.", fields: { agent: "the registration point's id", msisdn: "the number", reason: "why?" } },
   unblock: { does: "Unblock a number for its owner.", fields: { agent: "the registration point's id", msisdn: "the number", card: "the owner's Ghana Card", fingerprint: "the owner's fingerprint code" } },
