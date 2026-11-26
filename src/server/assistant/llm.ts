@@ -44,20 +44,25 @@ export interface Conversation {
 }
 
 export interface Llm {
-  provider: "anthropic" | "openai";
+  provider: "anthropic" | "openai" | "demo";
   model: string;
   start(): Conversation;
   say(c: Conversation, text: string): void;
-  step(c: Conversation, o: { system: string; tools: ToolSpec[]; signal?: AbortSignal }): Promise<Step>;
+  /** One step. `onText` is told the model's words as they are written, so the screen can show them coming in. */
+  step(c: Conversation, o: { system: string; tools: ToolSpec[]; signal?: AbortSignal; onText?: (delta: string) => void }): Promise<Step>;
   results(c: Conversation, results: { id: string; content: string; failed?: boolean }[]): void;
 }
 
 const DEFAULT_MODEL = { anthropic: "claude-opus-5-5", openai: "gpt-6.2-sol" } as const;
 
-/** Which service this server is set up for, if any. */
-export function provider(): "anthropic" | "openai" | undefined {
+/**
+ * Which service this server is set up for, if any. ASSISTANT_PROVIDER=demo runs a stand-in that needs no key: it
+ * does real work in the world through the real tools, with scripted words, so the assistant can be seen and tried.
+ */
+export function provider(): "anthropic" | "openai" | "demo" | undefined {
   const has = { anthropic: !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN), openai: !!process.env.OPENAI_API_KEY };
   const asked = process.env.ASSISTANT_PROVIDER;
+  if (asked === "demo") return "demo";
   if (asked === "anthropic" || asked === "openai") return has[asked] ? asked : undefined;
   return has.anthropic ? "anthropic" : has.openai ? "openai" : undefined;
 }
@@ -72,6 +77,7 @@ export function getLlm(): Llm | undefined {
   if (standIn) return standIn;
   const p = provider();
   if (!p) return undefined;
+  if (p === "demo") return demo();
   const model = process.env.ASSISTANT_MODEL || DEFAULT_MODEL[p];
   return p === "anthropic" ? claude(model) : openai(model);
 }
@@ -96,7 +102,7 @@ function claude(model: string): Llm {
       const messages = c.messages as Anthropic.Beta.BetaMessageParam[];
       let res: Anthropic.Beta.BetaMessage;
       try {
-        res = await client.beta.messages.create(
+        const stream = client.beta.messages.stream(
           {
             model,
             max_tokens: 16000,
@@ -112,6 +118,9 @@ function claude(model: string): Llm {
           },
           { signal: o.signal },
         );
+        // The words are passed on as they arrive; the whole message, thinking included, is kept once it is complete.
+        if (o.onText) stream.on("text", (delta) => o.onText!(delta));
+        res = await stream.finalMessage();
       } catch (e) {
         // Most specific first: what can be retried later is told apart from what needs fixing.
         if (e instanceof Anthropic.AuthenticationError) throw new AssistantError("The assistant's key for Claude was not accepted. The organisers need to check ANTHROPIC_API_KEY on the server.");
@@ -167,6 +176,7 @@ function openai(model: string): Llm {
         // Nothing is kept at OpenAI: the whole conversation is sent each time, with the model's own reasoning handed back to it.
         store: false,
         include: ["reasoning.encrypted_content"],
+        stream: true,
       });
       let res: Response | undefined;
       for (let attempt = 0; ; attempt++) {
@@ -181,7 +191,35 @@ function openai(model: string): Llm {
         await new Promise((done) => setTimeout(done, 800 * (attempt + 1)));
       }
       if (!res) throw new AssistantError("The assistant could not reach OpenAI. Please try again.");
-      const j = (await res.json().catch(() => ({}))) as { output?: OpenAiItem[]; error?: { message?: string }; status?: string; incomplete_details?: { reason?: string }; usage?: { input_tokens?: number; output_tokens?: number } };
+      type Done = { output?: OpenAiItem[]; error?: { message?: string }; status?: string; incomplete_details?: { reason?: string }; usage?: { input_tokens?: number; output_tokens?: number } };
+      let j: Done = {};
+      if (!res.ok || !res.body) j = (await res.json().catch(() => ({}))) as Done;
+      else {
+        // A stream of events: the words as they are written, then the whole response at the end.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let waiting = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          waiting += decoder.decode(value, { stream: true });
+          const parts = waiting.split("\n\n");
+          waiting = parts.pop() ?? "";
+          for (const part of parts) {
+            const data = part.split("\n").find((l) => l.startsWith("data: "));
+            if (!data) continue;
+            let e: { type?: string; delta?: string; response?: Done; message?: string };
+            try {
+              e = JSON.parse(data.slice(6));
+            } catch {
+              continue;
+            }
+            if (e.type === "response.output_text.delta" && e.delta) o.onText?.(e.delta);
+            else if (e.type === "response.completed" || e.type === "response.incomplete" || e.type === "response.failed") j = e.response ?? {};
+            else if (e.type === "error") j = { error: { message: e.message } };
+          }
+        }
+      }
       if (!res.ok || !j.output) {
         if (res.status === 401) throw new AssistantError("The assistant's key for OpenAI was not accepted. The organisers need to check OPENAI_API_KEY on the server.");
         if (res.status === 429) throw new AssistantError("The assistant is being used a lot right now. Please try again in a minute.");
@@ -208,6 +246,75 @@ function openai(model: string): Llm {
     },
     results(c, results) {
       for (const r of results) c.messages.push({ type: "function_call_output", call_id: r.id, output: r.content });
+    },
+  };
+}
+
+// ---------- demo: no key needed ----------
+
+const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/** Writes text out a few characters at a time, as a model would. */
+async function typeOut(text: string, onText: ((d: string) => void) | undefined, signal?: AbortSignal) {
+  if (!onText) return;
+  for (let i = 0; i < text.length; i += 4) {
+    if (signal?.aborted) return;
+    onText(text.slice(i, i + 4));
+    await pause(12);
+  }
+}
+
+type DemoMessage = { role: "user" | "assistant" | "tool"; content: string; calls?: ToolCall[] };
+
+/**
+ * A stand-in for a model, for trying the assistant without a key (ASSISTANT_PROVIDER=demo). The lead hands the
+ * question to the analyst, who looks at the world with the real tool and reports; the lead then answers. The
+ * words are scripted, but the work and the numbers are real.
+ */
+function demo(): Llm {
+  return {
+    provider: "demo",
+    model: "demo",
+    start: () => ({ provider: "demo", model: "demo", messages: [] }),
+    say(c, text) {
+      (c.messages as DemoMessage[]).push({ role: "user", content: text });
+    },
+    async step(c, o) {
+      const messages = c.messages as DemoMessage[];
+      const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+      const sinceUser = messages.length - 1 - messages.map((m) => m.role).lastIndexOf("user");
+      const lastTool = [...messages].reverse().find((m) => m.role === "tool")?.content ?? "";
+      const isLead = o.tools.some((t) => t.name === "delegate");
+      const can = (name: string) => o.tools.some((t) => t.name === name);
+      let text = "";
+      let calls: ToolCall[] = [];
+      await pause(350);
+      if (isLead && sinceUser === 0) {
+        text = "Let me check that for you. I'll ask the **analyst** to look at your world first.";
+        calls = [{ id: `demo_${Date.now()}`, name: "delegate", input: { to: "analyst", brief: `Look at the team's world and report what is in it, in a few lines. The team asked: "${lastUser.slice(0, 200)}"` } }];
+      } else if (isLead) {
+        const report = lastTool.replace(/^\s*\{[\s\S]*$/, "").trim() || lastTool.slice(0, 600);
+        text = `Here is what I found.\n\n${report}\n\n**Next steps you could try**\n- Create a test customer and send money from their phone.\n- Plug a fraud check into a network from the **Developer** console.\n- Run the **Fraud console** to see what gets through.\n\n_This is the demo assistant: the work and numbers are real, the words are scripted. Add an API key for the real one._`;
+      } else if (sinceUser === 0 && can("world_overview")) {
+        text = "Reading the world overview.";
+        calls = [{ id: `demo_${Date.now()}`, name: "world_overview", input: {} }];
+      } else {
+        let facts = lastTool;
+        try {
+          const j = JSON.parse(lastTool) as { counts?: Record<string, number> };
+          if (j.counts) facts = Object.entries(j.counts).filter(([, n]) => typeof n === "number").slice(0, 8).map(([k, n]) => `| ${k.replace(/([A-Z])/g, " $1").toLowerCase()} | ${n} |`).join("\n");
+          if (j.counts) facts = `| What | How many |\n|---|---|\n${facts}`;
+        } catch {
+          facts = lastTool.slice(0, 500);
+        }
+        text = facts;
+      }
+      await typeOut(text, o.onText, o.signal);
+      messages.push({ role: "assistant", content: text, calls });
+      return { text, calls, tokens: { in: 0, out: 0 } };
+    },
+    results(c, results) {
+      for (const r of results) (c.messages as DemoMessage[]).push({ role: "tool", content: r.content });
     },
   };
 }

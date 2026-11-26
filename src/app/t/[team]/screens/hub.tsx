@@ -6,6 +6,9 @@ import { InnofemmeLogo } from "@/components/brand";
 import { TelcoMark } from "@/components/telco-mark";
 import { Activity, Loading, useView, type ActivityRow } from "@/components/ui";
 import { api, teamName, when } from "@/lib/client";
+import { Select } from "@/components/select";
+import { ChevronDown } from "lucide-react";
+import { askConfirm } from "@/stores/ui";
 
 interface HubView {
   counts: Record<string, number>;
@@ -230,7 +233,7 @@ function NavMenu({ label, items }: { label: string; items: { href: string; title
   return (
     <div ref={box} className="relative">
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="menu" className={`rounded-lg px-3 py-1.5 text-sm font-medium ${open ? "bg-white text-[#3b1f6e]" : "text-white/90 hover:bg-white/10 hover:text-white"}`}>
-        {label} <span aria-hidden className="ml-0.5 text-[10px]">▼</span>
+        <span className="flex items-center gap-1">{label} <ChevronDown aria-hidden className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} /></span>
       </button>
       {open && (
         <div role="menu" className="absolute left-0 z-30 mt-1.5 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-gray-200 bg-white py-1 text-gray-900 shadow-xl">
@@ -293,7 +296,7 @@ function WorldTools({ team, onChange }: { team: string; onChange: () => void }) 
       >
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Name this save point" className="min-w-[200px] flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm" />
         <button className="btn btn-dark">Save now</button>
-        <button type="button" className="btn btn-danger" onClick={() => confirm("Wipe this world back to an empty country? Everything your team has built will be lost.") && run(() => api(team, "/world", { body: { action: "reset" } }), "World reset to empty.")}>
+        <button type="button" className="btn btn-danger" onClick={async () => (await askConfirm({ title: "Wipe this world?", message: "It goes back to an empty country. Everything your team has built will be lost, unless you saved it first.", confirm: "Wipe the world", danger: true })) && run(() => api(team, "/world", { body: { action: "reset" } }), "World reset to empty.")}>
           Reset to empty
         </button>
       </form>
@@ -305,7 +308,7 @@ function WorldTools({ team, onChange }: { team: string; onChange: () => void }) 
               <span>
                 {s.label} <span className="text-xs text-gray-500">· {when(new Date(s.createdAt).toISOString())}</span>
               </span>
-              <button className="btn !px-2 !py-1 !text-xs" onClick={() => confirm(`Roll the whole world back to "${s.label}"?`) && run(() => api(team, `/snapshots/${s.id}`, { method: "POST" }), `Rolled back to "${s.label}".`)}>
+              <button className="btn !px-2 !py-1 !text-xs" onClick={async () => (await askConfirm({ title: `Roll back to "${s.label}"?`, message: "The whole world goes back to how it was at this save point. Anything done since is lost.", confirm: "Roll back", danger: true })) && run(() => api(team, `/snapshots/${s.id}`, { method: "POST" }), `Rolled back to "${s.label}".`)}>
                 Roll back
               </button>
             </li>
@@ -361,13 +364,7 @@ function TestCustomer({ team, onChange }: { team: string; onChange: () => void }
       text="A new person with a Ghana Card, a registered number and a wallet holding GHS 500. You see their PIN once, so you can dial from their phone straight away."
     >
       <div className="flex flex-wrap items-center gap-2">
-        <select className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" value={network} onChange={(e) => setNetwork(e.target.value)} aria-label="Network">
-          {TELCOS.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </select>
+        <Select className="w-44" value={network} onChange={setNetwork} label="Network" options={TELCOS.map(([id, name, wallet]) => ({ value: id, label: name, hint: wallet }))} />
         <button className="btn btn-dark" disabled={busy} onClick={create}>
           {busy ? "Creating…" : "Create a test customer"}
         </button>
@@ -412,7 +409,7 @@ function SimulatedData({ team, onChange }: { team: string; onChange: () => void 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const load = async () => {
-    if (!confirm("Replace this world with the simulated country? What your team has built so far is kept as a save point, so you can roll back to it.")) return;
+    if (!(await askConfirm({ title: "Load the simulated country?", message: "It replaces what is in this world. What your team has built so far is kept as a save point, so you can roll back to it.", confirm: "Load it" }))) return;
     setBusy(true);
     setMsg("Loading the simulated country. This can take up to a minute the first time…");
     try {

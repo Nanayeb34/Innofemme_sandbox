@@ -75,3 +75,101 @@ body {
     @apply bg-gray-50;
   }
 }
+
+/* Dropdowns with their own look: no browser default arrow, a neat chevron, a clear focus ring. */
+@layer components {
+  .select {
+    @apply w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-2 pr-9 pl-3 text-sm text-gray-900 shadow-sm transition outline-none hover:border-gray-400 focus:border-[#3b1f6e] focus:ring-2 focus:ring-[#3b1f6e]/20 disabled:cursor-not-allowed disabled:opacity-50;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%236b7280'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 1.1rem;
+  }
+  .select-dark {
+    @apply w-full cursor-pointer appearance-none rounded-lg border border-slate-700 bg-slate-900 py-2 pr-9 pl-3 text-sm text-slate-100 transition outline-none hover:border-slate-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/25;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%2394a3b8'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 1.1rem;
+  }
+  .select-dark optgroup,
+  .select-dark option {
+    @apply bg-slate-900 text-slate-100;
+  }
+  .input-dark {
+    @apply w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 transition outline-none placeholder:text-slate-500 hover:border-slate-500 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/25;
+  }
+  .btn-ide {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent;
+  }
+  .btn-run {
+    @apply inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500 disabled:shadow-none;
+  }
+  .input {
+    @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition outline-none placeholder:text-gray-400 hover:border-gray-400 focus:border-[#3b1f6e] focus:ring-2 focus:ring-[#3b1f6e]/20;
+  }
+}
+
+/* The assistant's mark comes alive while it works: the team turns, each node lights up in turn. */
+.glyph-team {
+  transform-box: view-box;
+  transform-origin: 16px 16.6px;
+}
+.glyph-node {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.glyph-active .glyph-team {
+  animation: glyph-turn 3.2s cubic-bezier(0.6, 0, 0.4, 1) infinite;
+}
+.glyph-active .glyph-node {
+  animation: glyph-pulse 1.2s ease-in-out infinite;
+}
+.glyph-active .glyph-node-2 {
+  animation-delay: 0.2s;
+}
+.glyph-active .glyph-node-3 {
+  animation-delay: 0.4s;
+}
+.glyph-active .glyph-ring {
+  animation: glyph-ring 1.6s ease-out infinite;
+  transform-box: view-box;
+  transform-origin: 16px 16.6px;
+}
+@keyframes glyph-turn {
+  0%, 15% { transform: rotate(0deg); }
+  50%, 65% { transform: rotate(120deg); }
+  100% { transform: rotate(240deg); }
+}
+@keyframes glyph-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.75; }
+}
+@keyframes glyph-ring {
+  0% { transform: scale(0.85); stroke-opacity: 0.35; }
+  100% { transform: scale(1.25); stroke-opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glyph-active .glyph-team,
+  .glyph-active .glyph-node,
+  .glyph-active .glyph-ring {
+    animation: none;
+  }
+}
+
+/* Words that shimmer while the assistant works on them. */
+.shimmer-text {
+  background: linear-gradient(90deg, #9ca3af 0%, #9ca3af 40%, #374151 50%, #9ca3af 60%, #9ca3af 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text { animation: none; color: #6b7280; background: none; }
+}

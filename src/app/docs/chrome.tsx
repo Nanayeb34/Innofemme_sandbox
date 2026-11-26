@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { InnofemmeLogo } from "@/components/brand";
+import { ArrowLeft, ArrowUp, Check, ChevronDown, Copy, CornerDownLeft, FileText, Search } from "lucide-react";
 
 /** The interactive parts of the documentation page: the top bar, the contents that follow your reading, and copyable code. */
 
@@ -14,7 +16,7 @@ export function DocsHeader({ back, teamLabel }: { back: { href: string; label: s
     <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/95 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2.5">
         <Link href={back.href} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[#3b1f6e] px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#2e1757]">
-          <span aria-hidden>←</span>
+          <ArrowLeft className="h-4 w-4" aria-hidden />
           {back.label}
         </Link>
         <div className="ml-1 hidden h-6 w-px bg-gray-200 sm:block" />
@@ -23,8 +25,168 @@ export function DocsHeader({ back, teamLabel }: { back: { href: string; label: s
           <div className="truncate text-sm font-semibold text-gray-900">Documentation</div>
           <div className="truncate text-xs text-gray-500">{teamLabel ? `${teamLabel} · Mobile money sandbox` : "Mobile money sandbox"}</div>
         </div>
+        <DocsSearch />
       </div>
     </header>
+  );
+}
+
+interface Found {
+  id: string;
+  title: string;
+  part: string;
+  snippet: React.ReactNode;
+  score: number;
+}
+
+/** Marks the words searched for. */
+function mark(text: string, words: string[]) {
+  if (!words.length) return text;
+  const re = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+  return text.split(re).map((p, i) =>
+    i % 2 ? (
+      <mark key={i} className="rounded-sm bg-amber-200/70 text-gray-900">
+        {p}
+      </mark>
+    ) : (
+      p
+    ),
+  );
+}
+
+/** Search across the whole page: every section's heading and text. Opens with ⌘K, Ctrl+K or "/". */
+function DocsSearch() {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const [index, setIndex] = useState<{ id: string; title: string; part: string; text: string }[]>([]);
+  const input = useRef<HTMLInputElement>(null);
+
+  const show = () => {
+    // What is on the page is read when the search opens, so it always matches what the reader sees.
+    const parts = new Map<string, string>();
+    document.querySelectorAll("nav[aria-label='On this page'] a[href^='#']").forEach((a) => {
+      // The part a section belongs to is the heading just above its list in the contents.
+      const part = a.closest("ul")?.previousElementSibling?.textContent ?? "";
+      parts.set(a.getAttribute("href")!.slice(1), part.replace(/^\d+\s*·\s*/, ""));
+    });
+    setIndex(
+      [...document.querySelectorAll<HTMLElement>("main section[id]")].map((el) => ({
+        id: el.id,
+        title: el.querySelector("h2")?.textContent?.replace(/#$/, "").trim() ?? el.id,
+        part: parts.get(el.id) ?? "",
+        text: (el.innerText || el.textContent || "").replace(/\s+/g, " "),
+      })),
+    );
+    setQuery("");
+    setActive(0);
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement)?.closest("input, textarea, [contenteditable]");
+      if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") || (e.key === "/" && !typing)) {
+        e.preventDefault();
+        show();
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+
+  useEffect(() => {
+    if (open) input.current?.focus();
+  }, [open]);
+
+  const words = useMemo(() => query.toLowerCase().split(/\s+/).filter((w) => w.length > 1), [query]);
+  const found: Found[] = useMemo(() => {
+    if (!words.length) return [];
+    return index
+      .flatMap((s) => {
+        const title = s.title.toLowerCase();
+        const text = s.text.toLowerCase();
+        if (!words.every((w) => title.includes(w) || text.includes(w))) return [];
+        const score = words.reduce((n, w) => n + (title.includes(w) ? 10 : 0) + Math.min(5, text.split(w).length - 1), 0);
+        const at = Math.max(0, text.indexOf(words[0]));
+        const from = Math.max(0, at - 50);
+        const piece = `${from > 0 ? "…" : ""}${s.text.slice(from, at + 110).trim()}…`;
+        return [{ id: s.id, title: s.title, part: s.part, snippet: mark(piece, words), score }];
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+  }, [index, words]);
+
+  const go = (f: Found | undefined) => {
+    if (!f) return;
+    setOpen(false);
+    location.hash = f.id;
+    document.getElementById(f.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  return (
+    <>
+      <button type="button" onClick={show} className="ml-auto flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm text-gray-500 hover:border-gray-300 hover:bg-white sm:w-64">
+        <Search className="h-4 w-4" />
+        <span className="hidden flex-1 text-left sm:inline">Search the docs…</span>
+        <kbd className="hidden rounded border border-gray-200 bg-white px-1.5 font-sans text-[11px] text-gray-400 sm:inline">⌘K</kbd>
+      </button>
+      {/* Drawn at the level of the page: inside the blurred top bar, "fixed" would only cover the bar. */}
+      {open && createPortal(
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-gray-900/40 px-4 pt-[12vh] backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
+          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl" role="dialog" aria-label="Search the documentation">
+            <div className="flex items-center gap-3 border-b border-gray-100 px-4">
+              <Search className="h-5 w-5 shrink-0 text-gray-400" />
+              <input
+                ref={input}
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setActive(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setOpen(false);
+                  else if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setActive((a) => Math.min(a + 1, found.length - 1));
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setActive((a) => Math.max(a - 1, 0));
+                  } else if (e.key === "Enter") go(found[active]);
+                }}
+                placeholder="Search: plug-in, SIM swap, team key, payment…"
+                className="h-14 flex-1 bg-transparent text-base text-gray-900 outline-none placeholder:text-gray-400"
+              />
+              <kbd className="rounded border border-gray-200 px-1.5 text-[11px] text-gray-400">Esc</kbd>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-2">
+              {!words.length && <p className="px-3 py-6 text-center text-sm text-gray-500">Type to search every section of the documentation.</p>}
+              {words.length > 0 && !found.length && <p className="px-3 py-6 text-center text-sm text-gray-500">Nothing found for “{query}”.</p>}
+              {found.map((f, i) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => go(f)}
+                  className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left ${i === active ? "bg-[#f3effa]" : ""}`}
+                >
+                  <FileText className={`mt-0.5 h-4 w-4 shrink-0 ${i === active ? "text-[#3b1f6e]" : "text-gray-400"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-2">
+                      <span className="truncate text-sm font-semibold text-gray-900">{f.title}</span>
+                      {f.part && <span className="shrink-0 text-[11px] text-gray-400">{f.part}</span>}
+                    </span>
+                    <span className="mt-0.5 line-clamp-2 block text-[13px] leading-5 text-gray-600">{f.snippet}</span>
+                  </span>
+                  {i === active && <CornerDownLeft className="mt-0.5 h-4 w-4 shrink-0 text-[#3b1f6e]" />}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -94,9 +256,7 @@ export function DocsNav({ parts }: { parts: ContentsPart[] }) {
             <span className="text-gray-500">On this page: </span>
             <span className="font-medium text-gray-900">{current}</span>
           </span>
-          <span aria-hidden className="ml-2 text-xs text-gray-500">
-            {open ? "▲" : "▼"}
-          </span>
+          <ChevronDown aria-hidden className={`ml-2 h-4 w-4 text-gray-500 transition ${open ? "rotate-180" : ""}`} />
         </button>
         {open && (
           <div className="mt-2 max-h-[60vh] overflow-y-auto rounded-lg border border-gray-200 bg-white p-4 shadow-lg">
@@ -106,6 +266,58 @@ export function DocsNav({ parts }: { parts: ContentsPart[] }) {
       </div>
     </>
   );
+}
+
+// ---------- colours for code ----------
+
+const KEYWORDS = new Set(
+  "def return if elif else for while in not and or is import from as export function const let var await async new class try except catch finally raise throw with lambda pass yield true false null undefined None True False print curl python3 python node npm pnpm cd jq".split(" "),
+);
+const VERBS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const TOKENS =
+  /((?:^|(?<=\s))(?:#|\/\/)[^\n]*)|("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|(https?:\/\/[^\s"'`)]+|(?:bridge|code):\/\/[^\s"'`)]+)|((?<=\s)--?[a-zA-Z][\w-]*)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)/gm;
+
+const STYLE: Record<string, string> = {
+  comment: "text-slate-500 italic",
+  string: "text-emerald-300",
+  key: "text-sky-300",
+  url: "text-teal-300",
+  flag: "text-orange-300",
+  number: "text-amber-300",
+  keyword: "text-fuchsia-300",
+  verb: "font-semibold text-rose-300",
+  call: "text-blue-300",
+};
+
+/** Splits code into coloured pieces: comments, strings, keys, addresses, flags, numbers, keywords and function calls. */
+export function highlight(code: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let n = 0;
+  for (const m of code.matchAll(TOKENS)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push(code.slice(last, at));
+    const text = m[0];
+    // Groups, in order: comment, string, address, flag, number, word.
+    const [, comment, str, url, flag, num, word] = m;
+    let kind: string | undefined;
+    if (comment) kind = "comment";
+    else if (str) kind = /^\s*:/.test(code.slice(at + text.length)) ? "key" : "string";
+    else if (url) kind = "url";
+    else if (flag) kind = "flag";
+    else if (num) kind = "number";
+    else if (word) kind = VERBS.has(text) ? "verb" : KEYWORDS.has(text) ? "keyword" : code[at + text.length] === "(" ? "call" : undefined;
+    out.push(kind ? (
+      <span key={n++} className={STYLE[kind]}>
+        {text}
+      </span>
+    ) : (
+      text
+    ));
+    last = at + text.length;
+  }
+  if (last < code.length) out.push(code.slice(last));
+  return out;
 }
 
 /** A block of code or commands, with a button to copy it. */
@@ -124,10 +336,10 @@ export function CopyCode({ children, label }: { children: string; label?: string
           }}
           className="rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white"
         >
-          {copied ? "Copied ✓" : "Copy"}
+          <span className="flex items-center gap-1">{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[12.5px] leading-relaxed text-slate-100">{children}</pre>
+      <pre className="overflow-x-auto p-3 font-mono text-[12.5px] leading-relaxed text-slate-200">{highlight(children)}</pre>
     </div>
   );
 }
@@ -166,7 +378,7 @@ export function ToTop() {
   if (!show) return null;
   return (
     <button type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="fixed bottom-20 right-5 z-30 rounded-full border border-gray-200 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 shadow-lg hover:bg-gray-50">
-      ↑ Top
+      <span className="flex items-center gap-1.5"><ArrowUp className="h-4 w-4" /> Top</span>
     </button>
   );
 }

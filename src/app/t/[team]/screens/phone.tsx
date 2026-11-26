@@ -6,6 +6,7 @@ import { TelcoMark } from "@/components/telco-mark";
 import { Loading, useView } from "@/components/ui";
 import { api, ghs, teamName, when } from "@/lib/client";
 import { CallLog, CallScreen, useCalls, type CallLogRow, type Calls } from "./calls";
+import { Select } from "@/components/select";
 
 interface Line {
   msisdn: string;
@@ -142,18 +143,18 @@ export default function Phone({ team, role }: { team: string; role: string }) {
         </div>
       ) : (
         <>
-          <label className="mb-3 block text-sm">
+          <div className="mb-3 block text-sm">
             <span className="text-xs font-medium text-gray-600">Whose phone is this?</span>
-            <select value={current} onChange={(e) => pick(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
-              {lines.map((l) => (
-                <option key={l.msisdn} value={l.msisdn}>
-                  {l.label} · {l.msisdn} · {NETWORK[l.telco]}
-                  {l.status !== "active" ? " (blocked)" : ""}
-                </option>
-              ))}
-            </select>
+            <Select
+              className="mt-1"
+              value={current}
+              onChange={pick}
+              searchable={lines.length > 5}
+              label="Whose phone is this?"
+              options={lines.map((l) => ({ value: l.msisdn, label: `${l.label}${l.status !== "active" ? " (blocked)" : ""}`, hint: `${l.msisdn} · ${NETWORK[l.telco]}` }))}
+            />
             {!!data?.more && <OtherNumber more={data.more} onPick={pick} />}
-          </label>
+          </div>
 
           <div className="flex min-h-[620px] flex-1 flex-col overflow-hidden rounded-[2rem] border-[6px] border-gray-900 bg-white shadow-xl">
             <div className="flex items-center justify-between px-5 py-2 text-xs font-semibold" style={{ background: brandColor, color: TEXT_ON[state?.telco ?? ""] ?? "#fff" }}>

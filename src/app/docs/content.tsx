@@ -335,6 +335,89 @@ export async function DocsContent({ team }: { team?: string }) {
   return { decision: "allow" };
 }`}</CopyCode>
             </div>
+
+            <h3 className="pt-4 text-lg font-semibold text-gray-900">How decide() works</h3>
+            <p>
+              Think of it as a question the institution asks your code at one moment, such as just before a payment leaves a wallet: <i>&quot;this is about to happen, shall I go ahead?&quot;</i>. Your function gets three things and gives back one answer.
+            </p>
+            <div className="my-4 overflow-hidden rounded-xl border border-gray-200">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50 text-xs font-semibold tracking-wide text-gray-500 uppercase">
+                  <tr>
+                    <th className="w-36 px-4 py-2.5">Name</th>
+                    <th className="px-4 py-2.5">What it is</th>
+                    <th className="hidden px-4 py-2.5 md:table-cell">Example</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 align-top">
+                  <tr>
+                    <td className="px-4 py-3">
+                      <code>point</code>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <b>Which moment it is</b>: the step you plugged the code into. One plug-in can be plugged in at several steps, and <code>point</code> tells you which one is asking now. <code>events</code> is the odd one out: it reports things that have already
+                      happened, and your answer is ignored.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>&quot;payment.authorize&quot;</code>
+                      <br />
+                      <code>&quot;sim.swap&quot;</code>
+                      <br />
+                      <code>&quot;events&quot;</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3">
+                      <code>data</code>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <b>The facts about what is about to happen</b>, as an object (a dict in Python). What is in it depends on the step: for a payment, the amount, who is paying, who is being paid and how often they have paid them before. The{" "}
+                      <b>Test</b> tab in the console shows the real example for every step, and <a href="#plugins">section 7</a> lists them all.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>data.amount</code>
+                      <br />
+                      <code>data.payer.msisdn</code>
+                      <br />
+                      <code>data.payee.name</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3">
+                      <code>ctx</code>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <b>Your toolbox</b> (short for context). <code>ctx.store</code> is a small memory that survives between questions and restarts: <code>get(key)</code>, <code>set(key, value)</code>, <code>delete(key)</code>. <code>ctx.institution</code> says who is
+                      asking (e.g. <code>mtn</code>), <code>ctx.world</code> which team&apos;s world, and <code>ctx.log(…)</code> writes to the Output panel.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>ctx.store.get(&quot;seen&quot;)</code>
+                      <br />
+                      <code>ctx.institution</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3">
+                      <b>The answer</b>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      What the institution should do, with an optional <code>message</code> shown to the customer: <code>allow</code> (go ahead), <code>warn</code> (show the message; the customer chooses to continue or cancel), <code>delay</code> (refuse for now,
+                      with <code>minutes</code> before it may be tried again) or <code>reject</code> (refuse). Return nothing and it counts as <code>allow</code>.
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      <code>{`{ "decision": "warn", "message": "…" }`}</code>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              Here is the <code>data</code> a network sends at <code>payment.authorize</code>, just before money leaves a customer&apos;s wallet:
+            </p>
+            <CopyCode label="data at payment.authorize">{JSON.stringify(SAMPLES["payment.authorize"], null, 2)}</CopyCode>
+            <Callout tone="tip" title="Not sure what a step sends?">
+              Write <code>print(data)</code> (Python) or <code>console.log(data)</code> (JavaScript) in your function, save, and press <b>Send a test</b> on the <b>Test</b> tab. The full example appears under <b>Output</b>.
+            </Callout>
             <ul>
               <li>
                 <b>Answers:</b> <code>allow</code>, <code>warn</code> (the customer sees your message and chooses), <code>delay</code> (with <code>minutes</code>) or <code>reject</code>. Each step accepts only some of them; the console tells you which.

@@ -3,21 +3,27 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, ghs, teamName, when } from "@/lib/client";
+import { Select } from "./select";
+import { askConfirm, usePrefs, useViews } from "@/stores/ui";
 
-/** Loads an institution's view and keeps it fresh. */
+/**
+ * Loads an institution's view and keeps it fresh. What it last showed is kept in a shared store, so coming back
+ * to a page shows it at once while the fresh copy loads, and two parts of a page asking for the same view share it.
+ */
 export function useView<T>(team: string, path: string, everyMs = 3000) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const key = `${team}${path}`;
+  const entry = useViews((s) => s.entries[key]);
+  const put = useViews((s) => s.put);
   const refresh = useCallback(async () => {
     try {
-      setData(await api<T>(team, path));
-      setError(null);
+      put(key, { data: await api<T>(team, path), error: null });
     } catch (e) {
-      setError((e as Error).message);
+      put(key, { error: (e as Error).message });
     }
-  }, [team, path]);
+  }, [team, path, key, put]);
+  const data = (entry?.data ?? null) as T | null;
+  const error = entry?.error ?? null;
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- polls the sandbox server, an external system
     refresh();
     // A tab nobody is looking at stops asking, and catches up the moment it is looked at again.
     const t = setInterval(() => {
@@ -36,16 +42,18 @@ export function useView<T>(team: string, path: string, everyMs = 3000) {
 }
 
 export function Shell({
-  team, title, subtitle, color = "#111827", textOn = "#ffffff", mark, right, back, children,
+  team, title, subtitle, color = "#111827", textOn = "#ffffff", mark, right, back, children, bare,
 }: {
   team: string; title: string; subtitle: string; color?: string; textOn?: string; mark?: ReactNode; right?: ReactNode;
+  /** Full width with no padding, for a page that lays itself out edge to edge (the Developer console). */
+  bare?: boolean;
   /** Where the header's back link goes. Defaults to the list of all systems. */
   back?: { href: string; label: string };
   children: ReactNode;
 }) {
   return (
     <div className="flex min-h-full flex-1 flex-col">
-      <header style={{ background: color, color: textOn }}>
+      <header style={{ background: color, color: textOn }} className="border-b border-black/10">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
           <Link href={back?.href ?? `/t/${team}`} className="shrink-0 rounded-lg border border-current/30 px-3 py-1.5 text-sm font-medium hover:bg-black/10">
             ← {back?.label ?? "All systems"}
@@ -60,7 +68,7 @@ export function Shell({
           {right}
         </div>
       </header>
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5">{children}</main>
+      {bare ? <main className="flex min-h-0 w-full flex-1 flex-col">{children}</main> : <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5">{children}</main>}
     </div>
   );
 }
@@ -213,13 +221,7 @@ export function ActionForm({
                 {f.optional && <span className="font-normal text-gray-400"> (optional)</span>}
               </span>
               {f.type === "select" ? (
-                <select value={value} onChange={(e) => setValues({ ...values, [f.name]: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
-                  {options.map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
+                <Select className="mt-1" value={value} onChange={(v) => setValues({ ...values, [f.name]: v })} options={options.map(([v, l]) => ({ value: v, label: l }))} label={f.label} />
               ) : (
                 <input
                   type={f.type === "number" ? "text" : (f.type ?? "text")}
@@ -254,7 +256,7 @@ export function ActionButton({ team, path, body, children, confirmText, onDone, 
   const [error, setError] = useState<string | null>(null);
   const run = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirmText && !confirm(confirmText)) return;
+    if (confirmText && !(await askConfirm({ title: "Are you sure?", message: confirmText, confirm: "Yes, go ahead", danger }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -384,7 +386,12 @@ export interface ActivityRow {
 
 export function Activity({ rows, showSystem, empty = "Nothing has happened here yet.", pageSize: initialSize, pageSizes }: { rows: ActivityRow[]; showSystem?: boolean; empty?: string; pageSize?: number; pageSizes?: number[] }) {
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(initialSize);
+  // Where the reader can choose the page size, the choice is remembered.
+  const remembered = usePrefs((s) => s.activityPageSize);
+  const setPrefs = usePrefs((s) => s.set);
+  const [ownSize, setOwnSize] = useState(initialSize);
+  const pageSize = pageSizes ? remembered : ownSize;
+  const setPageSize = (n: number) => (pageSizes ? setPrefs({ activityPageSize: n }) : setOwnSize(n));
   if (!rows.length) return <p className="text-sm text-gray-500">{empty}</p>;
   // With a page size, show one page at a time. New rows arrive at the top, so the first page is always the latest.
   const pages = pageSize ? Math.max(1, Math.ceil(rows.length / pageSize)) : 1;
@@ -407,21 +414,17 @@ export function Activity({ rows, showSystem, empty = "Nothing has happened here 
           {pageSizes && (
             <label className="flex items-center gap-1.5">
               Show
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
+              <Select
+                size="sm"
+                className="w-16"
+                value={String(pageSize)}
+                onChange={(v) => {
+                  setPageSize(Number(v));
                   setPage(0);
                 }}
-                className="rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs"
-                aria-label="Items per page"
-              >
-                {pageSizes.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
+                options={pageSizes.map((n) => ({ value: String(n), label: String(n) }))}
+                label="Items per page"
+              />
               per page
             </label>
           )}
@@ -516,10 +519,7 @@ export function SettingsForm({ team, path, fields, onSaved }: { team: string; pa
           <label key={f.pointer} className="block text-sm">
             <span className="font-medium text-gray-700">{f.label}</span>
             {typeof f.value === "boolean" ? (
-              <select value={String(draft[f.pointer] ?? f.value)} onChange={(e) => setDraft({ ...draft, [f.pointer]: e.target.value === "true" })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
-                <option value="true">Yes</option>
-                <option value="false">No</option>
-              </select>
+              <Select className="mt-1" value={String(draft[f.pointer] ?? f.value)} onChange={(v) => setDraft({ ...draft, [f.pointer]: v === "true" })} options={[{ value: "true", label: "Yes" }, { value: "false", label: "No" }]} label={f.label} />
             ) : (
               <input inputMode="decimal" value={String(draft[f.pointer] ?? f.value)} onChange={(e) => setDraft({ ...draft, [f.pointer]: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             )}

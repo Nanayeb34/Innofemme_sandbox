@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { TelcoMark } from "@/components/telco-mark";
 import { ActionForm, Badge, ID_FIELDS, Loading, Section, Shell, Stat, Stats, Status, Table, Tabs, TxnTable, useView, type TxnRow } from "@/components/ui";
 import { ghs, when } from "@/lib/client";
+import { Select } from "@/components/select";
 
 export const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
 const TELCOS: [string, string][] = [["mtn", "MTN"], ["telecel", "Telecel"], ["at", "AT"]];
@@ -43,16 +44,10 @@ export function NetworkSwitch({ team, kind, telco }: { team: string; kind: strin
 
 function Who({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: [string, string][] }) {
   return (
-    <label className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+    <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
       <span className="font-medium text-gray-700">{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm sm:w-auto sm:max-w-full">
-        {options.map(([v, l]) => (
-          <option key={v} value={v}>
-            {l}
-          </option>
-        ))}
-      </select>
-    </label>
+      <Select className="w-full sm:w-[28rem] sm:max-w-full" value={value} onChange={onChange} options={options.map(([v, l]) => ({ value: v, label: l }))} label={label} />
+    </div>
   );
 }
 
