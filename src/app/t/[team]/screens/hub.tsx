@@ -7,7 +7,7 @@ import { TelcoMark } from "@/components/telco-mark";
 import { Activity, Loading, useView, type ActivityRow } from "@/components/ui";
 import { api, teamName, when } from "@/lib/client";
 import { Select } from "@/components/select";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Copy, UserPlus, X } from "lucide-react";
 import { askConfirm } from "@/stores/ui";
 
 interface HubView {
@@ -47,6 +47,7 @@ export default function Hub({ team, logos, phones, consoles }: { team: string; l
             <h1 className="text-lg font-semibold text-gray-900">{teamName(team)}</h1>
           </div>
           <div className="flex gap-2">
+            {consoles && <InviteTeammates team={team} consoles={consoles} />}
             <Link href={`${base}/developer`} className="btn btn-dark">
               Developer
             </Link>
@@ -204,6 +205,69 @@ function PhoneCodes({ phones, consoles }: { phones: PhoneCode[]; consoles?: Phon
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The way in for teammates. The address in the browser (/t/team-NN) carries no key, so sharing it only shows
+ * "Scan your team's QR code". This shares the join link instead, which carries the key and opens everything.
+ */
+function InviteTeammates({ team, consoles }: { team: string; consoles: PhoneCode & { key: string } }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<"link" | "key" | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [open]);
+  const copy = (what: "link" | "key", text: string) => {
+    void navigator.clipboard?.writeText(text);
+    setCopied(what);
+    setTimeout(() => setCopied(null), 1500);
+  };
+  return (
+    <>
+      <button className="btn gap-1.5" onClick={() => setOpen(true)}>
+        <UserPlus size={16} aria-hidden />
+        <span className="hidden sm:inline">Invite teammates</span>
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={() => setOpen(false)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="invite-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 id="invite-title" className="text-lg font-semibold text-gray-900">Invite teammates to {teamName(team)}</h2>
+                <p className="mt-1 text-sm text-gray-600">Send them this link, or let them scan the code. It opens every system on their device.</p>
+              </div>
+              <button className="rounded-lg p-1 text-gray-500 hover:bg-gray-100" aria-label="Close" onClick={() => setOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mx-auto mt-4 w-[180px]" dangerouslySetInnerHTML={{ __html: consoles.qr }} />
+            <label className="mt-4 block text-xs font-medium text-gray-600">Team link</label>
+            <div className="mt-1 flex gap-2">
+              <input readOnly value={consoles.url} onFocus={(e) => e.currentTarget.select()} className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 font-mono text-xs" />
+              <button className="btn btn-dark gap-1.5" onClick={() => copy("link", consoles.url)}>
+                {copied === "link" ? <Check size={16} aria-hidden /> : <Copy size={16} aria-hidden />}
+                {copied === "link" ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              <span>
+                Team key: <span className="select-all font-mono text-gray-900">{consoles.key}</span>
+              </span>
+              <button className="underline" onClick={() => copy("key", consoles.key)}>
+                {copied === "key" ? "Copied" : "Copy key"}
+              </button>
+            </div>
+            <p className="mt-3 text-xs text-amber-700">
+              Share it only with your own team: anyone with this link can use your team&apos;s sandbox. Copying the address from the browser bar will not work, because it has no key in it.
+            </p>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

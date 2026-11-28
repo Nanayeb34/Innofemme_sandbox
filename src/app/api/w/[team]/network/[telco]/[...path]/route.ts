@@ -11,7 +11,7 @@ import { isTelco } from "@/engine/util";
  *   POST token                       client id + API key (Basic) → bearer token
  *   POST v1/sms/messages             send a text under the partner's registered sender name
  *   GET  v1/sms/messages             what the partner has sent
- *   GET  v1/subscribers/{msisdn}     who the number is registered to, and its status
+ *   GET  v1/subscribers/{msisdn}     whether the number is in service, since when, and whether it has a wallet (never the name)
  *   POST v1/sim-swap/check           was the SIM replaced within maxAge hours?
  *   POST v1/sim-swap/retrieve-date   when the SIM was last replaced
  *   POST v1/kyc-match                do these details match the network's records? (true/false per field)

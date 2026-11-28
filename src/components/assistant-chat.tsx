@@ -1,15 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronRight, History, Square, SquarePen, Trash2, X } from "lucide-react";
+import { ArrowUp, ChevronRight, History, Square, SquarePen, Trash2 } from "lucide-react";
 import { AssistantGlyph } from "./assistant-glyph";
 import { askConfirm } from "@/stores/ui";
 
 /**
  * The conversation with the assistant. The same component fills the assistant's own page (with a list of
  * conversations beside it) and the panel that slides out beside any console. The answer is shown word by word
- * as it is written, and the work as it happens: each step and how it went, the specialists at work, and
- * anything that needs the person's say-so.
+ * as it is written, and the work as one line saying what it is doing now (which opens to show the steps once done),
+ * and anything that needs the person's say-so.
  */
 
 type Ev = { type: string } & Record<string, unknown>;
@@ -28,14 +28,6 @@ const EXAMPLES: [string, string][] = [
   ["Look around", "What is in my world right now?"],
   ["Explain", "How does my application ask a customer for a payment?"],
 ];
-
-const AGENT_LOOK: Record<string, string> = {
-  builder: "bg-sky-100 text-sky-800",
-  operator: "bg-emerald-100 text-emerald-800",
-  integrator: "bg-amber-100 text-amber-800",
-  analyst: "bg-violet-100 text-violet-800",
-  guide: "bg-rose-100 text-rose-800",
-};
 
 // ---------- what is on screen, worked out from the events ----------
 
@@ -184,15 +176,6 @@ function Prose({ text, live }: { text: string; live?: boolean }) {
 
 // ---------- small pieces ----------
 
-function Spinner({ className = "h-3.5 w-3.5" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={`${className} animate-spin text-[#3b1f6e]`} fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
-      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 /** Words that shimmer while something is under way. */
 function Shimmer({ children }: { children: ReactNode }) {
   return <span className="shimmer-text">{children}</span>;
@@ -208,104 +191,61 @@ function Thinking() {
   );
 }
 
-function StepIcon({ row, running }: { row: StepRow; running: boolean }) {
-  if (running) return <Spinner />;
-  if (row.waiting) return <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-400 text-[9px] font-bold text-white">?</span>;
-  if (row.ok === false)
-    return (
-      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-rose-500 text-white">
-        <X className="h-2.5 w-2.5" strokeWidth={3} />
-      </span>
-    );
-  if (row.ok)
-    return (
-      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white">
-        <Check className="h-2.5 w-2.5" strokeWidth={3} />
-      </span>
-    );
-  return <span className="h-3.5 w-3.5 rounded-full border-2 border-gray-300" />;
-}
-
-/** The steps taken, as a compact list that can be folded away once they are done. */
-function Steps({ steps, busy }: { steps: StepRow[]; busy: boolean }) {
-  const running = busy && steps.some((r) => r.ok === undefined);
-  const failed = steps.filter((r) => r.ok === false && !r.waiting).length;
-  const [open, setOpen] = useState(true);
+/** The details behind a finished line: plain text, no icons. Only steps that did not work stand out. */
+function StepList({ steps }: { steps: StepRow[] }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white">
-      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-gray-600 hover:text-gray-900">
-        {running ? <Spinner /> : <StepIcon row={{ id: "", label: "", ok: failed === 0 }} running={false} />}
-        <span className="flex-1">
-          {running ? "Working" : failed ? `${steps.length} step${steps.length === 1 ? "" : "s"}, ${failed} did not work` : `${steps.length} step${steps.length === 1 ? "" : "s"} done`}
-        </span>
-        <ChevronDown aria-hidden className={`h-4 w-4 text-gray-400 transition ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open && (
-        <ul className="space-y-1.5 border-t border-gray-100 px-3 py-2.5">
-          {steps.map((r, n) => (
-            <li key={r.id + n} className="flex gap-2.5 text-[13px] leading-snug">
-              <span className="mt-0.5">
-                <StepIcon row={r} running={r.ok === undefined && busy} />
-              </span>
-              <span className="min-w-0">
-                <span className={r.ok === undefined && busy ? "text-gray-900" : "text-gray-700"}>{r.label}</span>
-                {r.summary && r.summary !== "Done" && <span className={`block break-words text-xs ${r.ok === false && !r.waiting ? "text-rose-700" : "text-gray-500"}`}>{r.summary}</span>}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <ul className="space-y-1 border-l border-gray-200 pl-3">
+      {steps.map((r, n) => (
+        <li key={r.id + n} className="text-[13px] leading-snug">
+          <span className={r.ok === false && !r.waiting ? "text-rose-700" : "text-gray-600"}>{r.label}</span>
+          {r.ok === false && r.summary && <span className="block break-words text-xs text-rose-600">{r.summary}</span>}
+          {r.waiting && <span className="block text-xs text-amber-700">Waiting for your answer</span>}
+        </li>
+      ))}
+    </ul>
   );
 }
 
-/** A specialist at work: what it was asked, its steps, what it is writing now, and its report. */
-function Work({ item, busy, live }: { item: Extract<Item, { kind: "work" }>; busy: boolean; live?: string }) {
-  const working = busy && !item.done;
-  return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-      <div className="flex items-center gap-2.5 border-b border-gray-100 bg-gray-50/70 px-3 py-2">
-        <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${AGENT_LOOK[item.agent] ?? "bg-gray-200 text-gray-700"}`}>{item.name.slice(0, 1).toUpperCase()}</span>
-        <span className="text-[13px] font-semibold text-gray-900">{item.name}</span>
-        <span className={`ml-auto flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${working ? "bg-[#f3effa] text-[#3b1f6e]" : item.done ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
-          {working && <Spinner className="h-3 w-3" />}
-          {working ? "Working" : item.done ? "Done" : "Stopped"}
+/**
+ * The assistant's work, kept to one line. While it works: the animated mark and what it is doing now.
+ * Once done: a quiet line ("Worked through 6 steps") that opens to show the steps, for anyone curious.
+ */
+function WorkLine({ who, steps, working, live, brief, report }: { who?: string; steps: StepRow[]; working: boolean; live?: string; brief?: string; report?: string }) {
+  const [open, setOpen] = useState(false);
+  const failed = steps.filter((r) => r.ok === false && !r.waiting).length;
+  const current = [...steps].reverse().find((r) => r.ok === undefined) ?? steps[steps.length - 1];
+  if (working)
+    return (
+      <div className="flex items-center gap-2.5 text-sm" aria-live="polite">
+        <AssistantGlyph size={18} active className="shrink-0 rounded-[5px]" />
+        <span className="min-w-0 truncate">
+          <Shimmer>
+            {who ? `${who}: ` : ""}
+            {current ? `${current.label}…` : live ? "Writing…" : "Thinking…"}
+          </Shimmer>
         </span>
       </div>
-      <div className="space-y-2 px-3 py-2.5">
-        <details className="group text-xs">
-          <summary className="cursor-pointer list-none text-gray-500 hover:text-gray-800">
-            <ChevronRight className="inline h-3.5 w-3.5 transition group-open:rotate-90" /> What it was asked to do
-          </summary>
-          <p className="mt-1 whitespace-pre-wrap pl-3 text-gray-600">{item.brief}</p>
-        </details>
-        {item.steps.length > 0 && (
-          <ul className="space-y-1.5">
-            {item.steps.map((r, n) => (
-              <li key={r.id + n} className="flex gap-2.5 text-[13px] leading-snug">
-                <span className="mt-0.5">
-                  <StepIcon row={r} running={r.ok === undefined && working} />
-                </span>
-                <span className="min-w-0">
-                  <span className="text-gray-700">{r.label}</span>
-                  {r.summary && r.summary !== "Done" && <span className={`block break-words text-xs ${r.ok === false && !r.waiting ? "text-rose-700" : "text-gray-500"}`}>{r.summary}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {working && live && <p className="border-l-2 border-[#3b1f6e]/30 pl-2.5 text-xs leading-5 text-gray-600">{live}</p>}
-        {item.done && item.report && (
-          <details className="group text-xs">
-            <summary className="cursor-pointer list-none text-gray-500 hover:text-gray-800">
-              <ChevronRight className="inline h-3.5 w-3.5 transition group-open:rotate-90" /> Its report
-            </summary>
-            <div className="mt-1.5 pl-3 text-[13px] text-gray-700">
-              <Prose text={item.report} />
+    );
+  const n = steps.length;
+  const summary = `${who ? `${who} worked` : "Worked"} through ${n} step${n === 1 ? "" : "s"}${failed ? `, ${failed} did not work` : ""}`;
+  const more = n > 0 || brief || report;
+  return (
+    <div className="text-[13px]">
+      <button type="button" disabled={!more} onClick={() => setOpen(!open)} className="flex items-center gap-1 text-gray-500 hover:text-gray-800 disabled:hover:text-gray-500" aria-expanded={open}>
+        <ChevronRight aria-hidden className={`h-3.5 w-3.5 transition ${open ? "rotate-90" : ""}`} />
+        <span className={failed ? "text-rose-700" : ""}>{summary}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2 pl-1.5">
+          {brief && <p className="whitespace-pre-wrap text-xs text-gray-500">Asked to: {brief}</p>}
+          {n > 0 && <StepList steps={steps} />}
+          {report && (
+            <div className="border-l border-gray-200 pl-3 text-[13px] text-gray-700">
+              <Prose text={report} />
             </div>
-          </details>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -596,8 +536,8 @@ export default function AssistantChat({ team, tall = false }: { team: string; ta
                   </div>
                 );
               if (item.kind === "text") return <Prose key={n} text={item.text} />;
-              if (item.kind === "steps") return <Steps key={n} steps={item.steps} busy={busy && n === items.length - 1} />;
-              if (item.kind === "work") return <Work key={n} item={item} busy={busy} live={liveAgents[item.agent]} />;
+              if (item.kind === "steps") return <WorkLine key={n} steps={item.steps} working={busy && n === items.length - 1 && item.steps.some((r) => r.ok === undefined)} />;
+              if (item.kind === "work") return <WorkLine key={n} who={item.name} steps={item.steps} working={busy && !item.done} live={liveAgents[item.agent]} brief={item.brief} report={item.report} />;
               if (item.kind === "confirm")
                 return (
                   <div key={n} className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">

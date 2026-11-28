@@ -56,6 +56,27 @@ export const cashOutMode = (w: World, telco: Telco) => getConfig(w.db, `telco.${
 const customerOf = (p: Person | undefined) => (p ? { name: fullName(p), ghanaCard: p.ghana_card, dateOfBirth: p.dob, gender: p.gender, region: p.region } : null);
 const iso = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString() : null);
 
+/** PINs people choose most often, which a thief tries first. */
+const COMMON_PINS = new Set(["1234", "0000", "1111", "1212", "7777", "1004", "2000", "4444", "2222", "6969", "9999", "3333", "5555", "6666", "1122", "1313", "8888", "4321", "2001", "1010", "2580", "0852", "1230", "0123"]);
+
+/**
+ * How guessable a PIN is, without the PIN: what the network's own checks found. Each is true or false.
+ * The birth date checks use the customer's Ghana Card details, which the network holds.
+ */
+export function pinChecks(pin: string, msisdn: string, dob?: string | null) {
+  const d = pin.split("").map(Number);
+  const steps = d.slice(1).map((x, i) => x - d[i]);
+  const [year, month, day] = String(dob ?? "").split("-");
+  return {
+    allSameDigit: new Set(d).size === 1,
+    inSequence: steps.every((s) => s === 1) || steps.every((s) => s === -1),
+    commonPin: COMMON_PINS.has(pin),
+    endOfPhoneNumber: msisdn.endsWith(pin),
+    birthYear: !!year && pin === year,
+    birthDayAndMonth: !!day && !!month && (pin === day + month || pin === month + day),
+  };
+}
+
 export type PinReason = "new_wallet" | "change" | "agent_line" | "merchant_line";
 
 /** What is wrong with a PIN someone wants to use, if anything: its format, or the verdict of an API plugged in at "pin.set". */
@@ -63,7 +84,9 @@ export function pinProblem(w: World, msisdn: string, pin: unknown, reason: PinRe
   if (!/^\d{4}$/.test(String(pin ?? ""))) return "PIN must be 4 digits";
   const sim = getSim(w, msisdn);
   if (!sim) return;
-  const d = consult(w, sim.telco, "pin.set", { msisdn, pin: String(pin), reason, network: sim.telco, customer: customerOf(personById(w, sim.person_id ?? "")) });
+  const person = personById(w, sim.person_id ?? "");
+  // The PIN never leaves the network's own systems. A plugged-in API is told only how guessable it is.
+  const d = consult(w, sim.telco, "pin.set", { msisdn, reason, network: sim.telco, pinChecks: pinChecks(String(pin), msisdn, person?.dob), customer: customerOf(person) });
   if (d.decision === "reject") return d.message ?? "That PIN is not allowed. Choose a different one.";
 }
 

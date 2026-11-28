@@ -40,13 +40,23 @@ function deliver(w: World, to: string, sender: string, text: string, meta: { kin
   if (!reason) {
     // The recipient's network may have plugged in an API that screens texts before they arrive.
     const network = getSim(w, to)!.telco;
+    const person = meta.kind === "person";
+    const senderSim = person ? getSim(w, sender) : undefined;
+    const today = w.now - (w.now % 86_400_000);
     const d = consult(w, network, "sms.deliver", {
       from: sender,
-      fromType: meta.kind === "person" ? "person" : "business",
+      fromType: person ? "person" : "business",
       fromNetwork: meta.fromTelco,
       to,
       toNetwork: network,
-      text,
+      // What people write to each other is private: the network screens their texts by who sent them and how,
+      // never by what they say. Only a business's bulk texts are open to content filtering.
+      ...(person ? {} : { text }),
+      parts: smsParts(text),
+      // A network knows when its own SIMs were registered, not another network's.
+      senderSimRegisteredAt: senderSim && senderSim.telco === network && senderSim.registered_at ? new Date(senderSim.registered_at).toISOString() : null,
+      // Counted from the texts this network carried today.
+      numbersTheSenderTextedToday: count(w.db, "SELECT COUNT(DISTINCT to_msisdn) AS n FROM sms_log WHERE sender = ? AND at >= ? AND (to_telco = ? OR from_telco = ?)", sender, today, network, network),
       textsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM sms_log WHERE status = 'delivered' AND ((sender = ? AND to_msisdn = ?) OR (sender = ? AND to_msisdn = ?))", sender, to, to, sender),
     });
     if (d.decision === "reject") reason = `Blocked by the recipient's network${d.message ? `: ${d.message}` : ""}`;
@@ -135,11 +145,13 @@ export function thread(w: World, msisdn: string, other: string) {
 
 /** A network's message records: every text sent from it or to it. */
 export function smsRecords(w: World, telco: Telco, limit = 200) {
-  const rows = w.db.prepare("SELECT * FROM sms_log WHERE from_telco = ? OR to_telco = ? ORDER BY id DESC LIMIT ?").all(telco, telco, limit) as {
-    id: number; at: number; kind: string; sender: string; from_telco: string | null; to_msisdn: string; to_telco: string | null; body: string; parts: number; status: string; reason: string | null;
+  const rows = w.db.prepare("SELECT id, at, kind, sender, from_telco, to_msisdn, to_telco, parts, status, reason FROM sms_log WHERE from_telco = ? OR to_telco = ? ORDER BY id DESC LIMIT ?").all(telco, telco, limit) as {
+    id: number; at: number; kind: string; sender: string; from_telco: string | null; to_msisdn: string; to_telco: string | null; parts: number; status: string; reason: string | null;
   }[];
   const name = (t: string | null) => (t && t in TELCO_INFO ? TELCO_INFO[t as Telco].name : "");
-  return rows.map((r) => ({ id: r.id, at: new Date(r.at).toISOString(), kind: r.kind, from: r.sender, fromNetwork: name(r.from_telco), to: r.to_msisdn, toNetwork: name(r.to_telco), body: r.body, parts: r.parts, status: r.status, reason: r.reason }));
+  // The record of a text, as a network keeps it for billing and complaints: who, when, how long, delivered or not.
+  // What it said is not in it.
+  return rows.map((r) => ({ id: r.id, at: new Date(r.at).toISOString(), kind: r.kind, from: r.sender, fromNetwork: name(r.from_telco), to: r.to_msisdn, toNetwork: name(r.to_telco), parts: r.parts, status: r.status, reason: r.reason }));
 }
 
 /** What one business has sent from its app. */

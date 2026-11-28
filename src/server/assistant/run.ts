@@ -28,7 +28,8 @@ import { asText, tool, type ToolContext } from "./tools";
 
 /** How many times one turn may go back to the model, across the lead and every specialist. */
 const MAX_CALLS_PER_TURN = 60;
-const dailyLimit = () => Number(process.env.ASSISTANT_DAILY_CALLS) || 600;
+/** No daily limit, unless ASSISTANT_DAILY_CALLS is set to a number above 0. */
+const dailyLimit = () => Number(process.env.ASSISTANT_DAILY_CALLS) || Infinity;
 const delegateSpec: ToolSpec = {
   name: "delegate",
   description: "Hand a piece of work to a specialist. They know only what you put in the brief, so make it complete: what to do, every number, name, PIN, address and decision they need, and what to report back. They work until it is done and reply with a report.",

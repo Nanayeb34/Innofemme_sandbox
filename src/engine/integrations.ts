@@ -57,13 +57,15 @@ const kindOf = (institution: string): Who | undefined => (isTelco(institution) ?
 
 const CUSTOMER = { name: "Ama Mensah", ghanaCard: "GHA-123456789-0", dateOfBirth: "1994-03-12", gender: "F", region: "Ashanti" };
 const WALLET = { msisdn: "0241234567", name: "Ama Mensah", network: "mtn", walletType: "person", kycTier: "medium", walletOpenedAt: "2026-11-02T09:14:00.000Z" };
-const OTHER = { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person", kycTier: "minimum", walletOpenedAt: "2026-11-05T16:40:00.000Z" };
+// Someone at another network: only what travels with a payment. Their KYC level and wallet age stay with Telecel.
+const OTHER = { msisdn: "0209876543", name: "Kojo Boateng", network: "telecel", walletType: "person" };
 const ACCOUNT = { bank: "gcb", bankName: "GCB Bank", accountNumber: "0401000012", name: "Ama Mensah", accountOpenedAt: "2026-11-03T10:00:00.000Z" };
 const POINT = { id: "sa_1a2b3c", name: "Adum Service Centre", kind: "service_centre", town: "Kumasi" };
 
 /** An example of what an institution sends at each step: used in the API reference and by the console's "Send a test" button. */
 export const SAMPLES: Record<string, Record<string, unknown>> = {
-  "pin.set": { msisdn: "0241234567", pin: "2749", reason: "new_wallet", network: "mtn", customer: CUSTOMER },
+  // The PIN itself never leaves the network: only what its checks found.
+  "pin.set": { msisdn: "0241234567", reason: "new_wallet", network: "mtn", pinChecks: { allSameDigit: false, inSequence: false, commonPin: false, endOfPhoneNumber: false, birthYear: false, birthDayAndMonth: false }, customer: CUSTOMER },
   "wallet.open": { msisdn: "0241234567", network: "mtn", walletType: "person", walletName: "Ama Mensah", kycTier: "minimum", openedBy: "self-registration (USSD)", customer: CUSTOMER, simRegisteredAt: "2026-11-02T09:02:00.000Z", lastSimSwapAt: null, walletsOnThisGhanaCard: 0 },
   "menu.open": { msisdn: "0241234567", network: "mtn", hasWallet: true, customer: CUSTOMER, wallet: { kycTier: "medium", walletOpenedAt: "2026-11-02T09:14:00.000Z", status: "active" }, lastSimSwapAt: null, onCallWith: null },
   "payment.authorize": {
@@ -100,8 +102,9 @@ export const SAMPLES: Record<string, Record<string, unknown>> = {
   "business.onboard": { type: "merchant", businessName: "Esi Provisions", category: "Groceries", town: "Kumasi", msisdn: "0551112223", network: "mtn", owner: CUSTOMER, businessLinesAlreadyOnThisGhanaCard: 0 },
   "sim.register": { msisdn: "0241234567", network: "mtn", registeredBy: POINT, customer: CUSTOMER, simsAlreadyOnThisGhanaCard: 1, primaryNumber: "0201112223" },
   "sim.swap": { msisdn: "0241234567", network: "mtn", replacedBy: POINT, customer: CUSTOMER, simRegisteredAt: "2026-11-02T09:02:00.000Z", previousSwapAt: null, simStatus: "active", hasWallet: true, walletBalance: 1250.5, swapsOnThisNumberBefore: 0 },
-  "sms.deliver": { from: "0209876543", fromType: "person", fromNetwork: "telecel", to: "0241234567", toNetwork: "mtn", text: "Hello, are we still meeting tomorrow?", textsBetweenThemBefore: 6 },
-  "call.connect": { from: "0209876543", fromNetwork: "telecel", callerSimRegisteredAt: "2026-11-05T16:31:00.000Z", to: "0241234567", toNetwork: "mtn", callsBetweenThemBefore: 2, numbersTheCallerHasRungToday: 3 },
+  // A text between people: who, how and how often, never what it says. (A business's texts also carry "text".)
+  "sms.deliver": { from: "0209876543", fromType: "person", fromNetwork: "telecel", to: "0241234567", toNetwork: "mtn", parts: 1, senderSimRegisteredAt: null, numbersTheSenderTextedToday: 2, textsBetweenThemBefore: 6 },
+  "call.connect": { from: "0209876543", fromNetwork: "telecel", callerSimRegisteredAt: null, to: "0241234567", toNetwork: "mtn", callsBetweenThemBefore: 2, numbersTheCallerHasRungToday: 3 },
   "transfer.authorize": { type: "bank_to_wallet", amount: 200, fee: 1, reference: "rent", from: { ...ACCOUNT, balance: 5400 }, to: OTHER },
   "account.open": { bank: "gcb", customer: CUSTOMER, accountsAtOtherBanks: 1, walletsOnThisGhanaCard: 1 },
   "switch.route": { from: "mtn", fromName: "MTN MoMo", to: "telecel", toName: "Telecel Cash", amount: 50, destination: "0209876543", paymentsRoutedBetweenThemToday: 12 },

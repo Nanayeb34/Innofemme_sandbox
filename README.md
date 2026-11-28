@@ -153,8 +153,8 @@ team page (a button in the corner opens it beside the console) and at `/t/{team}
 - **Never shows a wallet PIN**, other than that of a customer it created or one the person gave it.
 - **Switched on by a key.** Set `ANTHROPIC_API_KEY` (Claude, default model `claude-opus-5-5`) or
   `OPENAI_API_KEY` (default `gpt-6.2-sol`) on the server; see `.env.example`. With neither, the assistant is
-  not shown. `deploy/gcp.sh secrets` copies the key to the VM from `.env.production`. Each team may call the
-  model `ASSISTANT_DAILY_CALLS` times a day (default 600).
+  not shown. `deploy/gcp.sh secrets` copies the key to the VM from `.env.production`. There is no daily limit on
+  calls to the model; set `ASSISTANT_DAILY_CALLS` to cap each team per day.
 - **What leaves the server.** The conversation and what the tools return (the world's data, which is all
   made up) go to the AI service chosen. The team key does not.
 - `POST /api/w/{team}/assistant {"text": "…"}` talks to it from a script; the answer is a stream of events.
@@ -169,7 +169,7 @@ Besides the consoles, each institution has the API it would give an outside comp
 | API | At | What it offers |
 | --- | --- | --- |
 | Mobile money | `/api/w/{team}/momo/{telco}` | The MTN MoMo Open API shape: request to pay, request to withdraw, pre-approval, delivery notification, balance, account-holder checks, profile with the customer's consent, transfer, deposit, refund, callbacks. |
-| Network | `/api/w/{team}/network/{telco}` | Texts under a sender name, subscriber details, SIM-swap check, KYC match. |
+| Network | `/api/w/{team}/network/{telco}` | Texts under a sender name, whether a number is in service (never whose it is), SIM-swap check, KYC match (true or false only). |
 | USSD services | NCA console, then each network | The NCA allocates a short code to a provider; each network switches it on and forwards sessions to the provider's application. |
 | Bank | `/api/w/{team}/bank/{bank}` | Balance, statement, name enquiry, transfers to bank accounts and wallets, from the partner's own account. |
 | National switch | `/api/w/{team}/ghipss` | Participants, name enquiry across banks and networks, status of a routed payment. |
@@ -178,7 +178,7 @@ Besides the consoles, each institution has the API it would give an outside comp
 A team's own web page can call any of these, and the console API, straight from the browser: every address
 under `/api/w/` answers requests from other sites, as long as the key or credentials are sent in a header.
 
-Subscriber details, texts, payments and identity checks are what licensed partners get in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries and could not be confirmed for Ghana. Not included: an outside company cannot see a network's full transaction feed, freeze a wallet or block a SIM; those stay inside the institution (the console API).
+Line status, texts, payments and identity checks are what licensed partners get in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries and could not be confirmed for Ghana. Not included: an outside company cannot see a network's full transaction feed, freeze a wallet or block a SIM; those stay inside the institution (the console API).
 
 ## Plug-in points
 
@@ -227,6 +227,20 @@ an address is asked for: a plug-in, an application for the Fraud API, a USSD app
 API itself is an ordinary API in any language and runs unchanged once hosted. A bridge belongs to one
 team's world, keeps nothing on disk, and counts as "not answering" the moment its program stops.
 `GET /api/w/{team}/bridge` lists a team's bridges and whether each is connected.
+
+### What a plug-in is told, and what it is not
+
+An institution tells a plug-in only what it really holds and may use, so a team's product works with the same
+information it would get in real life:
+
+- **Its own customers:** KYC details, wallet or account age, balance, recent activity, SIM swaps, whether they are on a call now.
+- **Someone at another network or bank:** only what travels with a payment: number or account number, name, network, wallet type. Never their KYC level, when they joined or their SIM's age.
+- **Texts between people:** who, how long, how often they text, how many people the sender texted today. Never the words. A business's bulk texts include `text`, as networks filter those for spam.
+- **PINs:** never. `pin.set` carries `pinChecks`, the network's own verdict on how guessable the PIN is.
+- **Calls:** who called whom, when, how long; counts come from the calls that network carried.
+- **Contacts** saved on a phone are seen by no institution.
+
+The same holds in the consoles and data: a network's SMS records, `texts.csv` and the assistant never show what a text said, and a network's subscriber lookup never gives out a name.
 
 ## Simulated data
 
@@ -331,7 +345,7 @@ Care cannot reset a PIN or replace a SIM: those need the customer in person at a
 
 ## Text messages
 
-Every phone has a Messages app with conversations. There are three kinds of text, and each network keeps a record of all of them in its back office (SMS tab):
+Every phone has a Messages app with conversations, and a Contacts app whose names show in Messages and Calls (contacts stay on that phone). There are three kinds of text, and each network keeps a record of all of them in its back office (SMS tab). As at a real network, the record says who texted whom, when, how long and whether it was delivered, never what the text said: only the two phones hold the words.
 
 - **Person to person.** Write to any number on any network and reply in the thread. A blocked SIM cannot send, and a text to a number that is not in service, or is blocked, is recorded as not delivered. A phone that is not open still receives its texts: they wait in the inbox.
 - **From the network.** The texts a telco sends about its own services (registration, payments, approvals, tickets). Their wording is editable in the telco's settings. Nobody can reply to them.

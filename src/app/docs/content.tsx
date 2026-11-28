@@ -512,7 +512,7 @@ node app.mjs --sandbox ${base} --client-id … --api-key … --number 024…
 # add --network telecel or --network at for the other networks
 # on Windows, type python in place of python3`}</Code>
             <p>
-              It signs in, looks up who the number is registered to, asks whether its SIM was replaced lately, and reads the name on the wallet. With <code>--amount</code> it also sends the customer a request to pay, then waits while they approve or refuse on their
+              It signs in, checks that the number is in service, asks whether its SIM was replaced lately, and reads the name on the wallet. With <code>--amount</code> it also sends the customer a request to pay, then waits while they approve or refuse on their
               phone: {approvals.map((a, i) => (
                 <span key={a.name}>
                   {i > 0 && "; "}on {a.name}, dial <code>{a.code}</code> and {a.path}
@@ -699,14 +699,15 @@ GET  disbursement/v1_0/{transfer|deposit|refund}/{ref}`}</Code>
             </p>
             <Code>{`POST v1/sms/messages            {to, text}                       a text under your registered sender name (first 11 letters and digits of the company name)
 GET  v1/sms/messages                                             what you have sent
-GET  v1/subscribers/{number}                                     the name the SIM is registered to, its status, and whether it has a wallet
+GET  v1/subscribers/{number}                                     whether it is in service, since when, and whether it has a wallet (never the name)
 POST v1/sim-swap/check          {phoneNumber, maxAge}            was the SIM replaced in the last maxAge hours? → {swapped}
 POST v1/sim-swap/retrieve-date  {phoneNumber}                    → {latestSimChange}
 POST v1/kyc-match               {phoneNumber, name, givenName, familyName, birthdate, idDocument, gender}   → "true" | "false" per field sent
 
 curl -X POST ${base}/network/mtn/v1/sim-swap/check ${partner} ${json} -d '{"phoneNumber":"0241234567","maxAge":240}'`}</Code>
             <p>
-              Subscriber details and texts are what networks give licensed partners in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries; we could not confirm them for Ghana, so treat them as what a network could offer.
+              A network never gives out who a number belongs to: if you hold a customer&apos;s name or Ghana Card number, check it with <code>kyc-match</code>, which only answers true or false. Your own sent texts are listed back to you; nobody else&apos;s are.
+              Texts and line status are what networks give licensed partners in Ghana today. The SIM-swap and KYC-match checks are offered by MTN in other countries; we could not confirm them for Ghana, so treat them as what a network could offer.
             </p>
             <p>
               <b>Your own USSD service.</b> The NCA console allocates a short code to you with the address of your application, and each network switches it on (back office → API partners). When a subscriber dials the code, the network sends every step to your address as JSON and shows your answer.
@@ -807,6 +808,31 @@ POST v1/verify   {cardNumber, fingerprint, purpose}   → {valid, biometricMatch
               </li>
               <li>Amounts are in cedis. Your API can call anything else it likes while deciding, including the partner APIs above.</li>
             </ul>
+            <Callout title="What an institution can tell you, and what it cannot">
+              Plug-ins are given only what that institution really holds, and only what it may use, as in real life:
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                <li>
+                  <b>Its own customers:</b> their KYC details, wallet or account age, balance, recent activity, SIM swaps, and whether they are on a call right now.
+                </li>
+                <li>
+                  <b>Someone at another network or bank:</b> only what travels with a payment: their number or account number, name, network and wallet type. Their KYC level, when they joined, and their SIM&apos;s age stay with their own institution.
+                </li>
+                <li>
+                  <b>Texts between people:</b> who sent one to whom, how long it was, how often they text, and how many people the sender texted today. <b>Never what it says</b>: only the two phones hold the words. A business&apos;s bulk texts do include{" "}
+                  <code>text</code>, as networks filter those for spam.
+                </li>
+                <li>
+                  <b>PINs:</b> never. At <code>pin.set</code> you get <code>pinChecks</code>, the network&apos;s own verdict on how guessable it is (same digit, in sequence, a common PIN, the end of the phone number, the birth year, the birthday).
+                </li>
+                <li>
+                  <b>Calls:</b> who called whom, when and for how long, never the conversation. Counts such as <code>numbersTheCallerHasRungToday</code> come from the calls that network carried.
+                </li>
+                <li>
+                  <b>Contacts</b> saved on a phone stay on that phone. No institution sees them.
+                </li>
+              </ul>
+              The consoles follow the same rules: a network&apos;s SMS records and the downloadable <code>texts.csv</code> say who, when and whether delivered, never the text.
+            </Callout>
             <p>What <code>data</code> holds at each step:</p>
             {Object.entries(SAMPLES).map(([id, sample]) => (
               <details key={id} className="rounded-lg border border-gray-200 px-3 py-2">

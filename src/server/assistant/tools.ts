@@ -82,7 +82,8 @@ const TABLES: Record<string, { what: string; hide?: string[] }> = {
   txns: { what: "every transaction: type, channel, both sides, amount, fee, status, reason, when" },
   dataset: { what: "for the simulated country: which transactions are fraud (is_fraud), of which kind (scenario), in which case (case_id) and role" },
   calls: { what: "voice calls: from, to, status, when, how long" },
-  sms_log: { what: "texts sent: sender, recipient, body, whether delivered" },
+  // A network's record of a text, without what it said: the words are only on the two phones.
+  sms_log: { what: "texts sent: sender, recipient, when, whether delivered (not what they said)", hide: ["body"] },
   tickets: { what: "customer care complaints and disputes" },
   approvals: { what: "requests waiting for, or answered by, a customer: cash-outs, payment requests, claims" },
   bill_payments: { what: "bills paid from wallets" },

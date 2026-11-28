@@ -7,6 +7,7 @@ import { Loading, useView } from "@/components/ui";
 import { api, ghs, teamName, when } from "@/lib/client";
 import { CallLog, CallScreen, useCalls, type CallLogRow, type Calls } from "./calls";
 import { Select } from "@/components/select";
+import { askConfirm } from "@/stores/ui";
 
 interface Line {
   msisdn: string;
@@ -31,6 +32,7 @@ interface PhoneState {
   approvals: { ref: string; kind: string; amount: number; from: string }[];
   calls: CallLogRow[];
   conversations: { with: string; canReply: boolean; lastBody: string; lastAt: string; lastOut: boolean; count: number }[];
+  contacts: { number: string; name: string }[];
   thread: { with: string; canReply: boolean; messages: { id: string; at: string; out: boolean; body: string; failed: string | null; warning: string | null }[] } | null;
   recent: { id: string; at: string; type: string; amount: number; status: string; from: string; to: string; out: boolean }[];
 }
@@ -43,7 +45,7 @@ interface PhoneView {
   phone: PhoneState | null;
 }
 
-type Tab = "dial" | "calls" | "sms" | "wallet";
+type Tab = "dial" | "calls" | "sms" | "contacts" | "wallet";
 const TEXT_ON: Record<string, string> = { mtn: "#111827", telecel: "#ffffff", at: "#ffffff" };
 const NETWORK: Record<string, string> = { mtn: "MTN", telecel: "Telecel", at: "AT" };
 
@@ -101,6 +103,14 @@ export default function Phone({ team, role }: { team: string; role: string }) {
   const seenAt = state?.calls.findIndex((c) => c.id === lastSeenCall) ?? -1;
   const missed = state && lastSeenCall !== undefined ? state.calls.slice(0, seenAt < 0 ? state.calls.length : seenAt).filter((c) => c.direction === "missed").length : 0;
   const brandColor = state?.brand.color ?? "#334155";
+  // Saved names for numbers, so messages and calls show "Ama" instead of 0241234567.
+  const names = Object.fromEntries((state?.contacts ?? []).map((c) => [c.number, c.name]));
+  // A number to save, when "Add to contacts" is pressed somewhere else on the phone.
+  const [draft, setDraft] = useState<string | null>(null);
+  const saveNumber = (n: string) => {
+    setDraft(n);
+    setTab("contacts");
+  };
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-4">
@@ -171,20 +181,35 @@ export default function Phone({ team, role }: { team: string; role: string }) {
               ) : tab === "dial" ? (
                 <Dialer key={state.msisdn} team={team} state={state} calls={calls} onDone={refresh} />
               ) : tab === "calls" ? (
-                <CallLog rows={state.calls} calls={calls} onCall={(n) => void calls.start(n)} />
+                <CallLog rows={state.calls} calls={calls} names={names} onCall={(n) => void calls.start(n)} />
               ) : tab === "sms" ? (
-                <Messages key={state.msisdn} team={team} state={state} thread={thread} setThread={setThread} onSent={refresh} />
+                <Messages key={state.msisdn} team={team} state={state} names={names} thread={thread} setThread={setThread} onSent={refresh} onSave={saveNumber} />
+              ) : tab === "contacts" ? (
+                <Contacts
+                  key={state.msisdn}
+                  team={team}
+                  state={state}
+                  draft={draft}
+                  clearDraft={() => setDraft(null)}
+                  onChange={refresh}
+                  onCall={(n) => void calls.start(n)}
+                  onText={(n) => {
+                    setThread(n);
+                    setTab("sms");
+                  }}
+                />
               ) : (
                 <Wallet state={state} />
               )}
             </div>
 
-            <nav className="grid grid-cols-4 border-t border-gray-200 bg-gray-50 text-[11px]">
+            <nav className="grid grid-cols-5 border-t border-gray-200 bg-gray-50 text-[11px]">
               {(
                 [
                   ["dial", "Phone", "☎"],
                   ["calls", "Calls", "↙"],
                   ["sms", "Messages", "✉"],
+                  ["contacts", "Contacts", "☺"],
                   ["wallet", "Wallet", "₵"],
                 ] as [Tab, string, string][]
               ).map(([key, label, icon]) => (
@@ -322,7 +347,7 @@ const SMS_LIMIT = 480;
 const smsParts = (text: string) => Math.max(1, Math.ceil(text.length / 160));
 
 /** The Messages app: conversations, one open thread, and writing a new text. */
-function Messages({ team, state, thread, setThread, onSent }: { team: string; state: PhoneState; thread: string; setThread: (t: string) => void; onSent: () => void }) {
+function Messages({ team, state, names, thread, setThread, onSent, onSave }: { team: string; state: PhoneState; names: Record<string, string>; thread: string; setThread: (t: string) => void; onSent: () => void; onSave: (number: string) => void }) {
   const [composing, setComposing] = useState(false);
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
@@ -387,10 +412,25 @@ function Messages({ team, state, thread, setThread, onSent }: { team: string; st
         </div>
         <label className="block border-b border-gray-100 px-4 py-3 text-sm">
           <span className="text-xs text-gray-500">To</span>
-          <input value={to} onChange={(e) => setTo(e.target.value)} inputMode="tel" placeholder="Mobile number, any network" aria-label="Send to" className="mt-0.5 w-full border-b border-gray-300 py-1 text-base outline-none focus:border-gray-900" />
+          <input value={to} onChange={(e) => setTo(e.target.value)} inputMode="tel" placeholder="Name or mobile number" aria-label="Send to" className="mt-0.5 w-full border-b border-gray-300 py-1 text-base outline-none focus:border-gray-900" />
         </label>
-        <div className="flex-1" />
-        {box(to.trim(), "Write a message")}
+        {/* Pick someone from the contacts, as on a real phone. */}
+        <ul className="flex-1 divide-y divide-gray-100 overflow-y-auto">
+          {state.contacts
+            .filter((c) => !to.trim() || c.name.toLowerCase().includes(to.trim().toLowerCase()) || c.number.includes(to.replace(/\D/g, "")))
+            .map((c) => (
+              <li key={c.number}>
+                <button type="button" onClick={() => setTo(c.number)} className={`flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-gray-50 ${to === c.number ? "bg-green-50" : ""}`}>
+                  <Avatar name={c.name} size="sm" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm text-gray-900">{c.name}</span>
+                    <span className="block text-[11px] text-gray-500">{c.number}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+        </ul>
+        {box(state.contacts.find((c) => c.name.toLowerCase() === to.trim().toLowerCase())?.number ?? to.trim(), "Write a message")}
       </div>
     );
   }
@@ -402,7 +442,15 @@ function Messages({ team, state, thread, setThread, onSent }: { team: string; st
           <button onClick={() => setThread("")} className="text-sm text-blue-700" aria-label="Back to messages">
             ‹ Messages
           </button>
-          <span className="truncate text-sm font-semibold text-gray-900">{thread}</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-900">
+            {names[thread] ?? thread}
+            {names[thread] && <span className="ml-1.5 text-xs font-normal text-gray-500">{thread}</span>}
+          </span>
+          {open?.canReply && !names[thread] && (
+            <button onClick={() => onSave(thread)} className="shrink-0 text-xs text-blue-700">
+              Add to contacts
+            </button>
+          )}
         </div>
         <div className="flex-1 space-y-2 overflow-y-auto bg-gray-50 px-3 py-3">
           {!open ? (
@@ -444,7 +492,7 @@ function Messages({ team, state, thread, setThread, onSent }: { team: string; st
             <li key={c.with}>
               <button onClick={() => { setError(null); setThread(c.with); }} className="block w-full px-4 py-3 text-left hover:bg-gray-50">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-semibold text-gray-900">{c.with}</span>
+                  <span className="text-sm font-semibold text-gray-900">{names[c.with] ?? c.with}</span>
                   <span className="shrink-0 text-[11px] text-gray-400">{when(c.lastAt)}</span>
                 </div>
                 <p className="mt-0.5 line-clamp-2 text-sm leading-snug text-gray-600">
@@ -456,6 +504,200 @@ function Messages({ team, state, thread, setThread, onSent }: { team: string; st
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+const initials = (name: string) =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]!.toUpperCase())
+    .join("");
+// A steady colour per name, so the same person always looks the same.
+const AVATAR_COLORS = ["#3b1f6e", "#0f766e", "#b45309", "#be123c", "#1d4ed8", "#4d7c0f", "#7e22ce", "#0369a1"];
+const colorOf = (name: string) => AVATAR_COLORS[[...name].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7) % AVATAR_COLORS.length];
+
+function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" | "lg" }) {
+  const dims = size === "lg" ? "h-20 w-20 text-2xl" : size === "sm" ? "h-8 w-8 text-xs" : "h-10 w-10 text-sm";
+  return (
+    <span className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${dims}`} style={{ background: colorOf(name) }} aria-hidden>
+      {initials(name) || "?"}
+    </span>
+  );
+}
+
+/**
+ * The Contacts app: an A to Z list to scroll or search, a page per contact (call, text, edit, delete), and a form
+ * to add someone. Contacts are kept on this phone only.
+ */
+function Contacts({ team, state, draft, clearDraft, onChange, onCall, onText }: { team: string; state: PhoneState; draft: string | null; clearDraft: () => void; onChange: () => void; onCall: (n: string) => void; onText: (n: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [openNumber, setOpenNumber] = useState<string | null>(null);
+  // The form: null when closed; "was" is the number being edited, if any.
+  const [form, setForm] = useState<{ name: string; number: string; was?: string } | null>(draft ? { name: "", number: draft } : null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (draft) clearDraft();
+  }, [draft, clearDraft]);
+
+  const save = async () => {
+    if (!form || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ number: string }>(team, "/s/phone", { body: { action: "contact_save", msisdn: state.msisdn, name: form.name, number: form.number, was: form.was } });
+      setForm(null);
+      setOpenNumber(r.number);
+      onChange();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (c: { number: string; name: string }) => {
+    if (!(await askConfirm({ title: `Delete ${c.name}?`, message: `${c.number} will be removed from this phone's contacts.`, confirm: "Delete", danger: true }))) return;
+    await api(team, "/s/phone", { body: { action: "contact_remove", msisdn: state.msisdn, number: c.number } });
+    setOpenNumber(null);
+    onChange();
+  };
+
+  const header = (title: string, back?: () => void, right?: React.ReactNode) => (
+    <div className="flex items-center gap-2 border-b border-gray-200 px-3 py-2">
+      {back && (
+        <button onClick={back} className="text-sm text-blue-700">
+          ‹ Contacts
+        </button>
+      )}
+      <span className="flex-1 truncate text-sm font-semibold text-gray-900">{title}</span>
+      {right}
+    </div>
+  );
+
+  if (form) {
+    const field = (label: string, key: "name" | "number", props: React.InputHTMLAttributes<HTMLInputElement>) => (
+      <label className="block border-b border-gray-100 px-4 py-3 text-sm">
+        <span className="text-xs text-gray-500">{label}</span>
+        <input value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} className="mt-0.5 w-full border-b border-gray-300 py-1 text-base outline-none focus:border-gray-900" {...props} />
+      </label>
+    );
+    return (
+      <div className="absolute inset-0 flex flex-col bg-white">
+        {header(form.was ? "Edit contact" : "New contact", () => setForm(null))}
+        <form
+          className="flex flex-1 flex-col"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <div className="flex justify-center py-5">
+            <Avatar name={form.name || "?"} size="lg" />
+          </div>
+          {field("Name", "name", { autoFocus: !form.name, placeholder: "Ama Mensah", "aria-label": "Contact name", maxLength: 40 })}
+          {field("Mobile number", "number", { inputMode: "tel", placeholder: "024 123 4567", "aria-label": "Contact number" })}
+          {error && <p className="px-4 pt-2 text-xs text-red-600">{error}</p>}
+          <div className="mt-auto p-4">
+            <button disabled={busy || !form.name.trim() || !form.number.trim()} className="w-full rounded-full bg-green-600 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  const opened = state.contacts.find((c) => c.number === openNumber);
+  if (opened) {
+    const action = (label: string, icon: string, onClick: () => void, color = "text-green-700") => (
+      <button onClick={onClick} className="flex flex-1 flex-col items-center gap-1 rounded-xl bg-gray-50 py-3 text-xs text-gray-700 hover:bg-gray-100">
+        <span className={`text-xl leading-none ${color}`}>{icon}</span>
+        {label}
+      </button>
+    );
+    return (
+      <div className="absolute inset-0 flex flex-col bg-white">
+        {header("", () => setOpenNumber(null), <button onClick={() => setForm({ name: opened.name, number: opened.number, was: opened.number })} className="text-sm text-blue-700">Edit</button>)}
+        <div className="flex flex-col items-center px-4 pt-6 pb-4 text-center">
+          <Avatar name={opened.name} size="lg" />
+          <div className="mt-3 text-xl font-semibold text-gray-900">{opened.name}</div>
+          <div className="text-sm text-gray-500">{opened.number}</div>
+        </div>
+        <div className="flex gap-2 px-4">
+          {action("Call", "✆", () => onCall(opened.number))}
+          {action("Message", "✉", () => onText(opened.number), "text-blue-700")}
+        </div>
+        <div className="mt-auto p-4">
+          <button onClick={() => void remove(opened)} className="w-full rounded-full border border-red-200 py-2 text-sm font-medium text-red-700 hover:bg-red-50">
+            Delete contact
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const q = query.trim().toLowerCase();
+  const digits = query.replace(/\D/g, "");
+  const shown = state.contacts.filter((c) => !q || c.name.toLowerCase().includes(q) || (digits && c.number.includes(digits)));
+  // Grouped under their first letter, A to Z, as phones do.
+  const groups = new Map<string, typeof shown>();
+  for (const c of shown) {
+    const letter = /[a-z]/i.test(c.name[0] ?? "") ? c.name[0]!.toUpperCase() : "#";
+    groups.set(letter, [...(groups.get(letter) ?? []), c]);
+  }
+  return (
+    <div className="absolute inset-0 flex flex-col bg-white">
+      <div className="flex items-center justify-between px-4 pt-3 pb-2">
+        <span className="text-lg font-semibold text-gray-900">Contacts</span>
+        <button
+          onClick={() => {
+            setError(null);
+            setForm({ name: "", number: digits.length >= 9 ? query : "" });
+          }}
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-green-600 text-lg leading-none text-white"
+          aria-label="Add a contact"
+        >
+          +
+        </button>
+      </div>
+      <div className="px-4 pb-2">
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${state.contacts.length} contact${state.contacts.length === 1 ? "" : "s"}`} aria-label="Search contacts" className="w-full rounded-full bg-gray-100 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-300" />
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {state.contacts.length === 0 ? (
+          <div className="px-6 pt-10 text-center text-sm text-gray-500">
+            <p>No contacts yet.</p>
+            <button onClick={() => setForm({ name: "", number: "" })} className="mt-3 rounded-full bg-green-600 px-4 py-2 text-xs font-semibold text-white">
+              Add a contact
+            </button>
+          </div>
+        ) : shown.length === 0 ? (
+          <p className="px-6 pt-8 text-center text-sm text-gray-500">No contact matches “{query}”.</p>
+        ) : (
+          [...groups].map(([letter, people]) => (
+            <section key={letter}>
+              <h3 className="sticky top-0 z-10 bg-gray-50/95 px-4 py-1 text-xs font-semibold text-gray-500 backdrop-blur">{letter}</h3>
+              <ul>
+                {people.map((c) => (
+                  <li key={c.number}>
+                    <button onClick={() => setOpenNumber(c.number)} className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-gray-50">
+                      <Avatar name={c.name} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-gray-900">{c.name}</span>
+                        <span className="block text-xs text-gray-500">{c.number}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
     </div>
   );
 }

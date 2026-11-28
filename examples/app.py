@@ -75,8 +75,8 @@ if status != 200:
     sys.exit(1)
 auth = {"authorization": f"Bearer {signed_in['access_token']}"}
 
-# 2. Network API: who the number is registered to, and whether its SIM was replaced lately.
-show("Who the number is registered to", *call("GET", f"{network}/v1/subscribers/{NUMBER}", auth))
+# 2. Network API: is the number in service, and was its SIM replaced lately? (A network never gives out the name.)
+show("Is the number in service", *call("GET", f"{network}/v1/subscribers/{NUMBER}", auth))
 show("Was the SIM replaced in the last 10 days?", *call("POST", f"{network}/v1/sim-swap/check", auth, {"phoneNumber": NUMBER, "maxAge": 240}))
 
 # 3. Mobile money API: the name on the wallet.

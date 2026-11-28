@@ -4,7 +4,7 @@ import { getConfig } from "./config/store";
 import { recipientAnswered } from "./care";
 import { checkPin, getWallet, walletByMsisdn } from "./ledger";
 import { notify } from "./notify";
-import { walletPay, type Receipt } from "./payments";
+import { walletPay, walletSeenBy, type Receipt } from "./payments";
 import { MINUTE, SimError, cedis, toIntl } from "./util";
 import type { World } from "./world";
 import { callOut } from "./outside";
@@ -54,7 +54,7 @@ export function createApproval(
       kind: r.kind === "cashout" ? "cash_out" : "payment_request",
       amount: r.amount / 100,
       message: r.payerMessage ?? null,
-      requester: { msisdn: payee.msisdn, name: payee.display_name, network: payee.telco, walletType: payee.owner_type, kycTier: payee.kyc_tier, walletOpenedAt: new Date(payee.created_at).toISOString() },
+      requester: walletSeenBy(payer.telco, payee),
       customer: { msisdn: payer.msisdn, name: payer.display_name, network: payer.telco, walletType: payer.owner_type, kycTier: payer.kyc_tier, walletOpenedAt: new Date(payer.created_at).toISOString() },
       customerHasPaidThisRequesterBefore: !!w.db.prepare("SELECT 1 FROM txns WHERE from_wallet = ? AND to_wallet = ? AND status = 'success' LIMIT 1").get(payer.id, payee.id),
       requestsFromThisRequesterToday: Number((w.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE payee_wallet = ? AND created_at >= ?").get(payee.id, w.now - (w.now % 86_400_000)) as { n: number }).n),

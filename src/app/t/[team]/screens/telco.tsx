@@ -21,7 +21,7 @@ interface TelcoView {
   merchants: { till: string; name: string; category: string; town: string; msisdn: string; balance: number }[];
   txns: TxnRow[];
   calls: { id: string; at: string; from: string; to: string; fromNetwork: string; toNetwork: string; status: string; reason: string | null; seconds: number }[];
-  sms: { id: number; at: string; kind: string; from: string; fromNetwork: string; to: string; toNetwork: string; body: string; parts: number; status: string; reason: string | null }[];
+  sms: { id: number; at: string; kind: string; from: string; fromNetwork: string; to: string; toNetwork: string; parts: number; status: string; reason: string | null }[];
   apiPartners: ApiPartner[];
   services: { cashOut: string; bundles: { id: string; name: string; price: number; mb: number; days: number }[]; billers: { id: string; name: string; ask: string; token?: boolean }[]; atmBanks: string[]; registration: { code?: string; pinBySms?: boolean } };
   bills: { id: string; at: string; biller: string; account: string; amount: number; token: string | null; from: string }[];
@@ -367,7 +367,7 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
       )}
 
       {tab === "sms" && (
-        <Section title="SMS records" hint="Every text sent from or to a number on this network: between people, from the network itself, and from businesses' apps. Texts that could not be delivered are kept too.">
+        <Section title="SMS records" hint="Every text sent from or to a number on this network: between people, from the network itself, and from businesses' apps. As at a real network, the record says who, when and whether it was delivered, never what the text said: only the phones that sent and received it hold the words.">
           <Table
             rows={data.sms}
             empty="No texts yet."
@@ -376,7 +376,6 @@ export default function TelcoConsole({ team, telco }: { team: string; telco: str
               { label: "From", cell: (m) => (<><span className="font-mono text-xs">{m.from}</span><div className="text-[11px] text-gray-500">{m.fromNetwork}</div></>) },
               { label: "To", cell: (m) => (<><span className="font-mono text-xs">{m.to}</span><div className="text-[11px] text-gray-500">{m.toNetwork || "unknown"}</div></>) },
               { label: "Type", cell: (m) => <Badge tone={m.kind === "person" ? "gray" : "blue"}>{m.kind === "person" ? "person to person" : m.kind === "app" ? "business app" : "from the network"}</Badge> },
-              { label: "Text", cell: (m) => <span className="block max-w-[340px] break-words text-gray-800">{m.body}</span> },
               { label: "Parts", right: true, cell: (m) => m.parts },
               { label: "Status", cell: (m) => (<><Status value={m.status === "delivered" ? "success" : "failed"} />{m.reason && <div className="mt-0.5 max-w-[200px] text-[11px] text-gray-500">{m.reason}</div>}</>) },
             ]}

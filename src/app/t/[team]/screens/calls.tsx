@@ -349,7 +349,7 @@ function RoundButton({ label, color, onClick, icon }: { label: string; color: st
 
 const ARROW = { outgoing: "↗", incoming: "↙", missed: "✕" };
 
-export function CallLog({ rows, calls, onCall }: { rows: CallLogRow[]; calls: Calls; onCall: (number: string) => void }) {
+export function CallLog({ rows, calls, onCall, names = {} }: { rows: CallLogRow[]; calls: Calls; onCall: (number: string) => void; names?: Record<string, string> }) {
   return (
     <div>
       {calls.elsewhere && <p className="bg-amber-50 px-4 py-2 text-xs text-amber-900">A call on this number is in progress on another screen.</p>}
@@ -362,7 +362,7 @@ export function CallLog({ rows, calls, onCall }: { rows: CallLogRow[]; calls: Ca
               <button onClick={() => onCall(c.number)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50" aria-label={`Call ${c.number}`}>
                 <span className={`w-5 text-center text-base ${c.direction === "missed" ? "text-red-600" : c.direction === "incoming" ? "text-green-700" : "text-gray-500"}`}>{ARROW[c.direction]}</span>
                 <span className="min-w-0 flex-1">
-                  <span className={`block text-sm font-medium ${c.direction === "missed" ? "text-red-700" : "text-gray-900"}`}>{c.number}</span>
+                  <span className={`block text-sm font-medium ${c.direction === "missed" ? "text-red-700" : "text-gray-900"}`}>{names[c.number] ?? c.number}</span>
                   <span className="block truncate text-[11px] text-gray-500">
                     {when(c.at)} · {c.seconds ? `${Math.floor(c.seconds / 60)}m ${c.seconds % 60}s` : c.direction === "missed" ? "missed" : (c.reason ?? c.status)}
                   </span>

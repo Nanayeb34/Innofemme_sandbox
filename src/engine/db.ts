@@ -232,6 +232,15 @@ CREATE TABLE IF NOT EXISTS sms (
 );
 CREATE INDEX IF NOT EXISTS sms_msisdn ON sms(msisdn, id);
 
+-- Each phone's address book: the names its owner saved for numbers. Kept on the phone, as on a real handset.
+CREATE TABLE IF NOT EXISTS contacts (
+  msisdn TEXT NOT NULL,              -- the phone the contact is saved on
+  number TEXT NOT NULL,              -- the contact's number, 0XXXXXXXXX
+  name TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (msisdn, number)
+);
+
 -- The telcos' record of every text message: between people, from the network, and from businesses' apps.
 -- The sms table above is each phone's inbox; this is what was sent, delivered or not.
 CREATE TABLE IF NOT EXISTS sms_log (

@@ -80,11 +80,13 @@ function screenCall(w: World, from: { msisdn: string; telco: Telco; registered_a
   return consult(w, to.telco, "call.connect", {
     from: from.msisdn,
     fromNetwork: from.telco,
-    callerSimRegisteredAt: from.registered_at ? new Date(from.registered_at).toISOString() : null,
+    // A network knows when its own SIMs were registered, not another network's.
+    callerSimRegisteredAt: from.telco === to.telco && from.registered_at ? new Date(from.registered_at).toISOString() : null,
     to: to.msisdn,
     toNetwork: to.telco,
     callsBetweenThemBefore: count(w.db, "SELECT COUNT(*) AS n FROM calls WHERE answered_at IS NOT NULL AND ((from_msisdn = ? AND to_msisdn = ?) OR (from_msisdn = ? AND to_msisdn = ?))", from.msisdn, to.msisdn, to.msisdn, from.msisdn),
-    numbersTheCallerHasRungToday: count(w.db, "SELECT COUNT(DISTINCT to_msisdn) AS n FROM calls WHERE from_msisdn = ? AND started_at >= ?", from.msisdn, w.now - (w.now % 86_400_000)),
+    // Counted from the calls this network carried: it does not see the caller's calls to other networks.
+    numbersTheCallerHasRungToday: count(w.db, "SELECT COUNT(DISTINCT to_msisdn) AS n FROM calls WHERE from_msisdn = ? AND started_at >= ? AND (to_telco = ? OR from_telco = ?)", from.msisdn, w.now - (w.now % 86_400_000), to.telco, to.telco),
   });
 }
 

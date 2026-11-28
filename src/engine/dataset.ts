@@ -74,10 +74,11 @@ export const DATASET_FILES: Record<string, FileSpec> = {
     columns: ["started", "caller", "caller_network", "called", "called_network", "status", "seconds_talked"],
   },
   texts: {
-    about: "The networks' text message records",
+    about: "The networks' text message records: who, when, how long and whether delivered (never what the text said)",
     key: "s.id",
-    sql: `SELECT s.id AS _key, ${time("s.at")} AS time, s.kind AS sender_type, s.sender, s.from_telco AS sender_network, s.to_msisdn AS recipient, s.to_telco AS recipient_network, s.body AS text, s.status FROM sms_log s`,
-    columns: ["time", "sender_type", "sender", "sender_network", "recipient", "recipient_network", "text", "status"],
+    sql: `SELECT s.id AS _key, ${time("s.at")} AS time, s.kind AS sender_type, s.sender, s.from_telco AS sender_network, s.to_msisdn AS recipient, s.to_telco AS recipient_network, s.parts, s.status FROM sms_log s`,
+    // As in a network's own records: who texted whom, when and how long. What a text said is not included.
+    columns: ["time", "sender_type", "sender", "sender_network", "recipient", "recipient_network", "parts", "status"],
   },
   complaints: {
     about: "Complaints customers made to customer care",

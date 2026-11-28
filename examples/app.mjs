@@ -52,8 +52,8 @@ show("Signing in", { ...signIn, data: signIn.ok ? { ...signIn.data, access_token
 if (!signIn.ok) process.exit(1);
 const auth = { authorization: `Bearer ${signIn.data.access_token}` };
 
-// 2. Network API: who the number is registered to, and whether its SIM was replaced lately.
-show("Who the number is registered to", await call("GET", `${network}/v1/subscribers/${NUMBER}`, { headers: auth }));
+// 2. Network API: is the number in service, and was its SIM replaced lately? (A network never gives out the name.)
+show("Is the number in service", await call("GET", `${network}/v1/subscribers/${NUMBER}`, { headers: auth }));
 show("Was the SIM replaced in the last 10 days?", await call("POST", `${network}/v1/sim-swap/check`, { headers: auth, body: { phoneNumber: NUMBER, maxAge: 240 } }));
 
 // 3. Mobile money API: the name on the wallet.

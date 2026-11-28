@@ -12,6 +12,7 @@ import { enrol, fullName, normalizeCard, personById, setCardStatus, verify } fro
 import { createClient, listClients, rotateSecret, setClientStatus } from "@/engine/partners";
 import { bankCash, bankToWallet, bankTransfer, reverse } from "@/engine/payments";
 import { conversations, sendText, smsRecords, thread } from "@/engine/sms";
+import { listContacts, removeContact, saveContact } from "@/engine/contacts";
 import { positions, settle, trustAccount } from "@/engine/switch";
 import * as telcoOps from "@/engine/telco";
 import { createTestCustomer } from "@/engine/testcustomer";
@@ -732,6 +733,7 @@ const phone: System = {
         approvals: wallet ? pendingFor(w, sim.msisdn).map((a) => ({ ref: a.ref, kind: a.kind, amount: money(a.amount), from: a.display_name })) : [],
         calls: callLog(w, sim.msisdn),
         conversations: conversations(w, sim.msisdn),
+        contacts: listContacts(w, sim.msisdn),
         thread: q.get("thread") ? thread(w, sim.msisdn, q.get("thread")!) : null,
         recent: wallet ? txnFeed(w, "(t.from_wallet = ? OR t.to_wallet = ?) AND t.status != 'failed'", [wallet.id, wallet.id], 15).map((x) => ({ ...x, out: x.type === "hold" || x.from.includes(sim.msisdn) })) : [],
       },
@@ -745,6 +747,15 @@ const phone: System = {
     sms_send(w, b) {
       const r = sendText(w, { from: String(need(str(b.msisdn), "msisdn")), to: str(b.to), text: b.text });
       return { ok: true, ...r, message: r.delivered ? "Sent." : `Not delivered: ${r.reason}` };
+    },
+    // The phone's address book.
+    contact_save(w, b) {
+      const c = saveContact(w, String(need(str(b.msisdn), "msisdn")), { name: b.name, number: b.number, was: b.was });
+      return { ok: true, ...c, message: `Saved ${c.name}.` };
+    },
+    contact_remove(w, b) {
+      removeContact(w, String(need(str(b.msisdn), "msisdn")), String(need(str(b.number), "number")));
+      return { ok: true, message: "Contact removed." };
     },
     // Voice calls. The phone checks in about once a second with call_poll.
     call_start: (w, b) => startCall(w, { from: String(need(str(b.msisdn), "msisdn")), to: String(need(str(b.to), "Number to call")), device: String(need(str(b.device), "device")), offer: String(b.offer ?? "") }),

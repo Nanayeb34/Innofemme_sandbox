@@ -149,7 +149,11 @@ export async function decide(point) {
       ["payment.authorize", { ...base, paymentsToThisPayeeBefore: 0, payer: { ...base.payer, onCallWith: "0209876543" } }, "warn"],
       // An everyday payment to someone paid before.
       ["payment.authorize", { ...base, amount: 20, payer: { ...base.payer, lastSimSwapAt: null, onCallWith: null } }, "allow"],
-      ["sms.deliver", { ...SAMPLES["sms.deliver"], text: "CONGRATULATIONS you have won a prize, send the fee to claim", textsBetweenThemBefore: 0 }, "warn"],
+      // A stranger texting many people today is flagged without the network reading the text.
+      ["sms.deliver", { ...SAMPLES["sms.deliver"], textsBetweenThemBefore: 0, numbersTheSenderTextedToday: 9 }, "warn"],
+      ["sms.deliver", { ...SAMPLES["sms.deliver"], textsBetweenThemBefore: 0, numbersTheSenderTextedToday: 1 }, "allow"],
+      // A business's bulk text is open to content filtering.
+      ["sms.deliver", { ...SAMPLES["sms.deliver"], fromType: "business", from: "PROMO", text: "CONGRATULATIONS you have won a prize, send the fee to claim", textsBetweenThemBefore: 0 }, "warn"],
       ["payment.request", { ...SAMPLES["payment.request"], requester: { walletType: "person" }, customerHasPaidThisRequesterBefore: false }, "reject"],
       // A busy agent asking customers to approve cash-outs is not treated as suspicious.
       ["payment.request", { ...SAMPLES["payment.request"], requester: { walletType: "agent" }, customerHasPaidThisRequesterBefore: true, requestsFromThisRequesterToday: 40 }, "allow"],

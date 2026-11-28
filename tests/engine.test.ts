@@ -512,9 +512,11 @@ describe("text messages", () => {
     expect(mtnLog.filter((r) => r.kind === "person").length).toBe(5);
     expect(mtnLog.filter((r) => r.kind === "app").length).toBe(1);
     expect(mtnLog.some((r) => r.kind === "network" && r.from === "MTN")).toBe(true);
-    expect(mtnLog.find((r) => r.body === "anyone?")).toMatchObject({ status: "failed", reason: "Number not in service", toNetwork: "" });
+    expect(mtnLog.find((r) => r.to === "0200000000")).toMatchObject({ status: "failed", reason: "Number not in service", toNetwork: "" });
     const telLog = sms.smsRecords(w, "telecel");
-    expect(telLog.find((r) => r.body === "Hello Kwabena")).toMatchObject({ fromNetwork: "MTN", toNetwork: "Telecel", status: "delivered" });
+    expect(telLog.find((r) => r.kind === "person" && r.fromNetwork === "MTN" && r.status === "delivered")).toMatchObject({ toNetwork: "Telecel" });
+    // A network's records say who texted whom and when, never what the text said.
+    expect([...mtnLog, ...telLog].some((r) => "body" in r || "text" in r)).toBe(false);
     // The phone's own view carries the conversations and an open thread.
     const view = resolveSystem(["phone"]).view(w, new URLSearchParams({ msisdn: na, thread: nb })) as { phone: { conversations: unknown[]; thread: { messages: unknown[] } } };
     expect(view.phone.thread.messages.length).toBe(4);
@@ -556,7 +558,9 @@ describe("partner APIs", () => {
     expect(partners.authenticate(w, "mtn", p.id, fresh)).toBeDefined();
 
     // What a network tells a partner about its own numbers.
-    expect(signals.subscriber(w, "mtn", na)).toMatchObject({ registeredName: "Serwaa Antwi", status: "active", mobileMoney: { registered: true } });
+    expect(signals.subscriber(w, "mtn", na)).toMatchObject({ status: "active", mobileMoney: { registered: true } });
+    // It never gives out the subscriber's name: a partner checks a name it already holds with kyc-match.
+    expect(JSON.stringify(signals.subscriber(w, "mtn", na))).not.toMatch(/Serwaa/);
     expect(() => signals.subscriber(w, "telecel", na)).toThrow(/not a Telecel subscriber/);
     expect(signals.simSwapCheck(w, "mtn", { phoneNumber: na, maxAge: 240 })).toEqual({ swapped: false });
     telco.swapSim(w, "mtn", point, { msisdn: na, card: a.ghana_card, fingerprint: a.fingerprint });
@@ -729,7 +733,8 @@ describe("plug-in points: an outside API plugged into an institution's own steps
   });
 
   it("a PIN-checking API rejects the last four digits of the number, and the customer is asked for another", async () => {
-    answer = (p, d) => (p === "pin.set" && String(d.msisdn).endsWith(String(d.pin)) ? { decision: "reject", message: "Too easy to guess: it is the end of your number." } : { decision: "allow" });
+    // The API never sees the PIN, only what the network's own checks found.
+    answer = (p, d) => (p === "pin.set" && (d.pinChecks as { endOfPhoneNumber?: boolean }).endOfPhoneNumber ? { decision: "reject", message: "Too easy to guess: it is the end of your number." } : { decision: "allow" });
     plug("mtn", "pin.set");
     const weak = amaNo.slice(-4);
     const strong = weak === "2580" ? "1379" : "2580";
@@ -749,7 +754,9 @@ describe("plug-in points: an outside API plugged into an institution's own steps
     expect(walletByMsisdn(w, amaNo)?.pin).toBe(strong);
 
     // The API was told who was choosing, and the network kept a record of each question and answer.
-    expect(asked[0]).toMatchObject({ point: "pin.set", data: { msisdn: amaNo, pin: weak, reason: "new_wallet", customer: { name: "Ama Serwaa", dateOfBirth: "1994-03-12" } } });
+    expect(asked[0]).toMatchObject({ point: "pin.set", data: { msisdn: amaNo, reason: "new_wallet", pinChecks: { endOfPhoneNumber: true }, customer: { name: "Ama Serwaa", dateOfBirth: "1994-03-12" } } });
+    // The PIN itself never leaves the network.
+    expect(asked[0].data).not.toHaveProperty("pin");
     const log = view<{ pluginCalls: { decision: string; message: string | null }[] }>(w, "telco", "mtn").pluginCalls;
     expect(log.map((c) => c.decision)).toContain("reject");
 
@@ -881,7 +888,7 @@ describe("plug-in points: an outside API plugged into an institution's own steps
     for (const p of ["sim.swap", "sms.deliver", "call.connect"]) plug("mtn", p);
     answer = (p, d) =>
       p === "sim.swap" ? { decision: "reject", message: "Too many replacements requested at this point today." }
-      : p === "sms.deliver" ? (/by mistake/.test(String(d.text)) ? { decision: "warn", message: "Possible scam" } : /win/.test(String(d.text)) ? { decision: "reject" } : { decision: "allow" })
+      : p === "sms.deliver" ? (d.textsBetweenThemBefore === 0 ? { decision: "warn", message: "Possible scam" } : d.textsBetweenThemBefore === 1 ? { decision: "reject" } : { decision: "allow" })
       : p === "call.connect" ? { decision: "warn", message: "Reported 12 times as a scam caller" }
       : { decision: "allow" };
 
@@ -893,6 +900,9 @@ describe("plug-in points: an outside API plugged into an institution's own steps
     expect(await run(() => sms.sendText(w, { from: kofiNo, to: amaNo, text: "I sent you GHS 500 by mistake" }))).toMatchObject({ delivered: true });
     expect(sms.thread(w, amaNo, kofiNo).messages.at(-1)).toMatchObject({ out: false, warning: "Possible scam" });
     expect(sms.thread(w, kofiNo, amaNo).messages.at(-1)).toMatchObject({ out: true, warning: null });
+    // The network is never told what people write to each other.
+    expect(asked.findLast((a) => a.point === "sms.deliver")!.data).not.toHaveProperty("text");
+    expect(JSON.stringify(asked.findLast((a) => a.point === "sms.deliver")!.data)).not.toMatch(/by mistake/);
     expect(await run(() => sms.sendText(w, { from: kofiNo, to: amaNo, text: "You win a prize" }))).toMatchObject({ delivered: false });
     expect(sms.thread(w, amaNo, kofiNo).messages.at(-1)!.body).toMatch(/by mistake/);
 
@@ -1040,7 +1050,7 @@ describe("plug-in points: an outside API plugged into an institution's own steps
           }
         }
       };
-      const first = program("first-run", (q) => ({ status: 200, body: JSON.stringify(q.point === "pin.set" && q.data.pin === "1111" ? { decision: "reject", message: "Too simple, says the laptop." } : { decision: "allow" }) }));
+      const first = program("first-run", (q) => ({ status: 200, body: JSON.stringify(q.point === "pin.set" && (q.data as unknown as { pinChecks: { allSameDigit: boolean } }).pinChecks.allSameDigit ? { decision: "reject", message: "Too simple, says the laptop." } : { decision: "allow" }) }));
       await settled();
       expect(bridge.listBridges(w.id)).toMatchObject([{ name: "laptop", address: "bridge://laptop", connected: true, passesTo: "http://localhost:4010" }]);
       expect(calls().plugins.find((x) => x.url.startsWith("bridge:"))!.bridge).toMatchObject({ connected: true });
@@ -1368,9 +1378,9 @@ describe("fraud simulator: incidents played live against what a team has built",
   });
 
   it("an API plugged in at the payment step stops the scams it recognises, at that step, and is given the credit", async () => {
-    // Blocks a payment made to a wallet opened in the last day while the payer is on the phone with its owner.
+    // Blocks a first payment to someone while the payer is on the phone with them.
     everywhere("payment.authorize", "Call guard");
-    answer = (p, d) => (p === "payment.authorize" && d.payer.onCallWith === d.payee.msisdn && Date.now() - Date.parse(d.payee.walletOpenedAt) < 86_400_000 ? { decision: "reject", message: "You are on a call with the person you are paying." } : { decision: "allow" });
+    answer = (p, d) => (p === "payment.authorize" && d.payer.onCallWith === d.payee.msisdn && !d.paymentsToThisPayeeBefore ? { decision: "reject", message: "You are on a call with the person you are paying." } : { decision: "allow" });
     asked.length = 0;
     const r = await run({ kinds: "reversal_scam", incidents: 8, ordinary: 12 });
     expect(r.fraud).toMatchObject({ total: 8, stopped: 8, through: 0 });
@@ -1413,10 +1423,13 @@ describe("fraud simulator: incidents played live against what a team has built",
   it("covers the other steps: texts, SIM replacement, PIN choice, the cash-out", async () => {
     // A filter on texts stops the scams that arrive only by text.
     everywhere("sms.deliver", "Text filter");
-    answer = (p, d) => (p === "sms.deliver" && /CONGRATULATIONS|it's me, my phone fell/.test(d.text) ? { decision: "reject" } : { decision: "allow" });
+    // The network does not see what the texts say, so the filter goes by who sends them: a first text from a stranger.
+    answer = (p, d) => (p === "sms.deliver" && d.fromType === "person" && d.textsBetweenThemBefore === 0 ? { decision: "reject" } : { decision: "allow" });
     let r = await run({ kinds: ["fake_promo", "relative_impersonation"], incidents: 8, ordinary: 10 });
     expect(r.fraud).toMatchObject({ stopped: 8, through: 0 });
-    expect(r.stops[0]).toMatchObject({ step: "sms.deliver", by: "Text filter", fraud: 8, ordinary: 0 });
+    expect(r.stops[0]).toMatchObject({ step: "sms.deliver", by: "Text filter", fraud: 8 });
+    // Without the words, a rule this blunt also stops the odd honest first text: the console counts those too.
+    expect(r.stops[0].ordinary).toBeLessThanOrEqual(2);
     unplug();
 
     // A check on SIM replacements.
@@ -1430,7 +1443,8 @@ describe("fraud simulator: incidents played live against what a team has built",
 
     // A weak-PIN check: the customer is made to choose a better PIN, and the thief cannot guess it.
     everywhere("pin.set", "PIN check");
-    answer = (p, d) => (p === "pin.set" && (String(d.msisdn).endsWith(d.pin) || d.customer?.dateOfBirth.startsWith(d.pin)) ? { decision: "reject", message: "Too easy to guess." } : { decision: "allow" });
+    // It never sees the PIN: the network's own checks say how guessable it is.
+    answer = (p, d) => (p === "pin.set" && (d.pinChecks.endOfPhoneNumber || d.pinChecks.birthYear) ? { decision: "reject", message: "Too easy to guess." } : { decision: "allow" });
     r = await run({ kinds: "pin_guessing", incidents: 4, ordinary: 0 });
     expect(r.fraud).toMatchObject({ stopped: 4, through: 0 });
     expect(r.incidents[0]).toMatchObject({ stoppedAt: "pin.set", stoppedBy: "PIN check", summary: "The thief could not guess the PIN, and the wallet locked itself" });

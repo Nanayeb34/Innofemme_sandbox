@@ -286,7 +286,7 @@ def decide(point, data, ctx):
   {
     id: "fraud-shield",
     label: "Fraud shield",
-    about: "Several rules at once: holds money after a SIM swap or when new wallets move large sums, warns on calls and new payees, labels scam texts and strange callers. Stopped 37 of 40 incidents in the Fraud console. Plug it into each network at payment.authorize, sms.deliver, call.connect and payment.request.",
+    about: "Several rules at once: holds money after a SIM swap or when new wallets move large sums, warns on calls and new payees, labels texts and calls from strangers who contact many people. Built from what a network really holds: never the words of a text, never a PIN. Plug it into each network at payment.authorize, sms.deliver, call.connect and payment.request.",
     plugAt: ["payment.authorize", "sms.deliver", "call.connect", "payment.request"],
     source: {
       javascript: `// Fraud shield: one plug-in for several steps. Tested against every kind of fraud in the Fraud console.
@@ -301,9 +301,15 @@ export function decide(point, data, ctx) {
   const now = ctx.at ? Date.parse(ctx.at) : Date.now();
 
   if (point === "sms.deliver") {
-    // A first text from a stranger, in the words scammers use: label it.
-    if (data.fromType === "person" && !data.textsBetweenThemBefore && SCAM_WORDS.test(data.text ?? "")) {
-      return { decision: "warn", message: "Possible scam: a stranger's message about money. Never send money or your PIN because of a text." };
+    // The network never sees what people write to each other, so a stranger's text is judged by how it is sent:
+    // a first text from a brand-new SIM, or from a number texting many people today.
+    const stranger = !data.textsBetweenThemBefore;
+    if (data.fromType === "person" && stranger && (hoursSince(data.senderSimRegisteredAt, now) < 72 || (data.numbersTheSenderTextedToday ?? 0) >= 5)) {
+      return { decision: "warn", message: "Possible scam: a stranger texting many people. Never send money or your PIN because of a text." };
+    }
+    // A business's bulk texts are open to content filtering: the words scammers use.
+    if (data.fromType === "business" && stranger && SCAM_WORDS.test(data.text ?? "")) {
+      return { decision: "warn", message: "Possible scam: check this message with the company before you act on it." };
     }
     return { decision: "allow" };
   }
@@ -349,6 +355,7 @@ export function decide(point, data, ctx) {
       return { decision: "delay", minutes: 180, message: "New wallets cannot send large sums to new contacts straight away. Try again later." };
     }
     // 5. Most of a wallet going to a brand-new wallet in one go: a thief emptying a stolen phone.
+    //    (A network knows how old its own wallets are. For a wallet on another network, walletOpenedAt is missing.)
     if (first && (payer.balance ?? 0) >= 200 && data.amount >= 0.8 * payer.balance && hoursSince(payee.walletOpenedAt, now) < 7 * 24) {
       return { decision: "delay", minutes: 60, message: "This payment would empty your wallet into a brand-new one. For your protection, it is paused for an hour." };
     }
@@ -385,9 +392,14 @@ def decide(point, data, ctx):
     now = when(ctx.at) or datetime.now(timezone.utc)
 
     if point == "sms.deliver":
-        # A first text from a stranger, in the words scammers use: label it.
-        if data.get("fromType") == "person" and not data.get("textsBetweenThemBefore") and SCAM_WORDS.search(data.get("text") or ""):
-            return {"decision": "warn", "message": "Possible scam: a stranger's message about money. Never send money or your PIN because of a text."}
+        # The network never sees what people write to each other, so a stranger's text is judged by how it is sent:
+        # a first text from a brand-new SIM, or from a number texting many people today.
+        stranger = not data.get("textsBetweenThemBefore")
+        if data.get("fromType") == "person" and stranger and (hours_since(data.get("senderSimRegisteredAt"), now) < 72 or (data.get("numbersTheSenderTextedToday") or 0) >= 5):
+            return {"decision": "warn", "message": "Possible scam: a stranger texting many people. Never send money or your PIN because of a text."}
+        # A business's bulk texts are open to content filtering: the words scammers use.
+        if data.get("fromType") == "business" and stranger and SCAM_WORDS.search(data.get("text") or ""):
+            return {"decision": "warn", "message": "Possible scam: check this message with the company before you act on it."}
         return {"decision": "allow"}
 
     if point == "call.connect":
@@ -426,6 +438,7 @@ def decide(point, data, ctx):
         if amount >= 200 and hours_since(payer.get("walletOpenedAt"), now) < 3 * 24 and first:
             return {"decision": "delay", "minutes": 180, "message": "New wallets cannot send large sums to new contacts straight away. Try again later."}
         # 5. Most of a wallet going to a brand-new wallet in one go: a thief emptying a stolen phone.
+        #    (A network knows how old its own wallets are. For a wallet on another network, walletOpenedAt is missing.)
         if first and balance >= 200 and amount >= 0.8 * balance and hours_since(payee.get("walletOpenedAt"), now) < 7 * 24:
             return {"decision": "delay", "minutes": 60, "message": "This payment would empty your wallet into a brand-new one. For your protection, it is paused for an hour."}
         # 6. A first, sizeable payment to a wallet opened only days ago.

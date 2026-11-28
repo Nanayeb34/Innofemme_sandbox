@@ -18,16 +18,18 @@ function own(w: World, telco: Telco, input: unknown) {
   return sim;
 }
 
-/** Subscriber details: the name the SIM is registered to, and whether the line is in service. */
+/**
+ * Whether a number is in service, since when, and whether it has a mobile money wallet. It does not say who the
+ * number belongs to: a network does not hand out its subscribers' names. A partner that holds a name checks it
+ * with kyc-match, which answers only true or false.
+ */
 export function subscriber(w: World, telco: Telco, msisdn: unknown) {
   const sim = own(w, telco, msisdn);
-  const p = sim.person_id ? personById(w, sim.person_id) : undefined;
   const wallet = walletByMsisdn(w, sim.msisdn);
   return {
     msisdn: sim.msisdn,
     network: TELCO_INFO[telco].name,
     status: sim.status,
-    registeredName: p ? `${p.first_names} ${p.surname}` : null,
     registeredSince: sim.registered_at ? new Date(sim.registered_at).toISOString() : null,
     mobileMoney: wallet ? { registered: true, status: wallet.status, accountType: wallet.owner_type === "person" ? "customer" : wallet.owner_type } : { registered: false },
   };

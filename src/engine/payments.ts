@@ -61,6 +61,14 @@ const iso = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString() 
 const describeWallet = (x: WalletRow) => ({ msisdn: x.msisdn, name: x.display_name, network: x.telco, walletType: x.owner_type, kycTier: x.kyc_tier, walletOpenedAt: iso(x.created_at) });
 const describeAccount = (a: AccountRow) => ({ bank: a.bank, bankName: bankName(a.bank), accountNumber: a.account_no, name: a.name, accountOpenedAt: iso(a.created_at) });
 
+/**
+ * What one institution may know about a wallet or an account. Its own customers: everything in its records.
+ * Someone at another network or bank: only what travels with a payment (number or account, name, network),
+ * never their KYC level or when they joined. Those stay with the institution that holds them.
+ */
+export const walletSeenBy = (institution: string, x: WalletRow) => (institution === x.telco ? describeWallet(x) : { msisdn: x.msisdn, name: x.display_name, network: x.telco, walletType: x.owner_type });
+const accountSeenBy = (institution: string, a: AccountRow) => (institution === a.bank ? describeAccount(a) : { bank: a.bank, bankName: bankName(a.bank), accountNumber: a.account_no, name: a.name });
+
 /** What the payer's network tells an API plugged in at "payment.authorize" about the person paying. */
 function describePayer(w: World, from: WalletRow) {
   const call = w.db.prepare("SELECT from_msisdn, to_msisdn FROM calls WHERE status = 'active' AND (from_msisdn = ? OR to_msisdn = ?) LIMIT 1").get(from.msisdn, from.msisdn) as { from_msisdn: string; to_msisdn: string } | undefined;
@@ -185,11 +193,11 @@ export function walletPay(w: World, req: WalletPayment): Receipt {
     fee: fee / 100,
     reference: req.reference ?? null,
     payer: describePayer(w, from),
-    payee: describeWallet(to),
+    payee: walletSeenBy(from.telco, to),
     paymentsToThisPayeeBefore: count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE from_wallet = ? AND to_wallet = ? AND status = 'success'", from.id, to.id),
   };
   authorize(w, from, to.id, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
-  receive(w, to.telco, { type: req.type, amount: req.amount / 100, reference: req.reference ?? null, payer: describeWallet(from) }, { wallet: to }, from.id, no);
+  receive(w, to.telco, { type: req.type, amount: req.amount / 100, reference: req.reference ?? null, payer: walletSeenBy(to.telco, from) }, { wallet: to }, from.id, no);
 
   if (cross) {
     try {
@@ -338,11 +346,11 @@ export function walletToBank(w: World, req: { from: string; accountNo: string; a
     fee: fee / 100,
     reference: req.reference ?? null,
     payer: describePayer(w, from),
-    payee: { ...describeAccount(acct), payersOwnAccount: !!acct.person_id && acct.person_id === from.person_id },
+    payee: { ...accountSeenBy(from.telco, acct), payersOwnAccount: !!acct.person_id && acct.person_id === from.person_id },
     paymentsToThisPayeeBefore: count(w.db, "SELECT COUNT(*) AS n FROM txns WHERE from_wallet = ? AND to_account = ? AND status = 'success'", from.id, acct.id),
   };
   authorize(w, from, acct.id, about, { interactive: req.channel === "ussd", acknowledged: req.acknowledged }, no);
-  receive(w, acct.bank, { type: "wallet_to_bank", amount: req.amount / 100, reference: req.reference ?? null, payer: describeWallet(from) }, { account: acct }, from.id, no);
+  receive(w, acct.bank, { type: "wallet_to_bank", amount: req.amount / 100, reference: req.reference ?? null, payer: walletSeenBy(acct.bank, from) }, { account: acct }, from.id, no);
   try {
     route(w, id, from.telco, acct.bank, req.amount, `account ${acct.account_no}`);
   } catch (e) {
@@ -386,8 +394,8 @@ export function bankToWallet(w: World, req: { bank: string; fromAccount?: string
   if (src && src.balance < req.amount + fee) no("Insufficient funds in the account");
   const limit = checkReceiveLimit(w, to, req.amount);
   if (limit) no(limit);
-  const about = src ? authorizeTransfer(w, req.bank, { type: "bank_to_wallet", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: describeWallet(to) }, no) : undefined;
-  receive(w, to.telco, { type: "bank_to_wallet", amount: req.amount / 100, reference: req.reference ?? null, payer: src ? describeAccount(src) : { bank: req.bank, bankName: bankName(req.bank), cashOverTheCounter: true } }, { wallet: to }, src?.id ?? null, no);
+  const about = src ? authorizeTransfer(w, req.bank, { type: "bank_to_wallet", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: walletSeenBy(req.bank, to) }, no) : undefined;
+  receive(w, to.telco, { type: "bank_to_wallet", amount: req.amount / 100, reference: req.reference ?? null, payer: src ? accountSeenBy(to.telco, src) : { bank: req.bank, bankName: bankName(req.bank), cashOverTheCounter: true } }, { wallet: to }, src?.id ?? null, no);
   try {
     route(w, id, req.bank, to.telco, req.amount, to.msisdn);
   } catch (e) {
@@ -425,8 +433,8 @@ export function bankTransfer(w: World, req: { bank: string; fromAccount: string;
   if (dest.status !== "active") no("Destination account is frozen");
   const fee = interbank ? feeFor(getConfig(w.db, `bank.${req.bank}`).fees.interbank, req.amount) : 0;
   if (src.balance < req.amount + fee) no("Insufficient funds in the account");
-  const about = authorizeTransfer(w, req.bank, { type: "bank_transfer", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: describeAccount(dest) }, no);
-  receive(w, dest.bank, { type: "bank_transfer", amount: req.amount / 100, reference: req.reference ?? null, payer: describeAccount(src) }, { account: dest }, src.id, no);
+  const about = authorizeTransfer(w, req.bank, { type: "bank_transfer", amount: req.amount / 100, fee: fee / 100, reference: req.reference ?? null, from: { ...describeAccount(src), balance: src.balance / 100 }, to: accountSeenBy(req.bank, dest) }, no);
+  receive(w, dest.bank, { type: "bank_transfer", amount: req.amount / 100, reference: req.reference ?? null, payer: accountSeenBy(dest.bank, src) }, { account: dest }, src.id, no);
   if (interbank) {
     try {
       route(w, id, req.bank, dest.bank, req.amount, `account ${dest.account_no}`);
